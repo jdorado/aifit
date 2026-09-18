@@ -93,10 +93,20 @@ def fallback_choice(subject: str) -> ModelChoice | None:
 
 
 def fallback_available(control: dict, choice: ModelChoice) -> bool:
-    return any(
+    in_catalog = any(
         item["cli"] == choice.cli and item.get("model") == choice.model and choice.effort in item["efforts"]
         for item in control["models"]
     )
+    # Some Ez engines expose an OpenRouter/native choice as a preset without
+    # duplicating it in the generic model catalog. It is still a valid fallback
+    # when the preset carries the exact policy choice.
+    in_presets = any(
+        item.get("cli") == choice.cli
+        and item.get("model") == choice.model
+        and item.get("effort") == choice.effort
+        for item in control.get("presets", [])
+    )
+    return in_catalog or in_presets
 
 
 def filter_control(value: dict, subject: str) -> dict:

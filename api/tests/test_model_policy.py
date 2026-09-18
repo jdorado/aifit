@@ -98,6 +98,13 @@ def test_fallback_follows_policy_order(tmp_path, monkeypatch):
     assert model_policy.fallback_choice(OTHER) == model_policy.ModelChoice(**DEEPSEEK)
 
 
+def test_fallback_accepts_preset_only_engine_choice(tmp_path, monkeypatch):
+    configure(tmp_path, monkeypatch)
+    value = control()
+    value["models"] = []
+    assert model_policy.fallback_available(value, model_policy.fallback_choice(OTHER))
+
+
 def test_malformed_config_fails_closed(tmp_path, monkeypatch):
     path = tmp_path / "model-policy.json"
     path.write_text("{}")
