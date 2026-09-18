@@ -4,11 +4,7 @@
 // application context; neither an owner identifier nor a long-lived secret is
 // accepted as an argument or read from the workspace.
 
-import { execFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
-import { promisify } from 'node:util';
-
-const execute = promisify(execFile);
 
 function fail(message) {
   process.stderr.write(`${message}\n`);
@@ -64,19 +60,14 @@ function date(value, name) {
 }
 
 async function runContext() {
-  const { stdout } = await execute('ezenciel-agents-schedule', ['context'], {
-    maxBuffer: 128 * 1024,
-    env: process.env,
-  });
-  let context;
+  let aifit;
   try {
-    context = JSON.parse(stdout);
+    aifit = JSON.parse(process.env.EZ_PLUGIN_CONTEXT || 'null');
   } catch {
-    throw new Error('Ez returned invalid run context');
+    throw new Error('Ez supplied invalid AIFit plugin context');
   }
-  const aifit = context?.run?.application?.context?.aifit;
   if (!aifit || typeof aifit.api_base_url !== 'string' || typeof aifit.capability !== 'string') {
-    throw new Error('This Ez run has no AIFit capability. Start from AIFit chat or mini-chat.');
+    throw new Error('This AIFit plugin has no scoped application context. Start from AIFit chat or mini-chat.');
   }
   return aifit;
 }

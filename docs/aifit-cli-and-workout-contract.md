@@ -778,16 +778,18 @@ Implemented in this repository:
    load identity, progression, swaps, and typed agent overrides.
 2. Browser `/v1` routes and a capability-protected `/v1/agent` surface backed by the
    same service layer.
-3. The native `tools/aifit-cli/bin/aifit.mjs` command, which obtains its scoped
-   capability from the active Ez application context rather than flags or files.
+3. The standard `plugins/aifit` Ez plugin, which receives only its own scoped
+   object from `run.application.context.plugins.aifit`; it never accepts an
+   account identifier, capability, or API URL as a command argument or workspace
+   file.
 4. Schema/capability tests plus a Mongo smoke run covering exercise → plan → blueprint
    → publish → generate → complete → next-load progression.
 
 Before a real tenant release, configure `AIFIT_AGENT_API_BASE_URL` and a strong
-`AIFIT_AGENT_CAPABILITY_SECRET` on the AIFit API, expose the native `aifit` executable
-only in the bound Ez agent environment, and verify the full authenticated flow against
-that tenant. The current UI/UX is intentionally unchanged; connecting its existing
-visual surface to these endpoints is a separate implementation task. Do not add an
+`AIFIT_AGENT_CAPABILITY_SECRET` on the AIFit API, inspect and pin the standard AIFit
+plugin in the bound Ez registry, and verify the full authenticated flow against that
+tenant. The current UI/UX is intentionally unchanged; connecting its existing visual
+surface to these endpoints is a separate implementation task. Do not add an
 application-owned agent runner, prompt framework, vector memory, generic workflow
 engine, second workout store, background workspace synchronizer, or runtime
 compatibility layer.

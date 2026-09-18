@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "aifit",
+  "version": "0.1.0",
+  "description": "Read and write the current AIFit account's typed fitness program and workout records.",
+  "commands": {
+    "aifit": {
+      "executable": "bin/aifit.mjs",
+      "args": [],
+      "exposure": {
+        "receivesExternalContent": false,
+        "sendsExternally": false,
+        "changesRecords": true,
+        "requiresReview": false
+      }
+    }
+  },
+  "skills": [
+    "SKILL.md"
+  ]
+}

@@ -79,16 +79,16 @@ def require_agent_permission(capability: AgentCapability, permission: str) -> No
 
 
 def agent_run_context(account: dict[str, Any], request_id: str) -> dict[str, Any] | None:
-    """Opaque data for the current Ez run; never sent to or stored by the browser."""
+    """Opaque data for the AIFit Ez plugin; never sent to or stored by the browser."""
     if not AIFIT_AGENT_CAPABILITY_SECRET or not AGENT_API_BASE_URL:
         return None
-    return {
+    return {"plugins": {"aifit": {
         "api_base_url": AGENT_API_BASE_URL,
         "capability": mint_agent_capability(
             account_id=account["account_id"], tenant_id=account["tenant_id"], job_id=request_id,
             permissions={"profile:read", "profile:write", "exercises:read", "exercises:write", "programs:read", "programs:write", "workouts:read", "workouts:write", "history:read"},
         ),
-    }
+    }}}
 
 
 class SessionInput(BaseModel):
@@ -555,9 +555,9 @@ async def enqueue_chat(body: ChatInput, identity: Identity = Depends(require_ide
                     raise HTTPException(403, "This model is not enabled for this AIFit account.")
             admission: dict[str, Any] = {"requestId": request_id, "scope": "owner-chat", "text": turn["text"], "followOwner": True}
             context = dict(references)
-            capability = agent_run_context(account, request_id)
-            if capability:
-                context["aifit"] = capability
+            plugin_context = agent_run_context(account, request_id)
+            if plugin_context:
+                context.update(plugin_context)
             if context:
                 admission["context"] = context
             run = await ez_call(binding, "POST", "/v1/runs", admission)
