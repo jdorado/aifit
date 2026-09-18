@@ -1,0 +1,36 @@
+{
+  "name": "frontend",
+  "private": true,
+  "version": "0.0.0",
+  "scripts": {
+    "dev": "node scripts/dev.cjs",
+    "fe": "API_BASE_URL=https://dev.ezenciel.com yarn dev",
+    "build": "node scripts/workout_timeline_contract.cjs && node scripts/pwa_resume_contract.cjs && tsc && webpack --config webpack.config.cjs --mode production",
+    "preview": "serve dist",
+    "smoke:workout-safety": "node scripts/workout_safety_smoke.cjs",
+    "smoke:timeline-contract": "node scripts/workout_timeline_contract.cjs",
+    "smoke:pwa-resume": "node scripts/pwa_resume_contract.cjs"
+  },
+  "devDependencies": {
+    "@types/react": "18.3.27",
+    "@types/react-dom": "18.3.7",
+    "copy-webpack-plugin": "12.0.2",
+    "css-loader": "7.1.2",
+    "dotenv": "16.6.1",
+    "html-webpack-plugin": "5.6.6",
+    "serve": "14.2.5",
+    "style-loader": "4.0.0",
+    "ts-loader": "9.5.4",
+    "typescript": "5.9.3",
+    "webpack": "5.104.1",
+    "webpack-cli": "5.1.4",
+    "webpack-dev-server": "5.2.3"
+  },
+  "dependencies": {
+    "@privy-io/react-auth": "3.11.0",
+    "marked": "17.0.1",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "zustand": "5.0.10"
+  }
+}

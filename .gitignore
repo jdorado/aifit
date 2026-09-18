@@ -15,5 +15,7 @@ __pycache__/
 coverage/
 tmp/
 data/
+!web/src/data/
+!web/src/data/**
 uploads/
 secrets/

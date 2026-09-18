@@ -1,0 +1,110 @@
+import type { FC, ReactNode } from 'react'
+import { useI18n } from '../i18n'
+import BrandMark from './ui/BrandMark'
+
+type TabName = 'home' | 'workout' | 'diet' | 'health' | 'profile'
+
+type TabBarProps = {
+  activeView: TabName
+  onChange: (view: TabName) => void
+  coachModeActive?: boolean
+  coachContextLabel?: string
+  leadingControl?: ReactNode
+}
+
+const TabBar: FC<TabBarProps> = ({
+  activeView,
+  onChange,
+  coachModeActive = false,
+  coachContextLabel = '',
+  leadingControl = null,
+}) => {
+  const { t } = useI18n()
+  const tabs: Array<{
+    key: TabName
+    label: string
+    icon: JSX.Element
+    featured?: boolean
+  }> = [
+    {
+      key: 'home',
+      label: t('tabs.home'),
+      icon: (
+        <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+        </svg>
+      ),
+    },
+    {
+      key: 'workout',
+      label: t('tabs.workout'),
+      featured: true,
+      icon: (
+        <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="m6.5 6.5 11 11" />
+          <path d="m21 21-1-1" />
+          <path d="m3 3 1 1" />
+          <path d="m18 22 4-4" />
+          <path d="m2 6 4-4" />
+          <path d="m3 10 7-7" />
+          <path d="m14 21 7-7" />
+        </svg>
+      ),
+    },
+    {
+      key: 'diet',
+      label: 'Diet',
+      icon: <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 3v6a3 3 0 0 0 6 0V3M8 3v18M20 21V3c-4 3-4 9 0 9" /></svg>,
+    },
+    {
+      key: 'health',
+      label: 'Health',
+      icon: <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.6a5.5 5.5 0 0 0 0-7.8Z"/><path d="M3 12h5l2-4 3 8 2-4h6"/></svg>,
+    },
+    {
+      key: 'profile',
+      label: t('tabs.profile'),
+      icon: (
+        <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="12" cy="8" r="3" />
+          <path d="M4 20c2-4 14-4 16 0" />
+        </svg>
+      ),
+    },
+  ]
+
+  return (
+    <div className={`app-top-bar ${coachModeActive ? 'coach-active' : ''}`}>
+      <BrandMark alt={t('chat.logoAlt')} className="app-top-bar-logo" />
+      {coachContextLabel ? (
+        <div className="app-top-bar-coach-context" role="status">
+          <span>{t('coach.viewingTrainee')}</span>
+          <strong title={coachContextLabel}>{coachContextLabel}</strong>
+        </div>
+      ) : null}
+      <div className="app-top-bar-controls">
+        <nav className={`app-top-nav ${coachModeActive ? 'coach-active' : ''}`} aria-label="Primary">
+          <div className="app-top-nav-track">
+            {tabs.map((tab) => (
+              <button
+                key={tab.key}
+                className={`app-top-nav-btn ${activeView === tab.key ? 'active' : ''} ${tab.featured ? 'featured' : ''}`}
+                data-tab={tab.key}
+                type="button"
+                onClick={() => onChange(tab.key)}
+                aria-label={tab.label}
+                aria-pressed={activeView === tab.key}
+                title={tab.label}
+              >
+                <span className="app-top-nav-icon">{tab.icon}</span>
+              </button>
+            ))}
+          </div>
+        </nav>
+        {leadingControl ? <div className="app-top-bar-extra">{leadingControl}</div> : null}
+      </div>
+    </div>
+  )
+}
+
+export default TabBar

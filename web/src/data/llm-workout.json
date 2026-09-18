@@ -1,0 +1,175 @@
+{
+    "profile": {
+        "text": "Bio: Default Profile\nGoals: General Fitness\nMedical: None\nExperience: Intermediate",
+        "language": "en"
+    },
+    "weekly_plan": {
+        "text": "Mon - Lower (knee-friendly strength; patellofemoral load management; target RPE 6-7)\nTue - Upper (scapular kinematics + low-irritability pulling) + VO2 (Assault Bike; 8-12 min > VT2; RPE 7-8)\nWed - Recovery (parasympathetic bias; tissue tolerance; 20-30 min Z1)\nThu - Lower (hinge + posterior chain; hip-dominant; avoid deep knee flexion)\nFri - Upper (press + anti-rotation core; limit shoulder abduction if symptomatic)\nSat - Conditioning (aerobic base; 30-45 min Z2)\nSun - Rest (sleep extension; low-load mobility only)"
+    },
+    "workout": [
+        {
+            "name": "Spanish Squats",
+            "section": "Warmup",
+            "sets": 2,
+            "time": "45s",
+            "weight": "Bodyweight",
+            "rest": 45,
+            "cues": [
+                "Sit back into the strap and keep chest tall."
+            ],
+            "timer": {
+                "enabled": true,
+                "prep": 3
+            },
+            "summary": "2 sets x 45s - Bodyweight"
+        },
+        {
+            "name": "Right Clamshells",
+            "section": "Warmup",
+            "sets": 2,
+            "reps": "15",
+            "weight": "Bodyweight",
+            "rest": 60,
+            "cues": [
+                "Lie on your left side, knees bent 45 degrees.",
+                "Keep right hip stacked - do not roll back.",
+                "Lift only the right knee with feet touching.",
+                "Cue: \"Open the book.\" Feel glute med burn."
+            ]
+        },
+        {
+            "name": "Dumbbell RDL",
+            "section": "Main",
+            "sets": 3,
+            "reps": "12",
+            "weight": "20kg",
+            "warmup_sets": [
+                {
+                    "reps": "10",
+                    "weight": "12kg"
+                }
+            ],
+            "rest": 90,
+            "cues": [
+                "Soft knees, then freeze the bend.",
+                "Push hips back; keep dumbbells on your legs.",
+                "Stop at mid-shin - no floor contact.",
+                "Drive up with glutes. Cue: \"Stretch firmly, squeeze hard.\""
+            ]
+        },
+        {
+            "name": "Lat Pulldown",
+            "section": "Main",
+            "sets": 3,
+            "reps": "12",
+            "weight": "45kg",
+            "rest": 75,
+            "cues": [
+                "Neutral or underhand grip if shoulder pinches.",
+                "Depress shoulders first, then pull.",
+                "Drive elbows to back pockets.",
+                "Stop at collarbone. Cue: \"Long neck, low elbows.\""
+            ]
+        },
+        {
+            "name": "Goblet Squat",
+            "section": "Main",
+            "sets": 3,
+            "reps": "12",
+            "weight": "24kg",
+            "rest": 0,
+            "cues": [
+                "Elbows inside knees; chest tall.",
+                "Pause at the bottom, then stand fast."
+            ],
+            "circuit": {
+                "name": "Circuit A",
+                "rounds": 3,
+                "rest_after_sec": 75,
+                "order": 1,
+                "total_exercises": 3
+            }
+        },
+        {
+            "name": "Push-Up",
+            "section": "Main",
+            "sets": 3,
+            "reps": "10",
+            "weight": "Bodyweight",
+            "rest": 0,
+            "cues": [
+                "Body straight, squeeze glutes.",
+                "Chest to floor, drive up fast."
+            ],
+            "circuit": {
+                "name": "Circuit A",
+                "rounds": 3,
+                "rest_after_sec": 75,
+                "order": 2,
+                "total_exercises": 3
+            }
+        },
+        {
+            "name": "Kettlebell Swing",
+            "section": "Main",
+            "sets": 3,
+            "reps": "15",
+            "weight": "16kg",
+            "rest": 0,
+            "cues": [
+                "Hinge hard; snap hips.",
+                "Bell to chest height, arms relaxed."
+            ],
+            "circuit": {
+                "name": "Circuit A",
+                "rounds": 3,
+                "rest_after_sec": 75,
+                "order": 3,
+                "total_exercises": 3
+            }
+        },
+        {
+            "name": "Supported Dead Hang",
+            "section": "Cooldown",
+            "sets": 1,
+            "time": "45s",
+            "weight": "Supported",
+            "rest": 0,
+            "cues": [
+                "Keep toes on the floor or a box.",
+                "Let gravity open the spine gently."
+            ]
+        },
+        {
+            "name": "Incline Dumbbell Curls",
+            "section": "Main",
+            "sets": 3,
+            "reps": "15",
+            "weight": "10kg",
+            "drop_set": [
+                "10kg",
+                "7.5kg",
+                "5kg"
+            ],
+            "rest": 60,
+            "cues": [
+                "Bench 45-60 degrees; arms hang behind torso.",
+                "Keep elbows pinned back - no drift forward.",
+                "Cue: \"Elbows behind the ribs.\""
+            ]
+        },
+        {
+            "name": "Face Pulls",
+            "section": "Cooldown",
+            "sets": 3,
+            "reps": "20",
+            "weight": "15kg",
+            "rest": 60,
+            "cues": [
+                "Rope at face height, thumbs toward you.",
+                "Pull rope to nose; split hands outside ears.",
+                "Cue: \"Thumbs back, chest out.\""
+            ]
+        }
+    ]
+}
