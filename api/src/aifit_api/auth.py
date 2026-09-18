@@ -2,6 +2,7 @@ import os
 import secrets
 import time
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import quote
 
@@ -17,6 +18,7 @@ PRIVY_APP_SECRET = os.getenv("PRIVY_APP_SECRET", "").strip()
 PRIVY_ISSUER = os.getenv("PRIVY_ISSUER", "privy.io")
 AIFIT_DEV_AUTH_TOKEN = os.getenv("AIFIT_DEV_AUTH_TOKEN", "").strip()
 AIFIT_DEV_SUBJECT = os.getenv("AIFIT_DEV_SUBJECT", "dev:aifit-local").strip()
+AIFIT_AGENT_CAPABILITY_SECRET = os.getenv("AIFIT_AGENT_CAPABILITY_SECRET", "").strip()
 
 _key_cache: dict[str, Any] = {"value": None, "expires": 0.0}
 
@@ -25,6 +27,61 @@ _key_cache: dict[str, Any] = {"value": None, "expires": 0.0}
 class Identity:
     subject: str
     email: str | None
+
+
+@dataclass(frozen=True)
+class AgentCapability:
+    account_id: str
+    tenant_id: str
+    job_id: str
+    permissions: frozenset[str]
+
+
+def _agent_capability_secret() -> str:
+    if len(AIFIT_AGENT_CAPABILITY_SECRET) < 32:
+        raise HTTPException(503, "AIFit agent capabilities require a strong configured secret.")
+    return AIFIT_AGENT_CAPABILITY_SECRET
+
+
+def mint_agent_capability(
+    *, account_id: str, tenant_id: str, job_id: str, permissions: set[str], expires_in_minutes: int = 20,
+) -> str:
+    """Mint a capability for one admitted Ez run, never for a browser client."""
+    secret = _agent_capability_secret()
+    issued = datetime.now(UTC)
+    return jwt.encode({
+        "iss": "aifit-api",
+        "aud": "aifit-agent",
+        "sub": account_id,
+        "tenant_id": tenant_id,
+        "job_id": job_id,
+        "permissions": sorted(permissions),
+        "iat": issued,
+        "exp": issued + timedelta(minutes=expires_in_minutes),
+        "jti": secrets.token_urlsafe(18),
+    }, secret, algorithm="HS256")
+
+
+async def require_agent_capability(authorization: str | None = Header(default=None)) -> AgentCapability:
+    secret = _agent_capability_secret()
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(401, "Agent capability required.")
+    try:
+        claims = jwt.decode(
+            authorization.removeprefix("Bearer "),
+            secret,
+            algorithms=["HS256"], audience="aifit-agent", issuer="aifit-api",
+        )
+    except jwt.PyJWTError as error:
+        raise HTTPException(401, "Agent capability is invalid or expired.") from error
+    account_id, tenant_id, job_id, permissions = (
+        claims.get("sub"), claims.get("tenant_id"), claims.get("job_id"), claims.get("permissions"),
+    )
+    if not all(isinstance(value, str) and value for value in (account_id, tenant_id, job_id)):
+        raise HTTPException(401, "Agent capability is invalid.")
+    if not isinstance(permissions, list) or not permissions or any(not isinstance(value, str) or not value for value in permissions):
+        raise HTTPException(401, "Agent capability is invalid.")
+    return AgentCapability(account_id, tenant_id, job_id, frozenset(permissions))
 
 
 async def _verification_key() -> str:
