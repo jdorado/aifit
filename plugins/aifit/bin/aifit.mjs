@@ -1,61 +1,67 @@
 #!/usr/bin/env node
 
-// A narrow native Ez tool. It obtains the per-run capability from Ez's opaque
-// application context; neither an owner identifier nor a long-lived secret is
-// accepted as an argument or read from the workspace.
+// AIFit exposes three explicit writes to Ez: blueprint solidification, a
+// blueprint-constrained swap, and a resolved one-day workout override. The
+// agent owns the surrounding context; these commands only transport typed
+// artifacts to AIFit's authoritative API.
 
 import { readFile } from 'node:fs/promises';
 
 function fail(message) {
-  process.stderr.write(`${message}\n`);
+  const payload = message && typeof message === 'object' && message.payload
+    ? message.payload
+    : { error: { code: 'cli_error', message: message instanceof Error ? message.message : String(message) } };
+  process.stderr.write(`${JSON.stringify(payload)}\n`);
   process.exitCode = 1;
+}
+
+class ApiError extends Error {
+  constructor(payload) {
+    super(payload?.error?.message || 'AIFit API request failed');
+    this.payload = payload;
+  }
 }
 
 function usage() {
   return `AIFit native agent tool
 
-Read:
-  aifit context
-  aifit profile show
-  aifit exercise show EXERCISE_ID [--revision REV]
-  aifit history exercise EXERCISE_ID [--before YYYY-MM-DD] [--limit N]
-  aifit program active [--date YYYY-MM-DD]
-  aifit workout show WORKOUT_ID
-  aifit workout list --start YYYY-MM-DD --end YYYY-MM-DD
+Write:
+  aifit blueprint solidify --input FILE|- --request-id KEY \\
+    [--blueprint-id ID --expected-revision REV]
 
-Write (all require --request-id):
-  aifit profile update --markdown FILE --expected-revision REV_OR_NONE --request-id KEY
-  aifit exercise create --input FILE --request-id KEY
-  aifit exercise revise --input FILE --expected-revision REV --request-id KEY
-  aifit plan draft --markdown FILE --request-id KEY [--plan-id ID --expected-revision REV]
-  aifit blueprint validate --input FILE
-  aifit blueprint draft --input FILE --request-id KEY [--blueprint-id ID --expected-revision REV]
-  aifit program publish --plan-id ID --plan-revision REV --blueprint-id ID --blueprint-revision REV --request-id KEY
-  aifit workout generate --date YYYY-MM-DD --mode default|varied --request-id KEY
-  aifit workout override --input FILE --expected-revision REV_OR_NONE --request-id KEY
-  aifit workout log-set --workout-id ID --set-id ID --input FILE --request-id KEY --expected-revision REV
-  aifit workout swap --workout-id ID --exercise-instance ID --reason TEXT --mode default|varied --request-id KEY --expected-revision REV
+  aifit workout override --input FILE|- --request-id KEY \\
+    [--expected-revision REV]
 
-Input files contain only the documented AIFit JSON object. Do not include owner,
-tenant, API URL, capability, or conversation content.`;
+  aifit workout swap --input FILE|- --request-id KEY --expected-revision REV
+
+The blueprint input is the complete documented blueprint JSON object. The
+workout swap input identifies the current workout exercise, expected blueprint
+revision, and JEV reason; the workout override input is a complete resolved
+target-day object. Do not include
+owner, tenant, API URL, capability, request_id, or conversation content.`;
 }
 
-function option(args, name, fallback = undefined) {
-  const index = args.indexOf(name);
-  if (index < 0) return fallback;
-  const value = args[index + 1];
-  if (!value || value.startsWith('--')) throw new Error(`${name} requires a value`);
-  return value;
+function parseOptions(args) {
+  const allowed = new Set(['--input', '--request-id', '--blueprint-id', '--expected-revision']);
+  const values = {};
+  for (let index = 0; index < args.length; index += 2) {
+    const name = args[index];
+    if (!allowed.has(name)) throw new Error(`Unknown option ${name}`);
+    if (Object.hasOwn(values, name)) throw new Error(`${name} may be supplied only once`);
+    const value = args[index + 1];
+    if (!value || value.startsWith('--')) throw new Error(`${name} requires a value`);
+    values[name] = value;
+  }
+  return values;
 }
 
-function required(args, name) {
-  const value = option(args, name);
+function optional(options, name) {
+  return options[name];
+}
+
+function required(options, name) {
+  const value = optional(options, name);
   if (!value) throw new Error(`${name} is required`);
-  return value;
-}
-
-function date(value, name) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value || '')) throw new Error(`${name} must use YYYY-MM-DD`);
   return value;
 }
 
@@ -85,30 +91,63 @@ async function call(context, method, path, body) {
   let parsed = null;
   try { parsed = text ? JSON.parse(text) : null; } catch { parsed = text; }
   if (!response.ok) {
-    const detail = typeof parsed === 'object' && parsed?.detail
-      ? (typeof parsed.detail === 'string' ? parsed.detail : parsed.detail.message || JSON.stringify(parsed.detail))
-      : text;
-    throw new Error(`AIFit API ${response.status}: ${detail || 'request failed'}`);
+    const detail = typeof parsed === 'object' && parsed !== null
+      ? parsed
+      : { detail: { message: text || 'request failed' } };
+    const message = typeof detail.detail === 'string'
+      ? detail.detail
+      : detail.detail?.message || text || 'request failed';
+    throw new ApiError({
+      error: {
+        status: response.status,
+        message: `AIFit API ${response.status}: ${message}`,
+        ...detail,
+      },
+    });
   }
   return parsed;
 }
 
 async function jsonFile(file) {
   let parsed;
-  try { parsed = JSON.parse(await readFile(file, 'utf8')); }
+  try {
+    const source = file === '-' ? await readStdin() : await readFile(file, 'utf8');
+    parsed = JSON.parse(source);
+  }
   catch (error) { throw new Error(`Could not read JSON input ${file}: ${error.message}`); }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error(`${file} must contain one JSON object`);
   return parsed;
 }
 
-async function markdownFile(file) {
-  const content = await readFile(file, 'utf8');
-  if (!content.trim()) throw new Error(`${file} is empty`);
-  return content;
+async function readStdin() {
+  const chunks = [];
+  for await (const chunk of process.stdin) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  return Buffer.concat(chunks).toString('utf8');
 }
 
-function mutation(args) {
-  return { request_id: required(args, '--request-id') };
+async function blueprintFile(file) {
+  const parsed = await jsonFile(file);
+  for (const field of ['blueprint_id', 'expected_revision', 'request_id']) {
+    if (Object.hasOwn(parsed, field)) throw new Error(`${file} must contain only the blueprint object; pass ${field} as a CLI option`);
+  }
+  return parsed;
+}
+
+async function overrideFile(file) {
+  const parsed = await jsonFile(file);
+  for (const field of ['expected_revision', 'request_id']) {
+    if (Object.hasOwn(parsed, field)) throw new Error(`${file} must contain only the workout override object; pass ${field} as a CLI option`);
+  }
+  return parsed;
+}
+
+async function swapFile(file) {
+  const parsed = await jsonFile(file);
+  for (const field of ['expected_revision', 'request_id']) {
+    if (Object.hasOwn(parsed, field)) throw new Error(`${file} must contain only the swap intent; pass ${field} as a CLI option`);
+  }
+  if (Object.hasOwn(parsed, 'source')) throw new Error(`${file} must not include source; the agent swap path always uses JEV`);
+  return parsed;
 }
 
 async function main() {
@@ -120,90 +159,27 @@ async function main() {
   const context = await runContext();
   const [area, action, ...rest] = args;
   let result;
-  if (area === 'context' && action === undefined) {
-    result = await call(context, 'GET', '/context');
-  } else if (area === 'profile' && action === 'show') {
-    result = await call(context, 'GET', '/profile');
-  } else if (area === 'profile' && action === 'update') {
-    const expected = required(rest, '--expected-revision');
-    result = await call(context, 'PUT', '/profile', {
-      content_md: await markdownFile(required(rest, '--markdown')),
-      expected_revision: expected === 'NONE' ? null : expected,
-      ...mutation(rest),
+  if (area === 'blueprint' && action === 'solidify') {
+    const options = parseOptions(rest);
+    result = await call(context, 'POST', '/blueprints/solidify', {
+      ...await blueprintFile(required(options, '--input')),
+      blueprint_id: optional(options, '--blueprint-id'),
+      expected_revision: optional(options, '--expected-revision') || null,
+      request_id: required(options, '--request-id'),
     });
-  } else if (area === 'exercise' && action === 'show') {
-    const id = rest[0];
-    if (!id) throw new Error('exercise ID is required');
-    const revision = option(rest, '--revision');
-    result = await call(context, 'GET', `/exercises/${encodeURIComponent(id)}${revision ? `?revision=${encodeURIComponent(revision)}` : ''}`);
-  } else if (area === 'exercise' && (action === 'create' || action === 'revise')) {
-    const definition = await jsonFile(required(rest, '--input'));
-    result = await call(context, 'POST', '/exercises', {
-      definition,
-      expected_revision: action === 'revise' ? required(rest, '--expected-revision') : null,
-      ...mutation(rest),
-    });
-  } else if (area === 'history' && action === 'exercise') {
-    const id = rest[0];
-    if (!id) throw new Error('exercise ID is required');
-    const query = new URLSearchParams();
-    const before = option(rest, '--before');
-    if (before) query.set('before', date(before, '--before'));
-    const limit = option(rest, '--limit');
-    if (limit) query.set('limit', limit);
-    result = await call(context, 'GET', `/exercises/${encodeURIComponent(id)}/history${query.size ? `?${query}` : ''}`);
-  } else if (area === 'plan' && action === 'draft') {
-    const content = await markdownFile(required(rest, '--markdown'));
-    const title = option(rest, '--title', content.match(/^#\s+(.+)$/m)?.[1]?.trim() || 'Fitness Plan');
-    result = await call(context, 'POST', '/plans/draft', {
-      title, content_md: content, plan_id: option(rest, '--plan-id'),
-      expected_revision: option(rest, '--expected-revision') || null,
-      ...mutation(rest),
-    });
-  } else if (area === 'blueprint' && action === 'validate') {
-    result = await call(context, 'POST', '/blueprints/validate', await jsonFile(required(rest, '--input')));
-  } else if (area === 'blueprint' && action === 'draft') {
-    result = await call(context, 'POST', '/blueprints/draft', {
-      ...await jsonFile(required(rest, '--input')),
-      blueprint_id: option(rest, '--blueprint-id'), expected_revision: option(rest, '--expected-revision') || null,
-      ...mutation(rest),
-    });
-  } else if (area === 'program' && action === 'publish') {
-    result = await call(context, 'POST', '/programs/publish', {
-      plan_id: required(rest, '--plan-id'), plan_revision: required(rest, '--plan-revision'),
-      blueprint_id: required(rest, '--blueprint-id'), blueprint_revision: required(rest, '--blueprint-revision'),
-      ...mutation(rest),
-    });
-  } else if (area === 'program' && action === 'active') {
-    const on = option(rest, '--date');
-    result = await call(context, 'GET', `/programs/active${on ? `?date=${date(on, '--date')}` : ''}`);
-  } else if (area === 'workout' && action === 'generate') {
-    const mode = option(rest, '--mode', 'default');
-    if (!['default', 'varied'].includes(mode)) throw new Error('--mode must be default or varied');
-    result = await call(context, 'POST', '/workouts/generate', { date: date(required(rest, '--date'), '--date'), mode, ...mutation(rest) });
   } else if (area === 'workout' && action === 'override') {
-    const expected = required(rest, '--expected-revision');
+    const options = parseOptions(rest);
     result = await call(context, 'POST', '/workouts/override', {
-      ...await jsonFile(required(rest, '--input')),
-      expected_revision: expected === 'NONE' ? null : expected,
-      ...mutation(rest),
-    });
-  } else if (area === 'workout' && action === 'show') {
-    const id = rest[0];
-    if (!id) throw new Error('workout ID is required');
-    result = await call(context, 'GET', `/workouts/${encodeURIComponent(id)}`);
-  } else if (area === 'workout' && action === 'list') {
-    result = await call(context, 'GET', `/workouts?start=${date(required(rest, '--start'), '--start')}&end=${date(required(rest, '--end'), '--end')}`);
-  } else if (area === 'workout' && action === 'log-set') {
-    const input = await jsonFile(required(rest, '--input'));
-    result = await call(context, 'PATCH', `/workouts/${encodeURIComponent(required(rest, '--workout-id'))}/sets/${encodeURIComponent(required(rest, '--set-id'))}`, {
-      ...input, expected_revision: required(rest, '--expected-revision'), ...mutation(rest),
+      ...await overrideFile(required(options, '--input')),
+      expected_revision: optional(options, '--expected-revision') || null,
+      request_id: required(options, '--request-id'),
     });
   } else if (area === 'workout' && action === 'swap') {
-    const mode = option(rest, '--mode', 'default');
-    if (!['default', 'varied'].includes(mode)) throw new Error('--mode must be default or varied');
-    result = await call(context, 'POST', `/workouts/${encodeURIComponent(required(rest, '--workout-id'))}/exercises/${encodeURIComponent(required(rest, '--exercise-instance'))}/swap`, {
-      mode, reason: required(rest, '--reason'), expected_revision: required(rest, '--expected-revision'), ...mutation(rest),
+    const options = parseOptions(rest);
+    result = await call(context, 'POST', '/workouts/swap', {
+      ...await swapFile(required(options, '--input')),
+      expected_revision: required(options, '--expected-revision'),
+      request_id: required(options, '--request-id'),
     });
   } else {
     throw new Error('Unknown AIFit command. Run aifit --help.');
@@ -211,4 +187,4 @@ async function main() {
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }
 
-main().catch((error) => fail(error instanceof Error ? error.message : String(error)));
+main().catch((error) => fail(error));

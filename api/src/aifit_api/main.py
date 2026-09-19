@@ -29,8 +29,8 @@ from .workouts import (
     PublishInput,
     SetLogInput,
     SwapInput,
-    WorkoutOverrideInput,
     WorkoutDomainError,
+    WorkoutOverrideInput,
     WorkoutService,
 )
 
@@ -86,7 +86,7 @@ def agent_run_context(account: dict[str, Any], request_id: str) -> dict[str, Any
         "api_base_url": AGENT_API_BASE_URL,
         "capability": mint_agent_capability(
             account_id=account["account_id"], tenant_id=account["tenant_id"], job_id=request_id,
-            permissions={"profile:read", "profile:write", "exercises:read", "exercises:write", "programs:read", "programs:write", "workouts:read", "workouts:write", "history:read"},
+            permissions={"blueprints:write", "workouts:swap", "workouts:override"},
         ),
     }}}
 
@@ -149,6 +149,12 @@ class BlueprintDraftInput(BlueprintInput):
     blueprint_id: str | None = Field(default=None, pattern=r"^bp_[a-f0-9]{32}$")
 
 
+class BlueprintSolidifyInput(BlueprintInput):
+    expected_revision: str | None = Field(default=None, pattern=r"^rev_[a-f0-9]{32}$")
+    request_id: str = Field(min_length=1, max_length=160, pattern=r"^[A-Za-z0-9_.:-]+$")
+    blueprint_id: str | None = Field(default=None, pattern=r"^bp_[a-f0-9]{32}$")
+
+
 class ExerciseMutationInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     definition: ExerciseDefinitionInput
@@ -169,6 +175,73 @@ class AgentMessageInput(BaseModel):
     request_id: UUID
     message: str = Field(min_length=1, max_length=16_000)
     scope: WorkoutScopeInput
+
+
+class AgentWorkoutSwapInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    workout_id: str = Field(pattern=r"^wrk_[a-f0-9]{32}$")
+    exercise_instance_id: str = Field(pattern=r"^wex_[a-f0-9]{32}$")
+    reason: str = Field(min_length=1, max_length=500)
+    expected_revision: str = Field(pattern=r"^rev_[a-f0-9]{32}$")
+    expected_blueprint_revision: str = Field(pattern=r"^rev_[a-f0-9]{32}$")
+    request_id: str = Field(min_length=1, max_length=160, pattern=r"^[A-Za-z0-9_.:-]+$")
+
+
+async def mini_chat_workout_context(account: dict[str, Any], body: ChatInput) -> dict[str, Any] | None:
+    """Put narrow canonical references in native agent context for exercise chat.
+
+    The plugin remains write-only and the native agent remains the context owner.
+    The backend only resolves the selected item and revision references needed to
+    author a bounded swap intent; candidate selection stays in the domain service.
+    """
+    if not body.exercise_id:
+        return None
+    workout: dict[str, Any] | None = None
+    if body.workout_id:
+        workout = await db.workouts.find_one({
+            "account_id": account["account_id"],
+            "workout_id": body.workout_id,
+            "deleted_at": {"$exists": False},
+        })
+    elif body.reference_date:
+        workout = await db.workouts.find_one({
+            "account_id": account["account_id"],
+            "date": body.reference_date,
+            "deleted_at": {"$exists": False},
+        })
+    target_item = next((
+        item
+        for segment in (workout or {}).get("segments", [])
+        for item in segment.get("items", [])
+        if item["exercise_instance_id"] == body.exercise_id
+    ), None)
+    if not workout or not target_item:
+        return None
+
+    service = workouts()
+    active: dict[str, Any] | None = None
+    try:
+        active = await service.active_blueprint(account["account_id"])
+    except WorkoutDomainError:
+        # An exception day may legitimately have no matching blueprint day.
+        # The agent can still explain that a blueprint-constrained swap is not
+        # available; it must not invent one from an incomplete context.
+        pass
+    blueprint = active["blueprint"] if active else None
+    workout_lineage = workout.get("lineage", {})
+    return {"aifit": {
+        "workout_id": workout["workout_id"],
+        "workout_revision": workout["revision"],
+        "workout_date": workout["date"],
+        "workout_blueprint_id": workout_lineage.get("blueprint_id"),
+        "workout_blueprint_revision": workout_lineage.get("blueprint_revision"),
+        "selected_exercise_instance_id": target_item["exercise_instance_id"],
+        "selected_exercise_id": target_item["exercise_snapshot"]["exercise_id"],
+        "selected_exercise_name": target_item["exercise_snapshot"]["name"],
+        "selected_slot_id": target_item["slot_id"],
+        "active_blueprint_id": blueprint.get("blueprint_id") if blueprint else None,
+        "active_blueprint_revision": blueprint.get("revision") if blueprint else None,
+    }}
 
 
 async def account_for(identity: Identity) -> dict:
@@ -558,6 +631,9 @@ async def enqueue_chat(body: ChatInput, identity: Identity = Depends(require_ide
             plugin_context = agent_run_context(account, request_id)
             if plugin_context:
                 context.update(plugin_context)
+            workout_context = await mini_chat_workout_context(account, body)
+            if workout_context:
+                context.update(workout_context)
             if context:
                 admission["context"] = context
             run = await ez_call(binding, "POST", "/v1/runs", admission)
@@ -683,6 +759,12 @@ async def active_program_v1(date: str | None = None, identity: Identity = Depend
     return await workouts().active_release(account["account_id"], date)
 
 
+@app.get("/v1/blueprints/active")
+async def active_blueprint_v1(date: str | None = None, identity: Identity = Depends(require_identity)) -> dict:
+    account = await browser_account(identity)
+    return await workouts().active_blueprint(account["account_id"], date)
+
+
 @app.post("/v1/workouts/generate")
 async def generate_workout_v1(body: GenerateInput, identity: Identity = Depends(require_identity)) -> dict:
     account = await browser_account(identity)
@@ -727,7 +809,8 @@ async def agent_message_v1(body: AgentMessageInput, identity: Identity = Depends
             raise HTTPException(404, "Workout exercise was not found.")
     return await enqueue_chat(ChatInput(
         user_id=identity.subject, request_id=body.request_id, message=body.message, scope_id=body.conversation_id,
-        reference_date=workout["date"], workout_id=workout["workout_id"], exercise_instance_id=body.scope.exercise_instance_id,
+        reference_date=workout["date"], workout_id=workout["workout_id"], exercise_id=body.scope.exercise_instance_id,
+        exercise_instance_id=body.scope.exercise_instance_id,
     ), identity)
 
 
@@ -736,114 +819,51 @@ async def agent_job_v1(job_id: UUID, identity: Identity = Depends(require_identi
     return await chat_job(job_id, identity.subject, identity)
 
 
-# The CLI uses these endpoints. Scope is derived entirely from the signed capability
-# admitted into the current Ez run's opaque context.
+# The CLI has three narrow writes. Scope is derived entirely from the signed
+# capability admitted into the current Ez run's opaque context.
 
 
-@app.get("/v1/agent/context")
-async def agent_context_v1(capability: AgentCapability = Depends(require_agent_capability)) -> dict:
-    return {"account_id": capability.account_id, "job_id": capability.job_id, "permissions": sorted(capability.permissions)}
-
-
-@app.get("/v1/agent/profile")
-async def agent_profile_v1(capability: AgentCapability = Depends(require_agent_capability)) -> dict:
-    require_agent_permission(capability, "profile:read")
-    return await workouts().profile(capability.account_id)
-
-
-@app.put("/v1/agent/profile")
-async def agent_put_profile_v1(body: ProfileUpdateInput, capability: AgentCapability = Depends(require_agent_capability)) -> dict:
-    require_agent_permission(capability, "profile:write")
-    return await workouts().put_profile(capability.account_id, body.content_md, body.expected_revision, body.request_id, agent_actor(capability))
-
-
-@app.post("/v1/agent/exercises")
-async def agent_create_exercise_v1(body: ExerciseMutationInput, capability: AgentCapability = Depends(require_agent_capability)) -> dict:
-    require_agent_permission(capability, "exercises:write")
-    return await workouts().create_exercise(capability.account_id, body.definition, body.request_id, agent_actor(capability), body.expected_revision)
-
-
-@app.get("/v1/agent/exercises/{exercise_id}")
-async def agent_exercise_v1(exercise_id: str, revision: str | None = None,
-                            capability: AgentCapability = Depends(require_agent_capability)) -> dict:
-    require_agent_permission(capability, "exercises:read")
-    return await workouts().exercise(capability.account_id, exercise_id, revision)
-
-
-@app.get("/v1/agent/exercises/{exercise_id}/history")
-async def agent_exercise_history_v1(exercise_id: str, before: str | None = None, limit: int = 10,
-                                    capability: AgentCapability = Depends(require_agent_capability)) -> list[dict]:
-    require_agent_permission(capability, "history:read")
-    return await workouts().history(capability.account_id, exercise_id, before, limit)
-
-
-@app.post("/v1/agent/plans/draft")
-async def agent_draft_plan_v1(body: PlanDraftInput, capability: AgentCapability = Depends(require_agent_capability)) -> dict:
-    require_agent_permission(capability, "programs:write")
-    return await workouts().draft_plan(capability.account_id, PlanInput(title=body.title, content_md=body.content_md),
-                                       body.expected_revision, body.request_id, agent_actor(capability), body.plan_id)
-
-
-@app.post("/v1/agent/blueprints/validate")
-async def agent_validate_blueprint_v1(body: BlueprintInput, capability: AgentCapability = Depends(require_agent_capability)) -> dict:
-    require_agent_permission(capability, "programs:write")
-    await workouts()._validate_blueprint_exercises(capability.account_id, body)
-    return {"valid": True, "schema_version": body.schema_version}
-
-
-@app.post("/v1/agent/blueprints/draft")
-async def agent_draft_blueprint_v1(body: BlueprintDraftInput, capability: AgentCapability = Depends(require_agent_capability)) -> dict:
-    require_agent_permission(capability, "programs:write")
+@app.post("/v1/agent/blueprints/solidify")
+async def agent_solidify_blueprint_v1(
+    body: BlueprintSolidifyInput,
+    capability: AgentCapability = Depends(require_agent_capability),
+) -> dict:
+    require_agent_permission(capability, "blueprints:write")
     blueprint = BlueprintInput(**body.model_dump(exclude={"expected_revision", "request_id", "blueprint_id"}))
-    return await workouts().draft_blueprint(capability.account_id, blueprint, body.expected_revision, body.request_id, agent_actor(capability), body.blueprint_id)
-
-
-@app.post("/v1/agent/programs/publish")
-async def agent_publish_program_v1(body: PublishInput, capability: AgentCapability = Depends(require_agent_capability)) -> dict:
-    require_agent_permission(capability, "programs:write")
-    return await workouts().publish(capability.account_id, body, agent_actor(capability))
-
-
-@app.get("/v1/agent/programs/active")
-async def agent_active_program_v1(date: str | None = None, capability: AgentCapability = Depends(require_agent_capability)) -> dict:
-    require_agent_permission(capability, "programs:read")
-    return await workouts().active_release(capability.account_id, date)
-
-
-@app.post("/v1/agent/workouts/generate")
-async def agent_generate_workout_v1(body: GenerateInput, capability: AgentCapability = Depends(require_agent_capability)) -> dict:
-    require_agent_permission(capability, "workouts:write")
-    return await workouts().generate(capability.account_id, body)
+    return await workouts().solidify_blueprint(
+        capability.account_id,
+        blueprint,
+        body.expected_revision,
+        body.request_id,
+        agent_actor(capability),
+        body.blueprint_id,
+    )
 
 
 @app.post("/v1/agent/workouts/override")
-async def agent_override_workout_v1(body: WorkoutOverrideInput,
-                                    capability: AgentCapability = Depends(require_agent_capability)) -> dict:
-    require_agent_permission(capability, "workouts:write")
+async def agent_override_workout_v1(
+    body: WorkoutOverrideInput,
+    capability: AgentCapability = Depends(require_agent_capability),
+) -> dict:
+    require_agent_permission(capability, "workouts:override")
     return await workouts().override(capability.account_id, body, agent_actor(capability))
 
 
-@app.get("/v1/agent/workouts")
-async def agent_list_workouts_v1(start: str, end: str, capability: AgentCapability = Depends(require_agent_capability)) -> list[dict]:
-    require_agent_permission(capability, "workouts:read")
-    return await workouts().workouts(capability.account_id, start, end)
-
-
-@app.get("/v1/agent/workouts/{workout_id}")
-async def agent_workout_v1(workout_id: str, capability: AgentCapability = Depends(require_agent_capability)) -> dict:
-    require_agent_permission(capability, "workouts:read")
-    return await workouts().workout(capability.account_id, workout_id)
-
-
-@app.patch("/v1/agent/workouts/{workout_id}/sets/{set_id}")
-async def agent_log_set_v1(workout_id: str, set_id: str, body: SetLogInput,
-                           capability: AgentCapability = Depends(require_agent_capability)) -> dict:
-    require_agent_permission(capability, "workouts:write")
-    return await workouts().log_set(capability.account_id, workout_id, set_id, body)
-
-
-@app.post("/v1/agent/workouts/{workout_id}/exercises/{exercise_instance_id}/swap")
-async def agent_swap_v1(workout_id: str, exercise_instance_id: str, body: SwapInput,
-                        capability: AgentCapability = Depends(require_agent_capability)) -> dict:
-    require_agent_permission(capability, "workouts:write")
-    return await workouts().swap(capability.account_id, workout_id, exercise_instance_id, body)
+@app.post("/v1/agent/workouts/swap")
+async def agent_swap_v1(
+    body: AgentWorkoutSwapInput,
+    capability: AgentCapability = Depends(require_agent_capability),
+) -> dict:
+    require_agent_permission(capability, "workouts:swap")
+    return await workouts().swap(
+        capability.account_id,
+        body.workout_id,
+        body.exercise_instance_id,
+        SwapInput(
+            source="jev",
+            reason=body.reason,
+            expected_revision=body.expected_revision,
+            expected_blueprint_revision=body.expected_blueprint_revision,
+            request_id=body.request_id,
+        ),
+    )

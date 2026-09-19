@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "aifit",
   "version": "0.1.0",
-  "description": "Read and write the current AIFit account's typed fitness program and workout records.",
+  "description": "Solidify a flexible workout blueprint, swap within it, or publish one agent-authored exception day.",
   "commands": {
     "aifit": {
       "executable": "bin/aifit.mjs",

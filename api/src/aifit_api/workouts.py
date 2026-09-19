@@ -262,6 +262,13 @@ class BlueprintInput(StrictModel):
         candidates = {candidate.exercise_id for day in self.days for segment in day.segments for slot in segment.slots for candidate in slot.candidates}
         if forbidden & candidates:
             raise ValueError("a hard-forbidden exercise cannot be a blueprint candidate")
+        for day in self.days:
+            for segment in day.segments:
+                for slot in segment.slots:
+                    if len(slot.candidates) <= slot.selection_count:
+                        raise ValueError(
+                            f"blueprint slot {slot.slot_id} needs at least one alternative beyond selection_count"
+                        )
         return self
 
 
@@ -280,19 +287,20 @@ class PublishInput(StrictModel):
 
 class GenerateInput(StrictModel):
     date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
-    mode: Literal["default", "varied"] = "default"
+    source: Literal["default", "jev"] = "default"
     request_id: str = Field(min_length=1, max_length=160, pattern=r"^[A-Za-z0-9_.:-]+$")
 
 
 class SwapInput(StrictModel):
-    mode: Literal["default", "varied"] = "default"
+    source: Literal["default", "jev"] = "default"
     reason: str = Field(min_length=1, max_length=500)
     expected_revision: str = Field(pattern=r"^rev_[a-f0-9]{32}$")
+    expected_blueprint_revision: str | None = Field(default=None, pattern=r"^rev_[a-f0-9]{32}$")
     request_id: str = Field(min_length=1, max_length=160, pattern=r"^[A-Za-z0-9_.:-]+$")
 
 
 class WorkoutOverrideInput(StrictModel):
-    """A deliberately exceptional, agent-authored day outside a blueprint slot."""
+    """A deliberately exceptional, fully resolved agent-authored day."""
 
     date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
     title: str = Field(min_length=1, max_length=180)
@@ -307,6 +315,17 @@ class WorkoutOverrideInput(StrictModel):
         orders = [segment.order for segment in self.segments]
         if len(ids) != len(set(ids)) or len(orders) != len(set(orders)):
             raise ValueError("override segments need unique IDs and order")
+        candidates = [
+            candidate
+            for segment in self.segments
+            for slot in segment.slots
+            for candidate in slot.candidates
+        ]
+        if any(slot.selection_count != 1 or len(slot.candidates) != 1 for segment in self.segments for slot in segment.slots):
+            raise ValueError("override slots must contain exactly one resolved candidate")
+        exercise_ids = [candidate.exercise_id for candidate in candidates]
+        if len(exercise_ids) != len(set(exercise_ids)):
+            raise ValueError("override candidate exercises must be unique")
         return self
 
 
@@ -334,9 +353,9 @@ def exercise_load_key(snapshot: dict[str, Any]) -> str:
     ])
 
 
-def _decision_index(seed: str, candidates: list[dict[str, Any]], mode: str) -> tuple[int, dict[str, float]]:
+def _decision_index(seed: str, candidates: list[dict[str, Any]], source: str) -> tuple[int, dict[str, float]]:
     ordered = sorted(candidates, key=lambda item: (item["priority"], item["candidate_id"]))
-    if mode == "default" or len(ordered) == 1:
+    if source == "default" or len(ordered) == 1:
         return 0, {item["candidate_id"]: (1.0 if index == 0 else 0.0) for index, item in enumerate(ordered)}
     digest = int(sha256(seed.encode()).hexdigest(), 16)
     # A deterministic seed makes retries repeatable while each candidate remains in
@@ -493,6 +512,55 @@ class WorkoutService:
         await self.db.blueprints.insert_one(document)
         return await self._save_receipt(account_id, request_id, fingerprint, self.receipt("blueprint", identifier, revision, request_id))
 
+    async def solidify_blueprint(self, account_id: str, input: BlueprintInput, expected_revision: str | None,
+                                 request_id: str, actor: dict[str, Any], blueprint_id: str | None = None) -> dict[str, Any]:
+        """Validate, persist, and activate one complete blueprint revision."""
+        fingerprint = _fingerprint({
+            "blueprint": input.model_dump(mode="json"),
+            "expected_revision": expected_revision,
+            "blueprint_id": blueprint_id,
+        })
+        prior = await self._receipt(account_id, request_id, fingerprint)
+        if prior:
+            return prior
+        if blueprint_id:
+            current = await self.db.blueprints.find_one({
+                "account_id": account_id, "blueprint_id": blueprint_id, "revision": expected_revision,
+            })
+            if not current:
+                raise WorkoutDomainError("stale_revision", "Blueprint changed. Pull it before editing.")
+        elif expected_revision is not None:
+            raise WorkoutDomainError("invalid_blueprint_revision", "A new blueprint cannot declare an expected revision.", 422)
+
+        # Complete validation happens before the canonical revision or active pointer is written.
+        await self._validate_blueprint_exercises(account_id, input)
+        identifier, revision, timestamp = blueprint_id or new_id("bp"), new_revision(), utc_now()
+        document = {
+            "account_id": account_id,
+            "blueprint_id": identifier,
+            "revision": revision,
+            "schema_version": SCHEMA_VERSION,
+            "status": "published",
+            "created_at": timestamp,
+            "updated_at": timestamp,
+            "updated_by": actor,
+            **input.model_dump(mode="json"),
+        }
+        await self.db.blueprints.insert_one(document)
+        await self.db.program_state.find_one_and_update(
+            {"account_id": account_id},
+            {"$set": {
+                "account_id": account_id,
+                "active_blueprint_id": identifier,
+                "active_blueprint_revision": revision,
+                "updated_at": timestamp,
+            }, "$unset": {"active_release_id": ""}},
+            upsert=True,
+        )
+        response = self.receipt("blueprint", identifier, revision, request_id, "published")
+        response["blueprint"] = self._public(document, ("account_id", "_id"))
+        return await self._save_receipt(account_id, request_id, fingerprint, response)
+
     async def _validate_blueprint_exercises(self, account_id: str, input: BlueprintInput) -> None:
         await self._validate_candidates(account_id, [
             candidate for day in input.days for segment in day.segments for slot in segment.slots for candidate in slot.candidates
@@ -521,23 +589,54 @@ class WorkoutService:
                    "blueprint_revision": input.blueprint_revision, "effective_from": blueprint["start_date"], "effective_through": blueprint["end_date"],
                    "published_at": timestamp, "published_by": actor}
         await self.db.releases.insert_one(release)
-        await self.db.program_state.find_one_and_update({"account_id": account_id}, {"$set": {"account_id": account_id, "active_release_id": release_id, "updated_at": timestamp}}, upsert=True)
+        await self.db.program_state.find_one_and_update(
+            {"account_id": account_id},
+            {"$set": {
+                "account_id": account_id,
+                "active_release_id": release_id,
+                "active_blueprint_id": input.blueprint_id,
+                "active_blueprint_revision": input.blueprint_revision,
+                "updated_at": timestamp,
+            }},
+            upsert=True,
+        )
         await self.db.plans.update_one({"account_id": account_id, "plan_id": input.plan_id, "revision": input.plan_revision}, {"$set": {"status": "published"}})
         await self.db.blueprints.update_one({"account_id": account_id, "blueprint_id": input.blueprint_id, "revision": input.blueprint_revision}, {"$set": {"status": "published"}})
         return await self._save_receipt(account_id, input.request_id, fingerprint, self.receipt("program_release", release_id, input.blueprint_revision, input.request_id, "published"))
 
     async def active_release(self, account_id: str, date: str | None = None) -> dict[str, Any]:
         state = await self.db.program_state.find_one({"account_id": account_id})
-        if not state:
+        release_id = state.get("active_release_id") if state else None
+        if not release_id:
             raise WorkoutDomainError("active_program_missing", "No published program release is active.", 404)
-        release = await self.db.releases.find_one({"account_id": account_id, "release_id": state["active_release_id"]})
+        release = await self.db.releases.find_one({"account_id": account_id, "release_id": release_id})
         if not release:
             raise WorkoutDomainError("active_program_missing", "Active program release is unavailable.", 404)
+        if (
+            state.get("active_blueprint_id") != release["blueprint_id"]
+            or state.get("active_blueprint_revision") != release["blueprint_revision"]
+        ):
+            raise WorkoutDomainError("active_program_missing", "The active program release is stale.", 404)
         if date and not (release["effective_from"] <= date <= release["effective_through"]):
             raise WorkoutDomainError("program_date_uncovered", "The active program does not cover this date.")
         blueprint = await self.db.blueprints.find_one({"account_id": account_id, "blueprint_id": release["blueprint_id"], "revision": release["blueprint_revision"]})
         plan = await self.db.plans.find_one({"account_id": account_id, "plan_id": release["plan_id"], "revision": release["plan_revision"]})
         return {"release": self._public(release, ("account_id", "_id")), "plan": self._public(plan, ("account_id", "_id")), "blueprint": self._public(blueprint, ("account_id", "_id"))}
+
+    async def active_blueprint(self, account_id: str, date: str | None = None) -> dict[str, Any]:
+        state = await self.db.program_state.find_one({"account_id": account_id})
+        if not state or not state.get("active_blueprint_id") or not state.get("active_blueprint_revision"):
+            raise WorkoutDomainError("active_blueprint_missing", "No published workout blueprint is active.", 404)
+        blueprint = await self.db.blueprints.find_one({
+            "account_id": account_id,
+            "blueprint_id": state["active_blueprint_id"],
+            "revision": state["active_blueprint_revision"],
+        })
+        if not blueprint:
+            raise WorkoutDomainError("active_blueprint_missing", "The active workout blueprint is unavailable.", 404)
+        if date and not (blueprint["start_date"] <= date <= blueprint["end_date"]):
+            raise WorkoutDomainError("blueprint_date_uncovered", "The active blueprint does not cover this date.")
+        return {"blueprint": self._public(blueprint, ("account_id", "_id"))}
 
     async def generate(self, account_id: str, input: GenerateInput) -> dict[str, Any]:
         fingerprint = _fingerprint(input.model_dump(mode="json"))
@@ -549,12 +648,12 @@ class WorkoutService:
             response = self.receipt("workout", existing["workout_id"], existing["revision"], input.request_id, "existing")
             response["workout"] = self._public(existing, ("account_id", "_id"))
             return await self._save_receipt(account_id, input.request_id, fingerprint, response)
-        active = await self.active_release(account_id, input.date)
-        release, blueprint = active["release"], active["blueprint"]
+        active = await self.active_blueprint(account_id, input.date)
+        blueprint = active["blueprint"]
         day = next((item for item in blueprint["days"] if item["date"] == input.date), None)
         if not day:
             raise WorkoutDomainError("blueprint_day_missing", "The active blueprint has no day for this date.")
-        workout = await self._materialize(account_id, release, blueprint, day, input)
+        workout = await self._materialize(account_id, blueprint, day, input)
         try:
             await self.db.workouts.insert_one(workout)
         except DuplicateKeyError:
@@ -566,7 +665,7 @@ class WorkoutService:
         response["workout"] = self._public(workout, ("account_id", "_id"))
         return await self._save_receipt(account_id, input.request_id, fingerprint, response)
 
-    async def _materialize(self, account_id: str, release: dict[str, Any], blueprint: dict[str, Any], day: dict[str, Any], input: GenerateInput) -> dict[str, Any]:
+    async def _materialize(self, account_id: str, blueprint: dict[str, Any], day: dict[str, Any], input: GenerateInput) -> dict[str, Any]:
         segments: list[dict[str, Any]] = []
         selected_exercises: set[str] = set()
         decisions: list[dict[str, Any]] = []
@@ -577,7 +676,11 @@ class WorkoutService:
                 if len(available) < slot["selection_count"]:
                     raise WorkoutDomainError("slot_unfillable", f"Slot {slot['slot_id']} has no unique eligible selection.")
                 for pick in range(slot["selection_count"]):
-                    index, probabilities = _decision_index(f"{release['release_id']}:{input.date}:{slot['slot_id']}:{pick}:{input.request_id}", available, input.mode)
+                    index, probabilities = _decision_index(
+                        f"{blueprint['blueprint_id']}:{blueprint['revision']}:{input.date}:{slot['slot_id']}:{pick}:{input.request_id}",
+                        available,
+                        input.source,
+                    )
                     candidate = sorted(available, key=lambda item: (item["priority"], item["candidate_id"]))[index]
                     available = [item for item in available if item["candidate_id"] != candidate["candidate_id"]]
                     selected_exercises.add(candidate["exercise_id"])
@@ -596,14 +699,14 @@ class WorkoutService:
                     instance_id = new_id("wex")
                     items.append({"exercise_instance_id": instance_id, "slot_id": slot["slot_id"], "candidate_id": candidate["candidate_id"], "order": len(items) + 1,
                                   "exercise_snapshot": snapshot, "sets": sets, "cues_md": self._cues(candidate, exercise)})
-                    decisions.append({"slot_id": slot["slot_id"], "candidate_id": candidate["candidate_id"], "mode": input.mode,
+                    decisions.append({"slot_id": slot["slot_id"], "candidate_id": candidate["candidate_id"], "source": input.source,
                                       "probabilities": probabilities, "load": load_decision})
             segments.append({"segment_id": segment["segment_id"], "order": segment["order"], "kind": segment["kind"], "rounds": segment["rounds"],
                              "rest_after_round_seconds": segment["rest_after_round_seconds"], "items": items})
         timestamp = utc_now()
         return {"account_id": account_id, "workout_id": new_id("wrk"), "schema_version": SCHEMA_VERSION, "revision": new_revision(),
                 "date": day["date"], "timezone": blueprint["timezone"], "status": "planned", "title": day["title"], "segments": segments,
-                "lineage": {"source": input.mode, "release_id": release["release_id"], "blueprint_id": blueprint["blueprint_id"],
+                "lineage": {"source": input.source, "blueprint_id": blueprint["blueprint_id"],
                             "blueprint_revision": blueprint["revision"], "day_id": day["day_id"], "decision_receipt": {"engine": "bounded_ranker_v1", "selections": decisions}},
                 "created_at": timestamp, "updated_at": timestamp}
 
@@ -726,15 +829,28 @@ class WorkoutService:
             raise WorkoutDomainError("exercise_instance_not_found", "Workout exercise was not found.", 404)
         if any(set_row.get("actual") is not None for set_row in target_item["sets"]):
             raise WorkoutDomainError("completed_exercise_locked", "A completed exercise cannot be swapped.")
-        active = await self.active_release(account_id, workout["date"])
-        day = next(item for item in active["blueprint"]["days"] if item["day_id"] == workout["lineage"]["day_id"])
-        source_slot = next(slot for segment in day["segments"] for slot in segment["slots"] if slot["slot_id"] == target_item["slot_id"])
+        active = await self.active_blueprint(account_id, workout["date"])
+        blueprint = active["blueprint"]
+        if input.expected_blueprint_revision and input.expected_blueprint_revision != blueprint["revision"]:
+            raise WorkoutDomainError("stale_blueprint", "Blueprint changed. Pull the current blueprint before swapping.")
+        lineage = workout.get("lineage", {})
+        if (
+            lineage.get("blueprint_id") != blueprint["blueprint_id"]
+            or lineage.get("blueprint_revision") != blueprint["revision"]
+        ):
+            raise WorkoutDomainError("stale_blueprint", "Workout belongs to an older blueprint. Refresh it before swapping.")
+        day = next((item for item in blueprint["days"] if item["day_id"] == lineage.get("day_id")), None)
+        if not day:
+            raise WorkoutDomainError("blueprint_day_missing", "The active blueprint no longer contains this workout day.")
+        source_slot = next((slot for segment in day["segments"] for slot in segment["slots"] if slot["slot_id"] == target_item["slot_id"]), None)
+        if not source_slot:
+            raise WorkoutDomainError("blueprint_slot_missing", "The active blueprint no longer contains this workout slot.")
         used = {item["exercise_snapshot"]["exercise_id"] for segment in workout["segments"] for item in segment["items"]}
         candidates = [candidate for candidate in source_slot["candidates"] if candidate["exercise_id"] not in used or candidate["candidate_id"] == target_item["candidate_id"]]
         candidates = [candidate for candidate in candidates if candidate["candidate_id"] != target_item["candidate_id"]]
         if not candidates:
             raise WorkoutDomainError("no_eligible_swap", "No eligible candidate remains in this blueprint slot.")
-        index, probabilities = _decision_index(f"{workout_id}:{instance_id}:{input.request_id}", candidates, input.mode)
+        index, probabilities = _decision_index(f"{workout_id}:{instance_id}:{input.request_id}", candidates, input.source)
         candidate = sorted(candidates, key=lambda item: (item["priority"], item["candidate_id"]))[index]
         exercise = await self.exercise(account_id, candidate["exercise_id"], candidate["exercise_revision"])
         snapshot = {key: exercise[key] for key in ("exercise_id", "revision", "name", "movement_pattern", "primary_muscles", "secondary_muscles", "equipment_kind", "laterality", "load_basis")}
@@ -745,8 +861,16 @@ class WorkoutService:
         target_item.update({"candidate_id": candidate["candidate_id"], "exercise_snapshot": snapshot, "cues_md": self._cues(candidate, exercise),
                             "sets": [{"set_id": new_id("set"), "kind": "work", "target": {**target, **({"load": load} if load else {})}, "actual": None, "round": index + 1} for index, target in enumerate(targets)]})
         workout["revision"], workout["updated_at"] = new_revision(), utc_now()
-        workout["lineage"].setdefault("swaps", []).append({"exercise_instance_id": instance_id, "reason": input.reason, "mode": input.mode,
-                                                               "candidate_id": candidate["candidate_id"], "probabilities": probabilities, "load": load_decision})
+        workout["lineage"].setdefault("swaps", []).append({
+            "exercise_instance_id": instance_id,
+            "reason": input.reason,
+            "source": input.source,
+            "candidate_id": candidate["candidate_id"],
+            "blueprint_id": active["blueprint"]["blueprint_id"],
+            "blueprint_revision": active["blueprint"]["revision"],
+            "probabilities": probabilities,
+            "load": load_decision,
+        })
         replaced = await self.db.workouts.replace_one({"account_id": account_id, "workout_id": workout_id, "revision": input.expected_revision}, workout)
         if not replaced.modified_count:
             raise WorkoutDomainError("stale_revision", "Workout changed. Pull the current revision before swapping.")
@@ -756,35 +880,44 @@ class WorkoutService:
 
     async def override(self, account_id: str, input: WorkoutOverrideInput, actor: dict[str, Any]) -> dict[str, Any]:
         """Replace an unstarted day with a typed agent exception and preserve lineage."""
-        fingerprint = _fingerprint({"override": input.model_dump(mode="json"), "actor": actor})
+        fingerprint = _fingerprint({"override": input.model_dump(mode="json")})
         prior = await self._receipt(account_id, input.request_id, fingerprint)
         if prior:
             return prior
         current = await self.db.workouts.find_one({"account_id": account_id, "date": input.date, "deleted_at": {"$exists": False}})
         if not current and input.expected_revision is not None:
             raise WorkoutDomainError("invalid_workout_revision", "A new override cannot declare an expected revision.", 422)
-        if current and current["revision"] != input.expected_revision:
+        if current and input.expected_revision is not None and current["revision"] != input.expected_revision:
             raise WorkoutDomainError("stale_revision", "Workout changed. Pull the current revision before overriding.")
+        target_revision = current["revision"] if current else None
         if current and any(set_row.get("actual") is not None for segment in current["segments"] for item in segment["items"] for set_row in item["sets"]):
             raise WorkoutDomainError("completed_workout_locked", "A workout with completed sets cannot be replaced.")
         await self._validate_candidates(account_id, [
             candidate for segment in input.segments for slot in segment.slots for candidate in slot.candidates
         ])
-        active = await self.active_release(account_id, input.date)
-        release, blueprint = active["release"], active["blueprint"]
+        # An exception can target a date that the current blueprint does not
+        # cover. The active blueprint still supplies timezone and hard
+        # constraints, while the exception owns the target day's structure.
+        active = await self.active_blueprint(account_id)
+        blueprint = active["blueprint"]
         forbidden = set(blueprint.get("hard_constraints", {}).get("forbidden_exercise_ids", []))
         requested = {candidate.exercise_id for segment in input.segments for slot in segment.slots for candidate in slot.candidates}
         if forbidden & requested:
             raise WorkoutDomainError("override_hard_constraint", "An agent override cannot use a hard-forbidden exercise.", 422)
+        blueprint_day = next((item for item in blueprint["days"] if item["date"] == input.date), None)
         day = {
-            "day_id": f"day_agent_override_{input.date.replace('-', '_')}",
+            # Keep the canonical day identity when an exception targets a date
+            # covered by the active blueprint. This lets a later in-blueprint
+            # swap remain constrained to that day/slot; out-of-period exception
+            # days stay explicitly synthetic and cannot masquerade as a slot map.
+            "day_id": blueprint_day["day_id"] if blueprint_day else f"day_agent_override_{input.date.replace('-', '_')}",
             "date": input.date,
             "title": input.title,
             "segments": [segment.model_dump(mode="json") for segment in input.segments],
         }
         materialized = await self._materialize(
-            account_id, release, blueprint, day,
-            GenerateInput(date=input.date, mode="default", request_id=input.request_id),
+            account_id, blueprint, day,
+            GenerateInput(date=input.date, source="default", request_id=input.request_id),
         )
         timestamp = utc_now()
         materialized["lineage"] = {
@@ -803,7 +936,7 @@ class WorkoutService:
         materialized["updated_at"] = timestamp
         if current:
             result = await self.db.workouts.replace_one(
-                {"account_id": account_id, "workout_id": current["workout_id"], "revision": input.expected_revision}, materialized,
+                {"account_id": account_id, "workout_id": current["workout_id"], "revision": target_revision}, materialized,
             )
             if not result.modified_count:
                 raise WorkoutDomainError("stale_revision", "Workout changed. Pull the current revision before overriding.")
@@ -817,7 +950,6 @@ class WorkoutService:
         return await self._save_receipt(account_id, input.request_id, fingerprint, response)
 
     async def history(self, account_id: str, exercise_id: str, before: str | None = None, limit: int = 10) -> list[dict[str, Any]]:
-        head = await self.exercise(account_id, exercise_id)
         prefix = f"{exercise_id}|"
         query: dict[str, Any] = {"account_id": account_id, "load_key": {"$regex": f"^{prefix}"}}
         if before:

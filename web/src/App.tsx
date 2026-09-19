@@ -7,6 +7,7 @@ import type { WorkoutInput } from './utils/workoutParser'
 import { formatDurationForDisplay, normalizeWorkoutTargetText } from './utils/workoutDisplay'
 import type { WorkoutExercise, WorkoutExtra } from './data/testWorkout'
 import { isExerciseLockedFromLogs } from './utils/workoutSafety'
+import { backendWorkoutToSession, type BackendWorkoutReceipt } from './utils/backendWorkoutAdapter'
 import { I18nProvider, createI18n } from './i18n'
 import { normalizeLanguage, type Language } from './i18n/strings'
 import TabBar from './components/TabBar'
@@ -1326,6 +1327,20 @@ const App = ({ auth }: AppProps = {}) => {
       effort,
     }))
   })
+  const modelOptionKeys = new Set(modelOptions.map((option) => option.value))
+  for (const preset of modelControl?.presets ?? []) {
+    if (!preset.model || !preset.effort) continue
+    const value = JSON.stringify([preset.cli, preset.model, preset.effort])
+    if (modelOptionKeys.has(value)) continue
+    modelOptionKeys.add(value)
+    modelOptions.push({
+      value,
+      label: presetLabel(preset, modelControl?.models) ?? preset.name,
+      cli: preset.cli,
+      model: preset.model,
+      effort: preset.effort,
+    })
+  }
   const selectedModelValue = selectedModelPreset
     ? JSON.stringify([selectedModelPreset.cli, selectedModelPreset.model ?? null, selectedModelPreset.effort ?? null])
     : ''
@@ -4042,23 +4057,42 @@ const App = ({ auth }: AppProps = {}) => {
   const fetchWorkoutSessionByDate = useCallback(async (dateId: string): Promise<WorkoutSession | null> => {
     if (!currentUserId) return null
     if (!canQuerySavedWorkoutSessions) return null
-    const params = new URLSearchParams({
-      user_id: currentUserId,
-      date: dateId,
-    })
-    if (coachActAsOwnerId) {
-      params.set('act_as_owner_id', coachActAsOwnerId)
-    }
     const headers: Record<string, string> = {}
     if (privyReady && privyAuthenticated) {
       Object.assign(headers, await getPrivyAuthHeaders())
     }
-    const response = await apiFetch(`${API_BASE_URL}/workout-sessions/by-date?${params.toString()}`, { headers })
-    if (response.status === 404) return null
+
+    // The new contract is account-scoped by the authenticated browser identity.
+    // Keep the legacy path only for coach impersonation until that surface is
+    // migrated to an explicit scoped identity contract as well.
+    if (coachActAsOwnerId) {
+      const params = new URLSearchParams({
+        user_id: currentUserId,
+        date: dateId,
+        act_as_owner_id: coachActAsOwnerId,
+      })
+      const response = await apiFetch(`${API_BASE_URL}/workout-sessions/by-date?${params.toString()}`, { headers })
+      if (response.status === 404) return null
+      if (!response.ok) {
+        throw new Error(`Failed to load workout session (${response.status})`)
+      }
+      const session = (await response.json()) as WorkoutSession
+      if (session.revision) {
+        const revisionKey = `${coachActAsOwnerId}:${dateId}`
+        workoutRevisionByOwnerDateRef.current[revisionKey] = session.revision
+      }
+      return session
+    }
+
+    const params = new URLSearchParams({ start: dateId, end: dateId })
+    const response = await apiFetch(`${API_BASE_URL}/v1/workouts?${params.toString()}`, { headers })
     if (!response.ok) {
       throw new Error(`Failed to load workout session (${response.status})`)
     }
-    const session = (await response.json()) as WorkoutSession
+    const workouts = await response.json() as Array<NonNullable<BackendWorkoutReceipt['workout']>>
+    const workout = workouts.find((candidate) => candidate.date === dateId)
+    if (!workout) return null
+    const session = backendWorkoutToSession(workout, currentUserId)
     if (session.revision) {
       const revisionKey = `${coachActAsOwnerId ?? currentUserId}:${dateId}`
       workoutRevisionByOwnerDateRef.current[revisionKey] = session.revision
@@ -4076,23 +4110,44 @@ const App = ({ auth }: AppProps = {}) => {
   const fetchWorkoutSessionsByDates = useCallback(async (dateIds: string[]): Promise<WorkoutSession[]> => {
     if (!currentUserId || !canQuerySavedWorkoutSessions || dateIds.length === 0) return []
     const sortedDates = [...dateIds].sort()
-    const params = new URLSearchParams({
-      user_id: currentUserId,
-      start_date: sortedDates[0],
-      end_date: sortedDates[sortedDates.length - 1],
-    })
-    if (coachActAsOwnerId) {
-      params.set('act_as_owner_id', coachActAsOwnerId)
-    }
     const headers: Record<string, string> = {}
     if (privyReady && privyAuthenticated) {
       Object.assign(headers, await getPrivyAuthHeaders())
     }
-    const response = await apiFetch(`${API_BASE_URL}/workout-sessions/by-dates?${params.toString()}`, { headers })
+
+    if (coachActAsOwnerId) {
+      const params = new URLSearchParams({
+        user_id: currentUserId,
+        start_date: sortedDates[0],
+        end_date: sortedDates[sortedDates.length - 1],
+        act_as_owner_id: coachActAsOwnerId,
+      })
+      const response = await apiFetch(`${API_BASE_URL}/workout-sessions/by-dates?${params.toString()}`, { headers })
+      if (!response.ok) {
+        throw new Error(`Failed to load workout sessions (${response.status})`)
+      }
+      const sessions = (await response.json()) as WorkoutSession[]
+      sessions.forEach((session) => {
+        if (!session.revision) return
+        const revisionKey = `${coachActAsOwnerId}:${session.date}`
+        workoutRevisionByOwnerDateRef.current[revisionKey] = session.revision
+      })
+      return sessions
+    }
+
+    const params = new URLSearchParams({
+      start: sortedDates[0],
+      end: sortedDates[sortedDates.length - 1],
+    })
+    const response = await apiFetch(`${API_BASE_URL}/v1/workouts?${params.toString()}`, { headers })
     if (!response.ok) {
       throw new Error(`Failed to load workout sessions (${response.status})`)
     }
-    const sessions = (await response.json()) as WorkoutSession[]
+    const requestedDates = new Set(dateIds)
+    const workouts = await response.json() as Array<NonNullable<BackendWorkoutReceipt['workout']>>
+    const sessions = workouts
+      .filter((workout) => requestedDates.has(workout.date))
+      .map((workout) => backendWorkoutToSession(workout, currentUserId))
     sessions.forEach((session) => {
       if (!session.revision) return
       const revisionKey = `${coachActAsOwnerId ?? currentUserId}:${session.date}`
@@ -4682,23 +4737,45 @@ const App = ({ auth }: AppProps = {}) => {
     pendingWorkoutDatesRef.current.add(targetDate)
     try {
       const headers = { 'Content-Type': 'application/json', ...await getPrivyAuthHeaders() }
-      const response = await apiFetch(`${API_BASE_URL}/workout-sessions/generate/fast`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          user_id: currentUserId,
-          act_as_owner_id: coachActAsOwnerId ?? undefined,
-          target_date: targetDate,
-          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-          mode,
-        }),
-      })
+      const response = coachActAsOwnerId
+        ? await apiFetch(`${API_BASE_URL}/workout-sessions/generate/fast`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            user_id: currentUserId,
+            act_as_owner_id: coachActAsOwnerId,
+            target_date: targetDate,
+            timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+            mode,
+          }),
+        })
+        : await apiFetch(`${API_BASE_URL}/v1/workouts/generate`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            date: targetDate,
+            source: mode === 'jev' ? 'jev' : 'default',
+            request_id: crypto.randomUUID(),
+          }),
+        })
       if (!response.ok) {
         const body = await response.json().catch(() => null) as { detail?: string | { message?: string } } | null
         const detail = typeof body?.detail === 'string' ? body.detail : body?.detail?.message
         throw new Error(detail || `Fast workout generation failed (${response.status})`)
       }
-      const saved = await response.json() as WorkoutSession
+      const responseBody = await response.json() as unknown
+      let saved: WorkoutSession | null = null
+      if (coachActAsOwnerId) {
+        saved = responseBody as WorkoutSession
+      } else {
+        const receipt = responseBody as BackendWorkoutReceipt
+        if (receipt.workout) saved = backendWorkoutToSession(receipt.workout, currentUserId)
+      }
+      if (!saved) throw new Error('Workout generation returned no workout record')
+      // The response is authoritative for this request. Clear the in-flight
+      // guard before hydration, otherwise applySavedWorkoutSessionsToWeek
+      // treats the just-created record as a competing write and drops it.
+      pendingWorkoutDatesRef.current.delete(targetDate)
       applySavedWorkoutSessionToWeek(saved)
       exerciseHistoryCacheRef.current.clear()
     } catch (error) {
