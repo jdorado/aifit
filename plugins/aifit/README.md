@@ -43,3 +43,23 @@ and copied days from its native context; a swap input contains the current
 `workout_id`, `exercise_instance_id`, `expected_blueprint_revision`, and a
 reason. The agent path always uses JEV selection. The plugin does not read or
 copy workout records. The frontend consumes the backend records separately.
+
+## Local verification
+
+This plugin follows AIFit's local testing flow. It is currently a reviewed
+local package, not a published npm product; do not publish it merely to test
+authentication or packaging.
+
+From this directory, run the offline checks before the Ez smoke:
+
+```sh
+pnpm install --frozen-lockfile
+pnpm verify
+npm pack --ignore-scripts
+```
+
+Then inspect the exact source or tarball, install it through the bound Ez
+executor, and verify `ez aifit --help` plus one authorized AIFit write with
+canonical API readback. AIFit's product process merges the focused local branch
+to `main` before the VM/production smoke; npm/GitHub release work is outside
+this local package process.
