@@ -8,8 +8,8 @@
       "executable": "bin/aifit.mjs",
       "args": [],
       "exposure": {
-        "receivesExternalContent": false,
-        "sendsExternally": false,
+        "receivesExternalContent": true,
+        "sendsExternally": true,
         "changesRecords": true,
         "requiresReview": false
       }
