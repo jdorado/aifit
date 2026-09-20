@@ -255,3 +255,55 @@ def test_enqueue_chat_merges_day_context(monkeypatch):
     assert context["referenceDate"] == "2026-09-20"
     assert context["aifit"]["workout_id"] == WORKOUT["workout_id"]
     assert context["aifit"]["date_covered_by_blueprint"] is True
+    assert seen["admission"]["text"].endswith("\n\n[Selected day: 2026-09-20]")
+    # Stored turn text stays the raw user message.
+    assert turns.rows[f"ten_1:{result['request_id']}"]["text"] == "add tonight"
+
+
+def test_enqueue_chat_scopes_mini_chat_text_with_exercise(monkeypatch):
+    seen = {}
+
+    async def fake_ez_call(binding, method, path, body):
+        seen["admission"] = body
+        return {"id": "r_test"}
+
+    import copy
+
+    store: dict = {}
+
+    async def fake_find_one_and_update(query, update, **_kwargs):
+        row = {"_id": query["_id"], **update["$setOnInsert"]}
+        store[query["_id"]] = row
+        return row
+
+    async def fake_find_one(query):
+        return copy.deepcopy(store.get(query["_id"]))
+
+    async def fake_update_one(query, update):
+        store[query["_id"]].update(copy.deepcopy(update["$set"]))
+
+    async def _await(value):
+        return value
+
+    monkeypatch.setattr(main, "db", SimpleNamespace(
+        chat_turns=SimpleNamespace(
+            find_one_and_update=fake_find_one_and_update,
+            find_one=fake_find_one,
+            update_one=fake_update_one,
+        ),
+        workouts=WorkoutsCollection(WORKOUT)))
+    monkeypatch.setattr(main, "workouts", lambda: StubService(BLUEPRINT, history_rows=HISTORY_ROWS))
+    monkeypatch.setattr(main, "owned_account", lambda *a: _await(ACCOUNT))
+    monkeypatch.setattr(main, "verified_binding",
+                        lambda *a: _await({"bindingId": "b1"}))
+    monkeypatch.setattr(main, "ez_call", fake_ez_call)
+    monkeypatch.setattr(main, "fallback_choice", lambda *a: None)
+    monkeypatch.setattr(main, "reconcile_turn",
+                        lambda account, turn: _await(turn))
+
+    asyncio.run(main.enqueue_chat(
+        body(reference_date="2026-09-20",
+             exercise_id="wex_0123456789abcdef0123456789abcdef"),
+        SimpleNamespace(subject="did:privy:owner")))
+    assert seen["admission"]["text"].endswith(
+        "\n\n[Selected day: 2026-09-20]\n[Selected exercise: Treadmill Walk Brisk]")

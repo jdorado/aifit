@@ -777,6 +777,20 @@ async def enqueue_chat(body: ChatInput, identity: Identity = Depends(require_ide
                         context[context_key] = {**context[context_key], **context_value}
                     else:
                         context[context_key] = context_value
+            # The engine prompt carries the user text only: admission context
+            # is retrievable but never injected, and host transport skips the
+            # retrieval hint. Scope the text itself with the selected day (and
+            # exercise when mini-chat resolved one), so date-scoped requests
+            # are self-contained. Stored turn text is untouched.
+            scope_lines = []
+            if body.reference_date:
+                scope_lines.append(f"[Selected day: {body.reference_date}]")
+            selected = ((workout_context or {}).get("aifit") or {}).get("selected_exercise") or {}
+            selected_name = (selected.get("exercise") or {}).get("name")
+            if body.exercise_id and selected_name:
+                scope_lines.append(f"[Selected exercise: {selected_name}]")
+            if scope_lines:
+                admission["text"] = turn["text"] + "\n\n" + "\n".join(scope_lines)
             if context:
                 admission["context"] = context
             run = await ez_call(binding, "POST", "/v1/runs", admission)
