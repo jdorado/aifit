@@ -52,6 +52,34 @@ def test_telegram_connection_rejects_a_non_ez_launch_url():
 
 
 @pytest.mark.asyncio
+async def test_degraded_telegram_offers_bot_repair_when_provisioning_exists(monkeypatch):
+    monkeypatch.setattr(main, "account_for", lambda _identity: value({"account_id": "acc_1"}))
+    monkeypatch.setattr(main, "verified_binding", lambda _account_id: value({"bindingId": "binding_1"}))
+    monkeypatch.setattr(main, "telegram_provisioning_configured", lambda _binding: True)
+
+    async def degraded(*_args):
+        return {"connected": True, "ready": False}
+
+    monkeypatch.setattr(main, "ez_call", degraded)
+    assert await main.get_telegram_connection(IDENTITY) == {"state": "needs_bot"}
+
+
+@pytest.mark.asyncio
+async def test_degraded_telegram_stays_unavailable_without_provisioning(monkeypatch):
+    monkeypatch.setattr(main, "account_for", lambda _identity: value({"account_id": "acc_1"}))
+    monkeypatch.setattr(main, "verified_binding", lambda _account_id: value({"bindingId": "binding_1"}))
+    monkeypatch.setattr(main, "telegram_provisioning_configured", lambda _binding: False)
+
+    async def degraded(*_args):
+        return {"connected": True, "ready": False}
+
+    monkeypatch.setattr(main, "ez_call", degraded)
+    with pytest.raises(HTTPException) as error:
+        await main.get_telegram_connection(IDENTITY)
+    assert error.value.status_code == 502
+
+
+@pytest.mark.asyncio
 async def test_unavailable_telegram_is_not_reported_as_a_disconnected_account(monkeypatch):
     monkeypatch.setattr(main, "account_for", lambda _identity: value({"account_id": "acc_1"}))
     monkeypatch.setattr(main, "verified_binding", lambda _account_id: value({"bindingId": "binding_1"}))

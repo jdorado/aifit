@@ -479,7 +479,14 @@ async def get_telegram_connection(identity: Identity = Depends(require_identity)
         if error.status_code in {400, 404, 503} and telegram_provisioning_configured(binding):
             return {"state": "needs_bot"}
         raise
-    return public_telegram_connection(receipt)
+    try:
+        return public_telegram_connection(receipt)
+    except HTTPException as error:
+        if (error.status_code == 502 and telegram_provisioning_configured(binding)
+                and isinstance(receipt, dict) and receipt.get("connected") is True
+                and receipt.get("ready") is not True):
+            return {"state": "needs_bot"}
+        raise
 
 
 @app.post("/account/telegram/link")
