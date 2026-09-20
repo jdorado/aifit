@@ -45,3 +45,52 @@ Pass when the agent chooses the smallest valid action: `workout swap` for one
 in-blueprint slot, or a complete `workout override` for a new day/week. The
 receipt and canonical readback show the requested change without silently
 changing the published blueprint.
+
+### LOG-01 — Log a set
+
+I finish a set and mark it logged with my actual reps and load.
+
+Pass when the set carries its actual values and the workout reads back as
+`in_progress`, or `completed` when every set has actuals. The receipt effect
+is `set_logged` with the new workout revision. Set logging is a UI action;
+the agent reads the canonical record, it has no log command.
+
+### LOAD-01 — Change the weights
+
+I ask for heavier (or lighter) weights than prescribed.
+
+Pass when the agent first reads the canonical record including any logged
+actuals, then applies the change to unstarted work only: a new complete day
+through `workout override` when the request means different loads, or correct
+`actuals` on the logged sets when I lifted differently than prescribed. The
+receipt and readback show the new loads without silently changing the
+published blueprint.
+
+### SWAP-01 — Swap one exercise
+
+I ask to swap one exercise, e.g. the machine is taken.
+
+Pass when the agent uses `workout swap` for that one in-blueprint slot. The
+receipt effect is `swapped` and the readback shows the replacement chosen
+from the same blueprint slot, every other item unchanged, and the published
+blueprint revision unchanged.
+
+### ADD-01 — Add a different exercise
+
+I ask to add a different exercise that is not in the plan.
+
+Pass when the agent resolves my request into one complete target day and
+sends it through `workout override`. The receipt effect is `agent_override`
+and the readback shows the added exercise in the day without changing the
+published blueprint.
+
+### LOCK-01 — Switch an exercise after logging started
+
+I ask to switch an exercise after I already logged one of its sets.
+
+Pass when nothing is silently replaced: the swap path rejects a logged
+exercise (`completed_exercise_locked`) and the override path rejects a day
+with logged sets (`completed_workout_locked`), so the agent explains in
+coach language that the logged work is locked and offers a valid action
+instead — swapping a different unlogged exercise, or adjusting a future
+unstarted day. No mutation receipt exists for the locked target.

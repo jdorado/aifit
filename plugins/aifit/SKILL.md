@@ -3,9 +3,13 @@
 Stay inside the native Ez context and the exact local artifact files named by
 the owner. Do not search sibling repositories, legacy AIFit applications,
 installed plugin packages, API source, MongoDB, or runtime logs to recover a
-schema, exercise catalog, or prior run. If a canonical exercise ID and revision
-are not present in native context, stop and return structured feedback asking
-Ez to provide that context; never invent a revision.
+schema, exercise catalog, or prior run.
+
+You author exercise IDs and revisions freely: the API needs no prior catalog
+row and synthesizes display metadata from the ID. The only thing you must
+never invent is someone else's record — workout IDs, revisions, and
+blueprint revisions always come from native context. Reuse a request ID only
+when retrying the exact same payload after an uncertain result.
 
 Three writes. Author the typed JSON and stream it:
 
