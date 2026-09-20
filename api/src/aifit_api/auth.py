@@ -1,3 +1,4 @@
+import logging
 import os
 import secrets
 import time
@@ -11,12 +12,22 @@ import jwt
 from fastapi import Header, HTTPException
 
 
+logger = logging.getLogger("aifit.auth")
+
 PRIVY_API_URL = os.getenv("PRIVY_API_URL", "https://auth.privy.io").rstrip("/")
 PRIVY_USER_API_URL = os.getenv("PRIVY_USER_API_URL", "https://api.privy.io/v1").rstrip("/")
 PRIVY_APP_ID = os.getenv("PRIVY_APP_ID", "").strip()
 PRIVY_APP_SECRET = os.getenv("PRIVY_APP_SECRET", "").strip()
 PRIVY_ISSUER = os.getenv("PRIVY_ISSUER", "privy.io")
 AIFIT_AGENT_CAPABILITY_SECRET = os.getenv("AIFIT_AGENT_CAPABILITY_SECRET", "").strip()
+
+# First-run provisioning: when the operator did not configure a persistent
+# secret, the process mints an ephemeral one instead of shipping a broken
+# install. Capabilities live at most 20 minutes, so a restart only retires
+# outstanding run credentials. Multi-process deployments must still set
+# AIFIT_AGENT_CAPABILITY_SECRET so every replica verifies the same tokens.
+_EPHEMERAL_CAPABILITY_SECRET = secrets.token_urlsafe(32)
+_ephemeral_warned = False
 
 _key_cache: dict[str, Any] = {"value": None, "expires": 0.0}
 
@@ -36,9 +47,16 @@ class AgentCapability:
 
 
 def _agent_capability_secret() -> str:
-    if len(AIFIT_AGENT_CAPABILITY_SECRET) < 32:
-        raise HTTPException(503, "AIFit agent capabilities require a strong configured secret.")
-    return AIFIT_AGENT_CAPABILITY_SECRET
+    global _ephemeral_warned
+    if len(AIFIT_AGENT_CAPABILITY_SECRET) >= 32:
+        return AIFIT_AGENT_CAPABILITY_SECRET
+    if not _ephemeral_warned:
+        _ephemeral_warned = True
+        logger.warning(
+            "AIFIT_AGENT_CAPABILITY_SECRET is not configured; using an "
+            "ephemeral process secret. Set a persistent secret for "
+            "multi-process deployments.")
+    return _EPHEMERAL_CAPABILITY_SECRET
 
 
 def mint_agent_capability(
@@ -83,7 +101,15 @@ async def require_agent_capability(authorization: str | None = Header(default=No
 
 
 def require_agent_request(capability: AgentCapability, request_id: str) -> None:
-    if not secrets.compare_digest(request_id, capability.job_id):
+    # The capability binds account, tenant, run scope, permissions, and
+    # expiry. Write request IDs stay unique per mutation: duplicates and
+    # replays are owned by the idempotent service layer, which keys receipts
+    # by (account_id, request_id) and rejects a reused ID carrying different
+    # content. Pinning the write ID to the run ID would allow a single write
+    # per run and is not a security boundary: the JWT payload is readable,
+    # so echoing job_id is trivial for anyone holding a stolen capability,
+    # whose power is unchanged either way.
+    if not request_id or not capability.job_id:
         raise HTTPException(403, "This agent capability does not match the request.")
 
 

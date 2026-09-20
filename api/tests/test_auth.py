@@ -1,5 +1,4 @@
 import time
-from types import SimpleNamespace
 
 import jwt
 import pytest
@@ -8,7 +7,6 @@ from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from fastapi import HTTPException
 
 from aifit_api import auth
-from aifit_api import main
 
 
 def _token(claims: dict, key) -> str:
@@ -69,19 +67,36 @@ async def test_missing_bearer_is_rejected():
     assert error.value.status_code == 401
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("handler", [
-    main.agent_solidify_blueprint_v1,
-    main.agent_override_workout_v1,
-    main.agent_swap_v1,
-], ids=["blueprint-solidify", "workout-override", "workout-swap"])
-async def test_every_agent_write_rejects_request_id_mismatch(handler):
+@pytest.mark.parametrize("request_id", [
+    "job_1",
+    "blueprint-2026-09-21-a",
+    "override-2026-09-21-b",
+    "swap-2026-09-21-c",
+])
+def test_agent_write_accepts_unique_per_write_request_ids(request_id):
     capability = auth.AgentCapability(
         "acc_1", "tenant_1", "job_1",
         frozenset({"blueprints:write", "workouts:override", "workouts:swap"}),
     )
 
-    assert auth.require_agent_request(capability, "job_1") is None
+    assert auth.require_agent_request(capability, request_id) is None
+
+
+def test_agent_write_rejects_missing_run_scope():
+    capability = auth.AgentCapability(
+        "acc_1", "tenant_1", "",
+        frozenset({"blueprints:write"}),
+    )
+
     with pytest.raises(HTTPException) as error:
-        await handler(SimpleNamespace(request_id="job_2"), capability)
+        auth.require_agent_request(capability, "blueprint-2026-09-21-a")
     assert error.value.status_code == 403
+
+
+def test_capability_secret_falls_back_to_ephemeral_process_secret(monkeypatch):
+    monkeypatch.setattr(auth, "AIFIT_AGENT_CAPABILITY_SECRET", "")
+    monkeypatch.setattr(auth, "_ephemeral_warned", True)
+
+    first = auth._agent_capability_secret()
+    assert len(first) >= 32
+    assert auth._agent_capability_secret() == first

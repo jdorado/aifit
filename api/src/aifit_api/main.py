@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import os
 from datetime import UTC, datetime
@@ -12,7 +13,6 @@ from pydantic import BaseModel, ConfigDict, Field
 from pymongo import ASCENDING, AsyncMongoClient, ReturnDocument
 
 from .auth import (
-    AIFIT_AGENT_CAPABILITY_SECRET,
     AgentCapability,
     Identity,
     mint_agent_capability,
@@ -95,7 +95,7 @@ def require_agent_permission(capability: AgentCapability, permission: str) -> No
 def agent_run_context(account: dict[str, Any], request_id: str) -> dict[str, Any] | None:
     """Opaque data for the AIFit Ez plugin; never sent to or stored by the browser."""
     api_base_url = agent_api_base_url()
-    if not AIFIT_AGENT_CAPABILITY_SECRET or not api_base_url:
+    if not api_base_url:
         return None
     return {"plugins": {"aifit": {
         "api_base_url": api_base_url,
@@ -195,12 +195,79 @@ class AgentWorkoutSwapInput(BaseModel):
     request_id: str = Field(min_length=1, max_length=160, pattern=r"^[A-Za-z0-9_.:-]+$")
 
 
+def serialize_day_item(item: dict[str, Any]) -> dict[str, Any]:
+    """Full-fidelity canonical item: every set with target+actual, cues, snapshot.
+
+    The agent explains the whole day and answers exercise questions from this
+    record — the same closed-world data the plugin validates against. Sending
+    only IDs or the first set forces the agent to guess or deflect.
+    """
+    snapshot = item.get("exercise_snapshot", {}) or {}
+    sets = item.get("sets", []) or []
+    return {
+        "exercise_instance_id": item.get("exercise_instance_id"),
+        "slot_id": item.get("slot_id"),
+        "candidate_id": item.get("candidate_id"),
+        "order": item.get("order"),
+        "exercise": {
+            "exercise_id": snapshot.get("exercise_id"),
+            "exercise_revision": snapshot.get("exercise_revision"),
+            "name": snapshot.get("name"),
+            "movement_pattern": snapshot.get("movement_pattern"),
+            "primary_muscles": snapshot.get("primary_muscles"),
+            "secondary_muscles": snapshot.get("secondary_muscles"),
+            "equipment_kind": snapshot.get("equipment_kind"),
+            "laterality": snapshot.get("laterality"),
+            "load_basis": snapshot.get("load_basis"),
+            "equipment_profile_id": snapshot.get("equipment_profile_id"),
+        },
+        "sets": [{
+            "set_id": set_row.get("set_id"),
+            "kind": set_row.get("kind"),
+            "round": set_row.get("round"),
+            "target": set_row.get("target"),
+            "actual": set_row.get("actual"),
+        } for set_row in sets],
+        "cues_md": item.get("cues_md") or "",
+        "sets_logged": sum(1 for set_row in sets if set_row.get("actual") is not None),
+        "sets_total": len(sets),
+    }
+
+
+def serialize_day_segments(workout: dict[str, Any]) -> list[dict[str, Any]]:
+    return [{
+        "segment_id": segment.get("segment_id"),
+        "order": segment.get("order"),
+        "kind": segment.get("kind"),
+        "rounds": segment.get("rounds"),
+        "rest_after_round_seconds": segment.get("rest_after_round_seconds"),
+        "items": [serialize_day_item(item) for item in segment.get("items", [])],
+    } for segment in (workout or {}).get("segments", [])]
+
+
+def serialize_day_workout(workout: dict[str, Any] | None) -> dict[str, Any]:
+    lineage = (workout or {}).get("lineage", {}) or {}
+    return {
+        "workout_id": (workout or {}).get("workout_id"),
+        "workout_revision": (workout or {}).get("revision"),
+        "workout_date": (workout or {}).get("date"),
+        "workout_status": (workout or {}).get("status"),
+        "workout_title": (workout or {}).get("title"),
+        "workout_source": lineage.get("source"),
+        "workout_blueprint_id": lineage.get("blueprint_id"),
+        "workout_blueprint_revision": lineage.get("blueprint_revision"),
+        "segments": serialize_day_segments(workout or {}),
+    }
+
+
 async def mini_chat_workout_context(account: dict[str, Any], body: ChatInput) -> dict[str, Any] | None:
-    """Put narrow canonical references in native agent context for exercise chat.
+    """Put the selected exercise plus its whole day in native agent context.
 
     The plugin remains write-only and the native agent remains the context owner.
-    The backend only resolves the selected item and revision references needed to
-    author a bounded swap intent; candidate selection stays in the domain service.
+    The backend only resolves the selected item, the complete day record, and
+    recent completed history for that exercise — the same closed-world data the
+    plugin validates against — so mini-chat can explain the exercise in the
+    context of the whole day without follow-up pulls.
     """
     if not body.exercise_id:
         return None
@@ -221,7 +288,7 @@ async def mini_chat_workout_context(account: dict[str, Any], body: ChatInput) ->
         item
         for segment in (workout or {}).get("segments", [])
         for item in segment.get("items", [])
-        if item["exercise_instance_id"] == body.exercise_id
+        if item.get("exercise_instance_id") == body.exercise_id
     ), None)
     if not workout or not target_item:
         return None
@@ -232,21 +299,61 @@ async def mini_chat_workout_context(account: dict[str, Any], body: ChatInput) ->
         active = await service.active_blueprint(account["account_id"])
     except WorkoutDomainError:
         pass
+    try:
+        recent_history = await service.history(
+            account["account_id"],
+            (target_item.get("exercise_snapshot", {}) or {}).get("exercise_id", ""),
+            before=workout.get("date"),
+            limit=5,
+        )
+    except (WorkoutDomainError, ValueError, KeyError, TypeError):
+        recent_history = []
     blueprint = active["blueprint"] if active else None
-    workout_lineage = workout.get("lineage", {})
-    return {"aifit": {
-        "workout_id": workout["workout_id"],
-        "workout_revision": workout["revision"],
-        "workout_date": workout["date"],
-        "workout_blueprint_id": workout_lineage.get("blueprint_id"),
-        "workout_blueprint_revision": workout_lineage.get("blueprint_revision"),
-        "selected_exercise_instance_id": target_item["exercise_instance_id"],
-        "selected_exercise_id": target_item["exercise_snapshot"]["exercise_id"],
-        "selected_exercise_name": target_item["exercise_snapshot"]["name"],
-        "selected_slot_id": target_item["slot_id"],
+    day = serialize_day_workout(workout)
+    day.update({
+        "selected_exercise_instance_id": target_item.get("exercise_instance_id"),
+        "selected_exercise": serialize_day_item(target_item),
+        "selected_slot_id": target_item.get("slot_id"),
+        "selected_exercise_recent_history": recent_history,
         "active_blueprint_id": blueprint.get("blueprint_id") if blueprint else None,
         "active_blueprint_revision": blueprint.get("revision") if blueprint else None,
-    }}
+    })
+    return {"aifit": day}
+
+
+async def date_scoped_context(account: dict[str, Any], body: ChatInput) -> dict[str, Any] | None:
+    """Put the complete resolved day in native agent context for date-scoped turns.
+
+    Exercise-scoped mini-chat already resolves its item; plain chat turns
+    carry only a reference date, so without the full day record — every
+    segment, item, set target/actual, cue, and rest — the agent cannot explain
+    the day and can only guess or deflect. This resolves the date server-side,
+    the same closed-world data the plugin validates against, while the plugin
+    stays write-only and the native agent stays the decision owner.
+    """
+    if not body.reference_date or body.exercise_id:
+        return None
+    service = workouts()
+    active: dict[str, Any] | None = None
+    try:
+        active = await service.active_blueprint(account["account_id"], body.reference_date)
+    except WorkoutDomainError:
+        pass
+    workout = await db.workouts.find_one({
+        "account_id": account["account_id"], "date": body.reference_date,
+        "deleted_at": {"$exists": False},
+    })
+    if not active and not workout:
+        return None
+    blueprint = active["blueprint"] if active else None
+    day = serialize_day_workout(workout)
+    day.update({
+        "reference_date": body.reference_date,
+        "date_covered_by_blueprint": blueprint is not None,
+        "active_blueprint_id": blueprint.get("blueprint_id") if blueprint else None,
+        "active_blueprint_revision": blueprint.get("revision") if blueprint else None,
+    })
+    return {"aifit": day}
 
 
 async def account_for(identity: Identity) -> dict:
@@ -450,6 +557,24 @@ async def indexes() -> None:
     )
     await db.chat_turns.create_index([("run_id", ASCENDING)], sparse=True)
     await workouts().ensure_indexes()
+    try:
+        from . import telegram_admit
+    except ImportError:  # pragma: no cover - packaged without the bridge
+        telegram_admit = None  # type: ignore[assignment]
+    if telegram_admit is not None and telegram_admit.admit_enabled():
+        stop_event: asyncio.Event = asyncio.Event()
+        app.state.telegram_admit_stop = stop_event
+        app.state.telegram_admit_task = asyncio.create_task(telegram_admit.run_forever(stop_event))
+
+
+@app.on_event("shutdown")
+async def stop_telegram_admit() -> None:
+    stop_event = getattr(app.state, "telegram_admit_stop", None)
+    task = getattr(app.state, "telegram_admit_task", None)
+    if stop_event is not None:
+        stop_event.set()
+    if task is not None:
+        await task
 
 
 @app.get("/health")
@@ -637,6 +762,13 @@ async def enqueue_chat(body: ChatInput, identity: Identity = Depends(require_ide
             workout_context = await mini_chat_workout_context(account, body)
             if workout_context:
                 context.update(workout_context)
+            day_context = await date_scoped_context(account, body)
+            if day_context:
+                for context_key, context_value in day_context.items():
+                    if isinstance(context_value, dict) and isinstance(context.get(context_key), dict):
+                        context[context_key] = {**context[context_key], **context_value}
+                    else:
+                        context[context_key] = context_value
             if context:
                 admission["context"] = context
             run = await ez_call(binding, "POST", "/v1/runs", admission)

@@ -3387,6 +3387,23 @@ const App = () => {
     }
   }, [canQuerySavedWorkoutSessions, currentUserId, fetchBackendChatHistory, refreshVisibleWorkoutSessions])
 
+  useEffect(() => {
+    // Agent changes can land outside this tab (e.g. Telegram) with no chat
+    // completion here to trigger a refresh. Re-pull the visible strip when
+    // the tab becomes visible again; the refresh itself is a no-op while
+    // signed out and merges idempotently.
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return
+      void refreshVisibleWorkoutSessions().catch(() => {})
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('focus', onVisible)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('focus', onVisible)
+    }
+  }, [refreshVisibleWorkoutSessions])
+
   const fetchChatReply = useCallback(async (
     payload: ChatRequestPayload,
     messageId?: string | null,
