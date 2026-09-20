@@ -2,9 +2,10 @@
   "name": "frontend",
   "private": true,
   "version": "0.0.0",
+  "license": "MIT",
   "scripts": {
     "dev": "node scripts/dev.cjs",
-    "fe": "API_BASE_URL=https://dev.ezenciel.com yarn dev",
+    "fe": "node scripts/dev.cjs",
     "build": "node scripts/workout_timeline_contract.cjs && node scripts/pwa_resume_contract.cjs && tsc && webpack --config webpack.config.cjs --mode production",
     "preview": "serve dist",
     "smoke:workout-safety": "node scripts/workout_safety_smoke.cjs",

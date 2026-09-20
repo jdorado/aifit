@@ -1,6 +1,8 @@
 .DS_Store
 .env
 .env.*
+# Populated dotenv files belong in the operator's private config directory.
+*.env
 !.env.example
 
 node_modules/
@@ -19,3 +21,4 @@ data/
 !web/src/data/**
 uploads/
 secrets/
+/deploy/

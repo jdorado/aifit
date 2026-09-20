@@ -1,9 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { usePrivy } from '@privy-io/react-auth'
 import { marked } from 'marked'
-import simpleWorkoutData from './data/llm-workout.json'
 import { parseWorkout } from './utils/workoutParser'
-import type { WorkoutInput } from './utils/workoutParser'
 import { formatDurationForDisplay, normalizeWorkoutTargetText } from './utils/workoutDisplay'
 import type { WorkoutExercise, WorkoutExtra } from './data/testWorkout'
 import { isExerciseLockedFromLogs } from './utils/workoutSafety'
@@ -38,9 +36,6 @@ import type { ExerciseHistoryResponse } from './types/exerciseHistory'
 
 const restDefaultSec = 90
 const sideTransitionPrepSec = 5
-const ANON_USER_STORAGE_KEY = 'aifit_uid'
-const PRIVY_EMAIL_STORAGE_KEY = 'aifit_user_email'
-const COACH_ACT_AS_STORAGE_KEY = 'aifit_coach_act_as_owner_id'
 const LEGACY_SESSION_CACHE_STORAGE_PREFIX = 'aifit_session_cache_v1:'
 const SESSION_SAVE_DEBOUNCE_MS = 1500
 const MAIN_CHAT_HISTORY_LIMIT = 40
@@ -56,12 +51,14 @@ type EzPreset = {
   id: string
   name: string
   cli: string
+  provider?: string
   model?: string
   effort?: string
 }
 
 type EzModel = {
   cli: string
+  provider?: string
   name: string
   model?: string
   efforts: string[]
@@ -76,20 +73,31 @@ type ModelControl = {
 
 const titleCase = (value: string) => value.charAt(0).toUpperCase() + value.slice(1)
 
+const providerLabel = (provider?: string) => provider === 'openrouter'
+  ? 'OpenRouter'
+  : provider === 'openai'
+    ? 'OpenAI'
+    : provider
+
+const modelDisplayName = (model: EzModel) => {
+  const provider = providerLabel(model.provider)
+  const prefix = provider ? `${provider} · ` : ''
+  return provider && model.name.startsWith(prefix) ? model.name.slice(prefix.length) : model.name
+}
+
 const presetLabel = (preset: EzPreset | undefined, models: EzModel[] = []) => {
   if (!preset) return undefined
-  const installed = models.find((item) => item.cli === preset.cli && item.model === preset.model)
+  const installed = models.find((item) => (
+    item.cli === preset.cli
+    && item.provider === preset.provider
+    && item.model === preset.model
+  ))
   return installed
-    ? `${installed.name}${preset.effort ? ` ${titleCase(preset.effort)}` : ''}`
+    ? `${modelDisplayName(installed)}${preset.effort ? ` ${titleCase(preset.effort)}` : ''}${providerLabel(installed.provider) ? ` · ${providerLabel(installed.provider)}` : ''}`
     : preset.name
 }
 
-const privyAppId = (process.env.PRIVY_APP_ID || '').trim()
 const isProd = (process.env.NODE_ENV || '').trim() === 'production'
-const devPreviewWorkout = !isProd && (process.env.DEV_PREVIEW_WORKOUT || '').trim().toLowerCase() === 'true'
-const devLocalAuthEnabled = !isProd && Boolean((process.env.DEV_LOCAL_AUTH_TOKEN || '').trim())
-const privyEnabled = (Boolean(privyAppId) || devLocalAuthEnabled) && !devPreviewWorkout
-const PROD_API_BASE_URL = 'https://dev.ezenciel.com'
 
 const getLocalRuntimeApiBaseUrl = () => {
   if (typeof window === 'undefined') return null
@@ -106,7 +114,7 @@ const getLocalRuntimeApiBaseUrl = () => {
   if (!isLocalHost && !isPrivateLan) return null
   const apiHostname = hostname && hostname !== '0.0.0.0' ? hostname : 'localhost'
   const formattedHost = apiHostname.includes(':') ? `[${apiHostname}]` : apiHostname
-  return `http://${formattedHost}:8000`
+  return `http://${formattedHost}:8100`
 }
 
 const apiBaseOverride = (process.env.API_BASE_URL || '').trim()
@@ -115,13 +123,12 @@ const API_BASE_URL = apiBaseOverride
   ? apiBaseOverride
   : runtimeLocalApiBaseUrl
     ? runtimeLocalApiBaseUrl
-  : isProd
-    ? PROD_API_BASE_URL
-    : 'http://localhost:8000'
+    : isProd
+      ? ''
+      : 'http://localhost:8100'
 const apiFetch = (input: RequestInfo | URL, init?: RequestInit) => (
   fetch(input, init)
 )
-const devWorkoutEnabled = (process.env.DISABLE_DEV_WORKOUT || '').trim().toLowerCase() !== 'true'
 const isTextControlElement = (element: Element | null) => (
   element instanceof HTMLInputElement
   || element instanceof HTMLTextAreaElement
@@ -182,7 +189,6 @@ type ChatRequestPayload = {
   scope_id?: string
   reference_date?: string
   exercise_id?: string
-  act_as_owner_id?: string
 }
 
 type ChatResponsePayload = {
@@ -212,14 +218,6 @@ type ChatHistoryPayloadItem = {
   agent_label?: unknown
 }
 
-type PersistedWorkout = {
-  session_id?: string
-  exercises?: WorkoutExercise[]
-  extras?: WorkoutExtra[]
-  set_logs?: Record<string, SetState[]>
-  notes?: string
-}
-
 type WeekPlanDay = {
   date: string
   label: string
@@ -238,26 +236,6 @@ type WeekPlan = {
 
 type WeekSetLogs = Record<string, Record<string, SetState[]>>
 type WeekBaseCounts = Record<string, Record<string, number>>
-
-type PersistedSessionPayload = {
-  version: number
-  workout?: PersistedWorkout
-  week_plan?: WeekPlan
-  week_set_logs?: WeekSetLogs
-  selected_day_index?: number
-  profile?: ProfileState
-  workout_revisions?: Record<string, string>
-}
-
-
-type SessionResponse = {
-  user_id: string
-  payload: PersistedSessionPayload
-  created_at: string
-  updated_at: string
-  profile_revision?: string | null
-  training_plan_revision?: string | null
-}
 
 const videoCacheTtlMs = 6 * 60 * 60 * 1000
 const videoCacheMaxEntries = 40
@@ -469,59 +447,6 @@ const normalizeActiveNotes = (value: unknown): ActiveNote[] => {
   return notes.slice(-12)
 }
 
-const extractActiveNotesFromPayload = (payload: Record<string, unknown>) => {
-  const profileRecord = payload.profile && typeof payload.profile === 'object' && !Array.isArray(payload.profile)
-    ? payload.profile as Record<string, unknown>
-    : {}
-  return normalizeActiveNotes(
-    profileRecord.activeNotes
-    ?? profileRecord.active_notes
-    ?? payload.activeNotes
-    ?? payload.active_notes
-  )
-}
-
-const extractDailyTasksFromPayload = (payload: Record<string, unknown>): DailyTask[] => {
-  const profileRecord = payload.profile && typeof payload.profile === 'object' && !Array.isArray(payload.profile)
-    ? payload.profile as Record<string, unknown>
-    : {}
-  const rawTasks = profileRecord.dailyTasks ?? profileRecord.daily_tasks
-  if (!Array.isArray(rawTasks)) return []
-  const seen = new Set<string>()
-  return rawTasks.flatMap((rawTask) => {
-    if (!rawTask || typeof rawTask !== 'object' || Array.isArray(rawTask)) return []
-    const task = rawTask as Record<string, unknown>
-    const id = typeof task.id === 'string' ? task.id.trim() : ''
-    const title = typeof task.title === 'string' ? task.title.trim() : ''
-    const summary = typeof task.summary === 'string' ? task.summary.trim() : ''
-    const notes = Array.isArray(task.notes)
-      ? task.notes.filter((note): note is string => typeof note === 'string').map((note) => note.trim()).filter(Boolean)
-      : []
-    if (!id || !title || !summary || seen.has(id)) return []
-    seen.add(id)
-    return [{ id, title, summary, notes }]
-  })
-}
-
-const extractWeeklyPlanText = (record: Record<string, unknown>) => {
-  const direct = normalizeWeeklyPlanText(
-    record.weekly_plan
-    ?? record.weeklyPlan
-    ?? record.week_plan
-    ?? record.weekPlan
-  )
-  if (direct) return direct
-  const profileRecord = record.profile
-  if (profileRecord && typeof profileRecord === 'object' && !Array.isArray(profileRecord)) {
-    const nested = normalizeWeeklyPlanText(
-      (profileRecord as Record<string, unknown>).weekly_plan
-      ?? (profileRecord as Record<string, unknown>).weeklyPlan
-    )
-    if (nested) return nested
-  }
-  return ''
-}
-
 const getWeekdayLabel = (date: Date, language: Language = 'en') => {
   const labels = language === 'es' ? WEEKDAY_LABELS_ES : WEEKDAY_LABELS
   return labels[date.getDay()] ?? ''
@@ -530,27 +455,6 @@ const getWeekdayLabel = (date: Date, language: Language = 'en') => {
 const getWeekdayFullLabel = (date: Date, language: Language = 'en') => {
   const labels = language === 'es' ? WEEKDAY_FULL_LABELS_ES : WEEKDAY_FULL_LABELS
   return labels[date.getDay()] ?? ''
-}
-
-const getDayIndexFromLabel = (value: string | null | undefined) => {
-  if (!value) return null
-  const normalized = normalizeDayLabel(value)
-  if (!normalized) return null
-  const match = WEEKDAY_FULL_LABELS.findIndex((label) => normalizeDayLabel(label) === normalized)
-  if (match >= 0) return (match + 6) % 7
-  const shortMatch = WEEKDAY_LABELS.findIndex((label) => normalizeDayLabel(label) === normalized)
-  if (shortMatch >= 0) return (shortMatch + 6) % 7
-  const matchEs = WEEKDAY_FULL_LABELS_ES.findIndex((label) => normalizeDayLabel(label) === normalized)
-  if (matchEs >= 0) return (matchEs + 6) % 7
-  const shortMatchEs = WEEKDAY_LABELS_ES.findIndex((label) => normalizeDayLabel(label) === normalized)
-  if (shortMatchEs >= 0) return (shortMatchEs + 6) % 7
-  return null
-}
-
-const getDayOfWeekFromLabel = (label: string | null | undefined) => {
-  const mondayIndex = getDayIndexFromLabel(label)
-  if (mondayIndex === null) return null
-  return (mondayIndex + 1) % 7
 }
 
 const getWorkoutSessionId = () => {
@@ -615,52 +519,6 @@ const countDoneSetsForExercises = (
     ), 0)
   }, 0)
 )
-
-const mergeWorkoutConflict = (
-  localExercises: WorkoutExercise[],
-  localExtras: WorkoutExtra[],
-  localLogs: Record<string, SetState[]>,
-  remoteSession: WorkoutSession,
-  preserveRemoteOnlyItems: boolean,
-) => {
-  const remoteExercises = normalizeWorkoutExercises(remoteSession.workout?.exercises)
-  const remoteExtras = normalizeWorkoutExtras(remoteSession.workout?.extras)
-  const remoteLogs = remoteSession.workout?.set_logs ?? {}
-  const localExerciseIds = new Set(localExercises.map((item) => item.id))
-  const localExtraIds = new Set(localExtras.map((item) => item.id))
-  const exercises = [
-    ...localExercises,
-    ...(preserveRemoteOnlyItems
-      ? remoteExercises.filter((item) => !localExerciseIds.has(item.id))
-      : []),
-  ]
-  const extras = [
-    ...localExtras,
-    ...(preserveRemoteOnlyItems
-      ? remoteExtras.filter((item) => !localExtraIds.has(item.id))
-      : []),
-  ]
-  const setLogs: Record<string, SetState[]> = {}
-
-  exercises.forEach((exercise) => {
-    const localStates = localLogs[exercise.id] ?? []
-    const remoteStates = remoteLogs[exercise.id] ?? []
-    setLogs[exercise.id] = exercise.sets.map((_, index) => {
-      const local = localStates[index]
-      const remote = remoteStates[index]
-      if (local?.done) return { ...local }
-      if (remote?.done) return { ...remote }
-      return {
-        weight: local?.weight ?? remote?.weight ?? '',
-        metric: local?.metric ?? remote?.metric ?? '',
-        done: false,
-        value_source: local?.value_source ?? remote?.value_source,
-      }
-    })
-  })
-
-  return { exercises, extras, setLogs }
-}
 
 const buildWeekPlanFromSingleDay = (
   dateId: string,
@@ -852,46 +710,6 @@ const normalizeWeightForStorage = (value: string | undefined) => {
   return formatWeightValue(amount, 2)
 }
 
-const normalizeDayNotesPayload = (value: unknown): string => {
-  const formatKey = (key: string) => (
-    key
-      .replace(/[_-]+/g, ' ')
-      .replace(/\b\w/g, (char) => char.toUpperCase())
-  )
-
-  const formatEntry = (entry: unknown): string => {
-    if (typeof entry === 'string' || typeof entry === 'number') {
-      return String(entry).trim()
-    }
-    if (Array.isArray(entry)) {
-      return entry.map(formatEntry).filter(Boolean).join('\n')
-    }
-    if (!entry || typeof entry !== 'object') return ''
-
-    const record = entry as Record<string, unknown>
-    const title = [record.title, record.name, record.section, record.label]
-      .find((item): item is string => typeof item === 'string' && item.trim().length > 0)
-      ?.trim()
-    const body = [record.text, record.summary, record.body, record.value]
-      .find((item): item is string => typeof item === 'string' && item.trim().length > 0)
-      ?.trim()
-    const details = formatEntry(record.items ?? record.notes ?? record.checkpoints)
-    const head = title && body ? `${title}: ${body}` : (title ?? body ?? '')
-
-    if (head || details) return [head, details].filter(Boolean).join('\n')
-
-    return Object.entries(record)
-      .map(([key, item]) => {
-        const formatted = formatEntry(item)
-        return formatted ? `${formatKey(key)}: ${formatted}` : ''
-      })
-      .filter(Boolean)
-      .join('\n')
-  }
-
-  return formatEntry(value)
-}
-
 const findSetValue = (
   sets: Array<{ targetReps?: string, targetTime?: string, targetWeight?: string, isWarmup?: boolean }>,
   key: 'targetReps' | 'targetTime' | 'targetWeight',
@@ -1054,11 +872,6 @@ const normalizeCircuitsAfterExerciseRemoval = (exercises: WorkoutExercise[], rem
   })
 }
 
-const getStoredEmail = () => {
-  const storedEmail = localStorage.getItem(PRIVY_EMAIL_STORAGE_KEY)
-  return storedEmail && storedEmail.includes('@') ? storedEmail.trim().toLowerCase() : null
-}
-
 const decodePrivyJwt = (token: string) => {
   const parts = token.split('.')
   if (parts.length < 2) return { sub: null, exp: null }
@@ -1095,25 +908,6 @@ const readPrivyUserId = (user: unknown): string | null => {
   return null
 }
 
-const getAnonymousId = () => {
-  let uid = localStorage.getItem(ANON_USER_STORAGE_KEY)
-  if (!uid) {
-    if (typeof crypto.randomUUID === 'function') {
-      uid = crypto.randomUUID()
-    } else {
-      uid = Date.now().toString(36) + Math.random().toString(36).substring(2)
-    }
-    localStorage.setItem(ANON_USER_STORAGE_KEY, uid)
-  }
-  return uid
-}
-
-const getUserId = () => {
-  const storedEmail = getStoredEmail()
-  if (storedEmail) return storedEmail
-  return getAnonymousId()
-}
-
 const getInitialLanguage = () => {
   const browserLanguage = normalizeLanguage(typeof navigator !== 'undefined' ? navigator.language : null)
   return browserLanguage ?? 'en'
@@ -1138,24 +932,12 @@ const normalizeFontScale = (value: unknown) => {
 
 const getInitialFontScale = () => FONT_SCALE_PRESETS[0]
 
-export type PrivyAuthAdapter = Pick<
-  ReturnType<typeof usePrivy>,
-  'ready' | 'authenticated' | 'user' | 'login' | 'logout' | 'getAccessToken'
->
-
-type AppProps = {
-  auth?: PrivyAuthAdapter
-}
-
-const App = ({ auth }: AppProps = {}) => {
+const App = () => {
   const todayId = useMemo(() => getWorkoutSessionId(), [])
   const initialLanguage = useMemo(() => getInitialLanguage(), [])
   const weekStartDayIndex = WORKOUT_WEEK_START_DAY_INDEX
   const initialWorkout = useMemo(() => {
-    const input: WorkoutInput = (isProd || (!devWorkoutEnabled && !devPreviewWorkout))
-      ? []
-      : (simpleWorkoutData as unknown as WorkoutInput)
-    return parseWorkout(input)
+    return parseWorkout([])
   }, [])
   const initialSetState = useMemo(
     () => buildSetState(initialWorkout.exercises),
@@ -1213,9 +995,8 @@ const App = ({ auth }: AppProps = {}) => {
   const [exerciseHistoryLoading, setExerciseHistoryLoading] = useState(false)
   const [exerciseHistoryError, setExerciseHistoryError] = useState<string | null>(null)
   const exerciseHistoryCacheRef = useRef<Map<string, ExerciseHistoryResponse>>(new Map())
-  const exerciseHistoryRequestKeyRef = useRef('')
   const [chatInput, setChatInput] = useState('')
-  const [copyingLastWeek, setCopyingLastWeek] = useState(false)
+  const [copyingLastWeek] = useState(false)
   const copyingLastWeekRef = useRef(false)
   const [showChatScrollToBottom, setShowChatScrollToBottom] = useState(false)
   const [restState, setRestState] = useState<RestState>({
@@ -1255,23 +1036,17 @@ const App = ({ auth }: AppProps = {}) => {
     activeNotes: [],
     dailyTasks: [],
   }))
-  const [currentUserEmail, setCurrentUserEmail] = useState<string | null>(() => (
-    devLocalAuthEnabled ? 'developer@local.aifit' : (privyEnabled ? null : getStoredEmail())
-  ))
-  const [currentUserId, setCurrentUserId] = useState(() => (
-    privyEnabled ? getAnonymousId() : getUserId()
-  ))
+  const [currentUserEmail, setCurrentUserEmail] = useState<string | null>(null)
+  const [currentUserId, setCurrentUserId] = useState('')
   const [privyAuthError, setPrivyAuthError] = useState<string | null>(null)
   const [coachLinks, setCoachLinks] = useState<CoachLink[]>([])
-  const [coachLinksLoading, setCoachLinksLoading] = useState(false)
+  const [coachLinksLoading] = useState(false)
   const [coachLinksError, setCoachLinksError] = useState<string | null>(null)
   const [coachActionMessage, setCoachActionMessage] = useState<string | null>(null)
-  const [coachLatestInviteToken, setCoachLatestInviteToken] = useState<string | null>(null)
-  const [coachActAsOwnerId, setCoachActAsOwnerId] = useState<string | null>(() => (
-    localStorage.getItem(COACH_ACT_AS_STORAGE_KEY)
-  ))
+  const [coachLatestInviteToken] = useState<string | null>(null)
+  const [coachActAsOwnerId, setCoachActAsOwnerId] = useState<string | null>(null)
   const [privySubjectId, setPrivySubjectId] = useState<string | null>(null)
-  const privyAuth = auth ?? usePrivy()
+  const privyAuth = usePrivy()
   const {
     ready: privyReady,
     authenticated: privyAuthenticated,
@@ -1281,10 +1056,11 @@ const App = ({ auth }: AppProps = {}) => {
     getAccessToken: getPrivyAccessToken,
   } = privyAuth
   const pendingPrivyUserId = readPrivyUserId(privyUser)
-  const expectedSignedInUserId = pendingPrivyUserId || privySubjectId
-  const canQuerySavedWorkoutSessions = !privyEnabled || (
+  const expectedSignedInUserId = pendingPrivyUserId || privySubjectId || currentUserEmail
+  const canQuerySavedWorkoutSessions = (
     privyReady
     && privyAuthenticated
+    && Boolean(currentUserId)
     && (
       Boolean(coachActAsOwnerId)
       || Boolean(expectedSignedInUserId && currentUserId === expectedSignedInUserId)
@@ -1320,9 +1096,10 @@ const App = ({ auth }: AppProps = {}) => {
   const modelOptions = (modelControl?.models ?? []).flatMap((model) => {
     const efforts = model.efforts.length > 0 ? model.efforts : [undefined]
     return efforts.map((effort) => ({
-      value: JSON.stringify([model.cli, model.model ?? null, effort ?? null]),
-      label: `${model.name}${effort ? ` ${titleCase(effort)}` : ''}`,
+      value: JSON.stringify([model.cli, model.provider ?? null, model.model ?? null, effort ?? null]),
+      label: `${modelDisplayName(model)}${effort ? ` ${titleCase(effort)}` : ''}${providerLabel(model.provider) ? ` · ${providerLabel(model.provider)}` : ''}`,
       cli: model.cli,
+      provider: model.provider,
       model: model.model,
       effort,
     }))
@@ -1330,46 +1107,35 @@ const App = ({ auth }: AppProps = {}) => {
   const modelOptionKeys = new Set(modelOptions.map((option) => option.value))
   for (const preset of modelControl?.presets ?? []) {
     if (!preset.model || !preset.effort) continue
-    const value = JSON.stringify([preset.cli, preset.model, preset.effort])
+    const value = JSON.stringify([preset.cli, preset.provider ?? null, preset.model, preset.effort])
     if (modelOptionKeys.has(value)) continue
     modelOptionKeys.add(value)
     modelOptions.push({
       value,
       label: presetLabel(preset, modelControl?.models) ?? preset.name,
       cli: preset.cli,
+      provider: preset.provider,
       model: preset.model,
       effort: preset.effort,
     })
   }
   const selectedModelValue = selectedModelPreset
-    ? JSON.stringify([selectedModelPreset.cli, selectedModelPreset.model ?? null, selectedModelPreset.effort ?? null])
+    ? JSON.stringify([selectedModelPreset.cli, selectedModelPreset.provider ?? null, selectedModelPreset.model ?? null, selectedModelPreset.effort ?? null])
     : ''
-  const modelSelectionAvailable = modelOptions.length > 1
   const chatBodyRef = useRef<HTMLDivElement>(null)
   const chatBottomFrameRef = useRef<number | null>(null)
   const chatBottomTimeoutRef = useRef<number | null>(null)
   const layoutViewportHeightRef = useRef(0)
   const prevPrivyAuthenticatedRef = useRef(privyAuthenticated)
-  const sessionSaveTimeoutRef = useRef<number | null>(null)
-  const hasLocalEditsRef = useRef(false)
-  const sessionSavePausedUntilEditRef = useRef(false)
-  const lastAppliedSessionRef = useRef<{ userId: string; updatedAt: string | null } | null>(null)
   const workoutSaveTimeoutRef = useRef<number | null>(null)
   const workoutRevisionByOwnerDateRef = useRef<Record<string, string>>({})
   const pendingWorkoutDatesRef = useRef(new Set<string>())
   const pendingWorkoutPlanDatesRef = useRef(new Set<string>())
   const workoutWriteVersionByDateRef = useRef<Record<string, number>>({})
   const sessionLoadKeyRef = useRef<string | null>(null)
-  const chatHistoryAccessKeyRef = useRef('')
   const sessionReadyRef = useRef(false)
-  const sessionHydratedRef = useRef(false)
   const sessionHydrationInProgressRef = useRef(false)
-  const localEditRevisionRef = useRef(0)
-  const profileRevisionRef = useRef<string | null>(null)
-  const trainingPlanRevisionRef = useRef<string | null>(null)
-  const syncedLocalEditRevisionRef = useRef(0)
   const privyAccessTokenRef = useRef<{ token: string; expiresAtMs: number; sub: string | null } | null>(null)
-  const sessionSavePromiseRef = useRef<Promise<void> | null>(null)
   const backendHealthLastOkRef = useRef(0)
   const backendHealthPingRef = useRef<Promise<boolean> | null>(null)
   const currentWorkoutSessionIdRef = useRef('')
@@ -1386,13 +1152,6 @@ const App = ({ auth }: AppProps = {}) => {
   const didAutoSelectTodayRef = useRef(false)
 
   const warmBackend = useCallback(async (options: { force?: boolean } = {}) => {
-    if (devPreviewWorkout && !apiBaseOverride) {
-      sessionReadyRef.current = true
-      setIsBackendHealthy(false)
-      setSessionLoading(false)
-      return false
-    }
-
     const now = Date.now()
     if (!options.force && backendHealthLastOkRef.current && now - backendHealthLastOkRef.current < BACKEND_HEALTH_STALE_MS) {
       return true
@@ -1561,26 +1320,7 @@ const App = ({ auth }: AppProps = {}) => {
     return true
   }, [])
 
-  const isLlmPlanEditableDate = useCallback((dateId?: string | null) => {
-    if (!dateId) return false
-    return dateId >= todayId
-  }, [todayId])
-
-  const isLoggableDate = useCallback((dateId?: string | null) => {
-    if (!dateId) return false
-    return dateId <= todayId
-  }, [todayId])
-
-  const hasUnsyncedLocalSessionEdits = useCallback(() => (
-    localEditRevisionRef.current > syncedLocalEditRevisionRef.current
-  ), [])
-
-  const markLocalEdit = useCallback(() => {
-    if (sessionHydrationInProgressRef.current) return
-    localEditRevisionRef.current += 1
-    hasLocalEditsRef.current = true
-    sessionSavePausedUntilEditRef.current = false
-  }, [])
+  const markLocalEdit = useCallback(() => undefined, [])
 
   const bumpData = useCallback(() => {
     markLocalEdit()
@@ -1611,17 +1351,17 @@ const App = ({ auth }: AppProps = {}) => {
     })),
   ]), [profile.dailyTasks, selectedDay?.date])
 
-  const canEditPlanSelectedDay = useMemo(() => (
+  // The public v1 API currently supports canonical reads and generation, but
+  // does not expose a browser contract for arbitrary plan/set rewrites. Keep
+  // those UI mutations disabled instead of routing them through the removed
+  // flat session adapter.
+  const canGenerateWorkoutSelectedDay = useMemo(() => (
     isPlanEditableDate(selectedDay?.date ?? todayId)
   ), [isPlanEditableDate, selectedDay?.date, todayId])
 
-  const canLlmEditPlanSelectedDay = useMemo(() => (
-    isLlmPlanEditableDate(selectedDay?.date ?? todayId)
-  ), [isLlmPlanEditableDate, selectedDay?.date, todayId])
-
-  const canLogSelectedDay = useMemo(() => (
-    isLoggableDate(selectedDay?.date ?? todayId)
-  ), [isLoggableDate, selectedDay?.date, todayId])
+  const canEditPlanSelectedDay = false
+  const canLlmEditPlanSelectedDay = false
+  const canLogSelectedDay = false
 
   const hasWeekWorkouts = useMemo(() => (
     weekPlan.days.some((day) => day.exercises.length > 0 || day.extras.length > 0)
@@ -2221,7 +1961,51 @@ const App = ({ auth }: AppProps = {}) => {
     bumpData()
   }, [applyWeekPlan, bumpData, hideWorkoutDetail, profile.language, syncDayRefs, weekPlan])
 
-  const persistWorkoutSessionForDay = async (entry: {
+  const mergeBackendChatHistory = useCallback(async (items: ChatHistoryPayloadItem[]) => {
+    const cleaned = items
+      .map((item): PersistedMessage | null => {
+        if (!item || (item.role !== 'user' && item.role !== 'ai')) return null
+        if (typeof item.content !== 'string' || !item.content.trim()) return null
+        const parsedTimestamp = typeof item.timestamp === 'string' ? Date.parse(item.timestamp) : NaN
+        return {
+          variant: item.role,
+          text: item.content,
+          timestamp: Number.isFinite(parsedTimestamp) ? parsedTimestamp : Date.now(),
+          modelLabel: item.role === 'ai' && typeof item.agent_label === 'string'
+            ? item.agent_label
+            : undefined,
+        }
+      })
+      .filter((item): item is PersistedMessage => Boolean(item))
+      .slice(-MAIN_CHAT_HISTORY_LIMIT)
+    if (cleaned.length === 0) return
+
+    const hydrated = await Promise.all(cleaned.map(async (message, index) => ({
+      id: `backend-${message.timestamp ?? Date.now()}-${index}`,
+      variant: message.variant,
+      text: message.text,
+      html: message.variant === 'ai' ? await marked.parse(message.text) : undefined,
+      timestamp: message.timestamp,
+      modelLabel: message.modelLabel,
+    })))
+    setMessages((previous) => {
+      const merged = [...previous]
+      hydrated.forEach((incoming) => {
+        const duplicate = merged.some((existing) => (
+          existing.variant === incoming.variant
+          && existing.text === incoming.text
+          && Math.abs((existing.timestamp ?? 0) - (incoming.timestamp ?? 0)) < 2 * 60 * 1000
+        ))
+        if (!duplicate) merged.push(incoming)
+      })
+      return merged
+        .filter((message) => !message.thinking && Boolean(message.text))
+        .sort((left, right) => (left.timestamp ?? 0) - (right.timestamp ?? 0))
+        .slice(-MAIN_CHAT_HISTORY_LIMIT)
+    })
+  }, [])
+
+  const persistWorkoutSessionForDay = async (_entry: {
     dateId: string
     sessionId?: string | null
     label?: string | null
@@ -2232,115 +2016,13 @@ const App = ({ auth }: AppProps = {}) => {
     dayOverride?: WeekPlanDay
     planMutation?: boolean
   }) => {
-    const writeVersion = (workoutWriteVersionByDateRef.current[entry.dateId] ?? 0) + 1
-    workoutWriteVersionByDateRef.current[entry.dateId] = writeVersion
-    pendingWorkoutDatesRef.current.add(entry.dateId)
-    if (entry.planMutation) {
-      pendingWorkoutPlanDatesRef.current.add(entry.dateId)
-    }
-    if (!currentUserId || !isBackendHealthy) return false
-
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-    const shouldAuth = (privyReady && privyAuthenticated) || Boolean(coachActAsOwnerId)
-
-    if (shouldAuth) {
-      Object.assign(headers, await getPrivyAuthHeaders())
-    }
-
-    const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone
-    const dayNotes = entry.notes
-      ?? entry.dayOverride?.notes
-      ?? weekPlan.days.find((candidate) => candidate.date === entry.dateId)?.notes
-      ?? ''
-    const trimmedNotes = typeof dayNotes === 'string' ? dayNotes.trim() : ''
-    const revisionKey = `${coachActAsOwnerId ?? currentUserId}:${entry.dateId}`
-    const canonicalDay = entry.dayOverride
-      ?? weekPlan.days.find((candidate) => candidate.date === entry.dateId)
-    let payload = {
-      session_id: entry.sessionId ?? entry.dateId,
-      date: entry.dateId,
-      timezone,
-      label: entry.label ?? undefined,
-      notes: trimmedNotes || undefined,
-      base_revision: workoutRevisionByOwnerDateRef.current[revisionKey] || undefined,
-      auto_fill_suppressed_at: canonicalDay?.autoFillSuppressedAt ?? null,
-      workout: {
-        exercises: entry.exercises,
-        extras: entry.extras,
-        set_logs: entry.setLogs,
-      },
-    }
-
-    try {
-      for (let attempt = 0; attempt < 2; attempt += 1) {
-        const response = await apiFetch(`${API_BASE_URL}/workout-sessions`, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({
-            user_id: currentUserId,
-            act_as_owner_id: coachActAsOwnerId ?? undefined,
-            ...payload,
-          }),
-        })
-        if (response.status === 409 && attempt === 0) {
-          const authoritative = await fetchWorkoutSessionByDate(entry.dateId)
-          if (!authoritative?.revision) return false
-          const merged = mergeWorkoutConflict(
-            payload.workout.exercises,
-            payload.workout.extras,
-            payload.workout.set_logs,
-            authoritative,
-            !pendingWorkoutPlanDatesRef.current.has(entry.dateId),
-          )
-          payload = {
-            ...payload,
-            base_revision: authoritative.revision,
-            workout: {
-              exercises: merged.exercises,
-              extras: merged.extras,
-              set_logs: merged.setLogs,
-            },
-          }
-          continue
-        }
-        if (!response.ok) {
-          throw new Error(`Failed to save workout (${response.status})`)
-        }
-        const savedSession = (await response.json()) as WorkoutSession
-        if (savedSession.revision) {
-          workoutRevisionByOwnerDateRef.current[revisionKey] = savedSession.revision
-        }
-        if (workoutWriteVersionByDateRef.current[entry.dateId] === writeVersion) {
-          pendingWorkoutDatesRef.current.delete(entry.dateId)
-          pendingWorkoutPlanDatesRef.current.delete(entry.dateId)
-        }
-        exerciseHistoryCacheRef.current.clear()
-        if (attempt > 0) {
-          applySavedWorkoutSessionToWeek(savedSession)
-        }
-        setDataVersion((value) => value + 1)
-        return true
-      }
-    } catch (error) {
-      console.warn('Workout save failed:', error)
-    }
+    // The public API deliberately exposes typed workout mutations only. The
+    // legacy flat session write had no canonical equivalent and is disabled
+    // until each UI mutation is mapped to a typed v1 operation.
     return false
   }
 
-  const persistWorkoutSession = async (planMutation = false) => {
-    if (!currentUserId) return false
-    const payload = buildWorkoutLogPayload()
-    return await persistWorkoutSessionForDay({
-      dateId: payload.date,
-      sessionId: payload.session_id ?? undefined,
-      label: payload.label ?? undefined,
-      notes: payload.notes,
-      exercises: payload.workout.exercises ?? [],
-      extras: payload.workout.extras ?? [],
-      setLogs: payload.workout.set_logs ?? {},
-      planMutation,
-    })
-  }
+  const persistWorkoutSession = async (_planMutation = false) => false
 
   const scheduleWorkoutSave = useCallback((planMutation = false) => {
     pendingWorkoutDatesRef.current.add(selectedDay?.date ?? todayId)
@@ -2823,7 +2505,7 @@ const App = ({ auth }: AppProps = {}) => {
             text: content,
             html,
             timestamp: completedAt,
-            modelLabel,
+            modelLabel: modelLabel ?? message.modelLabel,
             replyElapsedSeconds: Math.max(
               1,
               Math.ceil((completedAt - (message.timestamp ?? completedAt)) / 1000),
@@ -2976,7 +2658,7 @@ const App = ({ auth }: AppProps = {}) => {
             text: content,
             html,
             timestamp: completedAt,
-            modelLabel,
+            modelLabel: modelLabel ?? message.modelLabel,
             replyElapsedSeconds: Math.max(
               1,
               Math.ceil((completedAt - (message.timestamp ?? completedAt)) / 1000),
@@ -3022,6 +2704,19 @@ const App = ({ auth }: AppProps = {}) => {
     }
   }, [getPrivyAccessToken, privyAuthenticated, privyReady, privySubjectId])
 
+  const fetchBackendChatHistory = useCallback(async (userId: string) => {
+    if (!isBackendHealthy || !userId) return
+    const headers = await getPrivyAuthHeaders()
+    const params = new URLSearchParams({
+      user_id: userId,
+      limit: String(MAIN_CHAT_HISTORY_LIMIT),
+    })
+    const response = await apiFetch(`${API_BASE_URL}/chat/history?${params.toString()}`, { headers })
+    if (response.status === 404 || response.status === 405) return
+    if (!response.ok) throw new Error(`Failed to load chat history (${response.status})`)
+    await mergeBackendChatHistory(await response.json() as ChatHistoryPayloadItem[])
+  }, [getPrivyAuthHeaders, isBackendHealthy, mergeBackendChatHistory])
+
   const refreshModelControl = useCallback(async () => {
     if (!privyReady || !privyAuthenticated) {
       setModelControl(null)
@@ -3045,6 +2740,7 @@ const App = ({ auth }: AppProps = {}) => {
         body: JSON.stringify({
           expected_session: modelControl.active_session_id,
           cli: option.cli,
+          provider: option.provider,
           model: option.model,
           effort: option.effort,
         }),
@@ -3062,758 +2758,37 @@ const App = ({ auth }: AppProps = {}) => {
   }, [getPrivyAuthHeaders, modelControl, modelOptions, modelSelectionPending, refreshModelControl])
 
   const setCoachActAs = useCallback((ownerId: string | null) => {
-    if (ownerId) {
-      localStorage.setItem(COACH_ACT_AS_STORAGE_KEY, ownerId)
-    } else {
-      localStorage.removeItem(COACH_ACT_AS_STORAGE_KEY)
-    }
-    chatHistoryAccessKeyRef.current = `${currentUserId}:${ownerId ?? 'self'}`
+    void ownerId
     setMessages([])
     setCoachMessagesByScope({})
     setChatInput('')
-    setCoachActAsOwnerId(ownerId)
-    sessionLoadKeyRef.current = null
-    sessionReadyRef.current = false
-    if (sessionSaveTimeoutRef.current) {
-      window.clearTimeout(sessionSaveTimeoutRef.current)
-      sessionSaveTimeoutRef.current = null
-    }
-    setCoachActionMessage(ownerId ? t('coach.loadingView') : t('coach.exitViewMessage'))
-    if (ownerId) {
-      handleActiveViewChange('workout')
-    }
-  }, [currentUserId, handleActiveViewChange, t])
-
-  const fetchCoachLinks = useCallback(async () => {
-    if (!isBackendHealthy || !privyReady || !privyAuthenticated) {
-      setCoachLinks([])
-      return
-    }
-    setCoachLinksLoading(true)
-    setCoachLinksError(null)
-    try {
-      const headers = await getPrivyAuthHeaders()
-      const response = await apiFetch(`${API_BASE_URL}/coach_links?role=all`, { headers })
-      if (!response.ok) {
-        throw new Error(`Failed to load coach links (${response.status})`)
-      }
-      const data = await response.json()
-      setCoachLinks(Array.isArray(data) ? data : [])
-    } catch (error) {
-      console.warn('Coach link fetch failed:', error)
-      setCoachLinksError(error instanceof Error ? error.message : t('coach.linksLoadFailed'))
-    } finally {
-      setCoachLinksLoading(false)
-    }
-  }, [getPrivyAuthHeaders, isBackendHealthy, privyAuthenticated, privyReady, t])
+    setCoachActAsOwnerId(null)
+    setCoachActionMessage('Coach collaboration is not available in the public release.')
+  }, [])
 
   const handleCoachInvite = useCallback(async (permissions: CoachPermissions) => {
-    if (!privyReady || !privyAuthenticated) return
-    setCoachActionMessage(null)
-    setCoachLatestInviteToken(null)
-    setCoachLinksLoading(true)
-    try {
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-        ...(await getPrivyAuthHeaders()),
-      }
-      const response = await apiFetch(`${API_BASE_URL}/coach_links`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ permissions, trainee_email: currentUserEmail || undefined }),
-      })
-      if (!response.ok) {
-        throw new Error(`Failed to invite coach (${response.status})`)
-      }
-      const data = await response.json().catch(() => null) as CoachLink | null
-      if (data?.id) {
-        setCoachLinks((prev) => {
-          const filtered = prev.filter((link) => link.id !== data.id)
-          return [data, ...filtered]
-        })
-      }
-      if (data?.invite_token) {
-        setCoachLatestInviteToken(data.invite_token)
-      }
-      setCoachActionMessage(t('coach.inviteCreated'))
-    } catch (error) {
-      console.warn('Coach invite failed:', error)
-      setCoachActionMessage(t('coach.inviteFailed'))
-    } finally {
-      setCoachLinksLoading(false)
-      fetchCoachLinks().catch(() => undefined)
-    }
-  }, [currentUserEmail, fetchCoachLinks, getPrivyAuthHeaders, privyAuthenticated, privyReady, t])
+    void permissions
+    setCoachActionMessage('Coach collaboration is not available in the public release.')
+  }, [])
 
   const handleCoachAcceptInvite = useCallback(async (token: string) => {
-    if (!privyReady || !privyAuthenticated) return
-    setCoachActionMessage(null)
-    setCoachLinksLoading(true)
-    try {
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-        ...(await getPrivyAuthHeaders()),
-      }
-      const response = await apiFetch(`${API_BASE_URL}/coach_links/accept`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ invite_token: token, coach_email: currentUserEmail || undefined }),
-      })
-      if (!response.ok) {
-        throw new Error(`Failed to accept invite (${response.status})`)
-      }
-      setCoachActionMessage(t('coach.inviteAccepted'))
-    } catch (error) {
-      console.warn('Coach accept failed:', error)
-      setCoachActionMessage(t('coach.inviteAcceptFailed'))
-    } finally {
-      setCoachLinksLoading(false)
-      fetchCoachLinks().catch(() => undefined)
-    }
-  }, [currentUserEmail, fetchCoachLinks, getPrivyAuthHeaders, privyAuthenticated, privyReady, t])
+    void token
+    setCoachActionMessage('Coach collaboration is not available in the public release.')
+  }, [])
 
   const handleCoachRevoke = useCallback(async (linkId: string) => {
-    if (!privyReady || !privyAuthenticated) return
-    setCoachActionMessage(null)
-    setCoachLinksLoading(true)
-    try {
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-        ...(await getPrivyAuthHeaders()),
-      }
-      const response = await apiFetch(`${API_BASE_URL}/coach_links/${encodeURIComponent(linkId)}`, {
-        method: 'PATCH',
-        headers,
-        body: JSON.stringify({ status: 'revoked' }),
-      })
-      if (!response.ok) {
-        throw new Error(`Failed to revoke (${response.status})`)
-      }
-      setCoachActionMessage(t('coach.revokeSuccess'))
-      if (coachActAsOwnerId) {
-        setCoachActAs(null)
-      }
-    } catch (error) {
-      console.warn('Coach revoke failed:', error)
-      setCoachActionMessage(t('coach.revokeFailed'))
-    } finally {
-      setCoachLinksLoading(false)
-      fetchCoachLinks().catch(() => undefined)
-    }
-  }, [coachActAsOwnerId, fetchCoachLinks, getPrivyAuthHeaders, privyAuthenticated, privyReady, setCoachActAs, t])
+    void linkId
+    setCoachActionMessage('Coach collaboration is not available in the public release.')
+  }, [])
 
   const handleCoachUpdatePermissions = useCallback(async (
     linkId: string,
     permissions: CoachPermissions,
   ) => {
-    if (!privyReady || !privyAuthenticated) return
-    setCoachActionMessage(null)
-    setCoachLinksLoading(true)
-    try {
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-        ...(await getPrivyAuthHeaders()),
-      }
-      const response = await apiFetch(`${API_BASE_URL}/coach_links/${encodeURIComponent(linkId)}`, {
-        method: 'PATCH',
-        headers,
-        body: JSON.stringify({ permissions }),
-      })
-      if (!response.ok) {
-        throw new Error(`Failed to update coach permissions (${response.status})`)
-      }
-      const updated = await response.json().catch(() => null) as CoachLink | null
-      if (updated?.id) {
-        setCoachLinks((prev) => prev.map((link) => (
-          link.id === updated.id ? updated : link
-        )))
-      }
-      setCoachActionMessage(t('coach.permissionsUpdated'))
-    } catch (error) {
-      console.warn('Coach permission update failed:', error)
-      setCoachActionMessage(t('coach.permissionsUpdateFailed'))
-    } finally {
-      setCoachLinksLoading(false)
-      fetchCoachLinks().catch(() => undefined)
-    }
-  }, [fetchCoachLinks, getPrivyAuthHeaders, privyAuthenticated, privyReady, t])
-
-  const buildSessionPayload = useCallback((): PersistedSessionPayload => {
-    const revisionOwnerId = coachActAsOwnerId ?? currentUserId
-    const workoutRevisions = revisionOwnerId
-      ? Object.fromEntries(weekPlan.days.flatMap((day) => {
-        const revision = workoutRevisionByOwnerDateRef.current[`${revisionOwnerId}:${day.date}`]
-        return revision ? [[day.date, revision]] : []
-      }))
-      : {}
-
-    return {
-      version: 2,
-      workout: {
-        session_id: currentWorkoutSessionIdRef.current || undefined,
-        exercises: workoutExercisesRef.current,
-        extras: workoutExtrasRef.current,
-        set_logs: setLogsRef.current,
-        notes: selectedDay?.notes ?? '',
-      },
-      week_plan: weekPlan,
-      week_set_logs: weekSetLogsRef.current,
-      selected_day_index: selectedDayIndexRef.current,
-      profile,
-      workout_revisions: workoutRevisions,
-    }
-  }, [coachActAsOwnerId, currentUserId, profile, selectedDay?.notes, weekPlan])
-
-  const buildWorkoutLogPayload = useCallback(() => {
-    const sessionId = currentWorkoutSessionIdRef.current || getWorkoutSessionId()
-    const dateId = selectedDay?.date ?? sessionId
-    const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone
-    const label = selectedDay?.label ?? selectedDayLabel
-    const notesValue = (selectedDay?.notes ?? '').trim()
-    return {
-      session_id: sessionId,
-      date: dateId,
-      timezone,
-      label,
-      notes: notesValue || undefined,
-      workout: {
-        exercises: workoutExercisesRef.current,
-        extras: workoutExtrasRef.current,
-        set_logs: setLogsRef.current,
-      },
-    }
-  }, [selectedDay?.date, selectedDay?.label, selectedDay?.notes, selectedDayLabel])
-
-  const mergeBackendChatHistory = useCallback(async (items: ChatHistoryPayloadItem[]) => {
-    if (!Array.isArray(items) || items.length === 0) return
-    const cleaned = items
-      .map((item): PersistedMessage | null => {
-        if (!item || (item.role !== 'user' && item.role !== 'ai')) return null
-        if (typeof item.content !== 'string' || !item.content.trim()) return null
-        const text = item.content
-        if (!text.trim()) return null
-        const parsedTimestamp = typeof item.timestamp === 'string'
-          ? Date.parse(item.timestamp)
-          : NaN
-        return {
-          variant: item.role,
-          text,
-          timestamp: Number.isFinite(parsedTimestamp) ? parsedTimestamp : Date.now(),
-          modelLabel: item.role === 'ai' && typeof item.agent_label === 'string'
-            ? item.agent_label
-            : undefined,
-        }
-      })
-      .filter((item): item is PersistedMessage => Boolean(item))
-      .slice(-MAIN_CHAT_HISTORY_LIMIT)
-    if (cleaned.length === 0) return
-
-    const hydrated = await Promise.all(cleaned.map(async (message, index) => {
-      const timestamp = typeof message.timestamp === 'number' ? message.timestamp : Date.now()
-      const previous = cleaned[index - 1]
-      const previousTimestamp = typeof previous?.timestamp === 'number' ? previous.timestamp : NaN
-      const replyElapsedSeconds = message.variant === 'ai'
-        && previous?.variant === 'user'
-        && Number.isFinite(previousTimestamp)
-        && timestamp > previousTimestamp
-        ? Math.max(1, Math.ceil((timestamp - previousTimestamp) / 1000))
-        : undefined
-      const html = message.variant === 'ai' ? await marked.parse(message.text) : undefined
-      return {
-        id: `backend-${timestamp}-${index}`,
-        variant: message.variant,
-        text: message.text,
-        html,
-        timestamp,
-        replyElapsedSeconds,
-        modelLabel: message.modelLabel,
-      }
-    }))
-
-    setMessages((prev) => {
-      const merged: ChatMessage[] = [...prev]
-      hydrated.forEach((incoming) => {
-        const isDuplicate = merged.some((existing) => (
-          existing.variant === incoming.variant
-          && existing.text === incoming.text
-          && Math.abs((existing.timestamp ?? 0) - (incoming.timestamp ?? 0)) < 2 * 60 * 1000
-        ))
-        if (!isDuplicate) {
-          merged.push(incoming)
-        }
-      })
-      return merged
-        .filter((message) => !message.thinking && message.text)
-        .sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0))
-        .slice(-MAIN_CHAT_HISTORY_LIMIT)
-    })
+    void linkId
+    void permissions
+    setCoachActionMessage('Coach collaboration is not available in the public release.')
   }, [])
-
-  const applySessionPayload = useCallback(async (payload: PersistedSessionPayload) => {
-    if (!payload || typeof payload !== 'object') return
-
-    const previousHydrationState = sessionHydrationInProgressRef.current
-    sessionHydrationInProgressRef.current = true
-    try {
-    const hasProfile = Boolean(payload.profile)
-    const hasWeekPlan = Boolean((payload as { week_plan?: unknown }).week_plan)
-    const hasWorkout = Boolean((payload as { workout?: unknown }).workout)
-    if (hasProfile || hasWeekPlan || hasWorkout) {
-      sessionHydratedRef.current = true
-    }
-
-    if (payload.profile) {
-      const profileData = (payload.profile && typeof payload.profile === 'object' && !Array.isArray(payload.profile))
-        ? (payload.profile as { language?: unknown, fontScale?: unknown, font_scale?: unknown })
-        : ({} as { language?: unknown, fontScale?: unknown, font_scale?: unknown })
-      const incomingLanguage = normalizeLanguage(profileData.language) ?? initialLanguage
-      const rawFontScale = profileData.fontScale ?? profileData.font_scale
-      const hasFontScale = rawFontScale !== undefined && rawFontScale !== null
-      const incomingText = normalizeProfileText(payload.profile)
-      const incomingWeeklyPlan = extractWeeklyPlanText(payload as Record<string, unknown>)
-      const incomingActiveNotes = extractActiveNotesFromPayload(payload as Record<string, unknown>)
-      const incomingDailyTasks = extractDailyTasksFromPayload(payload as Record<string, unknown>)
-      setProfile({
-        text: incomingText,
-        weeklyPlan: incomingWeeklyPlan,
-        language: incomingLanguage,
-        fontScale: hasFontScale ? normalizeFontScale(rawFontScale) : getInitialFontScale(),
-        activeNotes: incomingActiveNotes,
-        dailyTasks: incomingDailyTasks,
-      })
-    }
-
-    if (payload.workout_revisions && typeof payload.workout_revisions === 'object') {
-      const revisionOwnerId = coachActAsOwnerId ?? currentUserId
-      if (revisionOwnerId) {
-        Object.entries(payload.workout_revisions).forEach(([dateId, revision]) => {
-          if (typeof revision === 'string' && revision) {
-            workoutRevisionByOwnerDateRef.current[`${revisionOwnerId}:${dateId}`] = revision
-          }
-        })
-      }
-    }
-    const weekPayload = payload.week_plan
-    if (weekPayload && Array.isArray(weekPayload.days)) {
-      const rawWeekStart = normalizeDateId((weekPayload as any).weekStart ?? (weekPayload as any).week_start)
-      const fallbackWeekStart = rawWeekStart
-        ?? normalizeDateId(weekPayload.days[0]?.date)
-        ?? getWorkoutSessionId()
-      const currentWeekStart = getWeekStartDate(new Date(), weekStartDayIndex)
-      const currentWeekDates = buildWeekDates(currentWeekStart)
-      const resolveDateFromLabel = (label: string | null | undefined) => {
-        const dayOfWeek = getDayOfWeekFromLabel(label)
-        if (dayOfWeek === null) return null
-        const index = (dayOfWeek - weekStartDayIndex + 7) % 7
-        return getDateId(currentWeekDates[index])
-      }
-
-      const normalizedDays: WeekPlanDay[] = weekPayload.days.map((day: any, index: number) => {
-        const labelDate = resolveDateFromLabel(day.label ?? day.day)
-        const dateId = normalizeDateId(day.date) ?? labelDate ?? shiftDateId(fallbackWeekStart, index)
-        const parsedDate = parseDateId(dateId)
-        const label = parsedDate ? getWeekdayLabel(parsedDate, profile.language) : (day.label || t('workout.dayFallback'))
-        let exercises: WorkoutExercise[] = []
-        let extras: WorkoutExtra[] = []
-
-        if (Array.isArray(day.exercises)) {
-          exercises = normalizeWorkoutExercises(day.exercises)
-          extras = normalizeWorkoutExtras(day.extras)
-        } else if (Array.isArray(day.sections) || Array.isArray(day.workout)) {
-          const parsedDay = parseWorkout(Array.isArray(day.sections)
-            ? { sections: day.sections, extras: Array.isArray(day.extras) ? day.extras : [] } as WorkoutInput
-            : { workout: day.workout, extras: Array.isArray(day.extras) ? day.extras : [] })
-          exercises = parsedDay.exercises
-          extras = parsedDay.extras
-        }
-
-        exercises.forEach((exercise) => {
-          if (!exercise.summary) updateExerciseSummary(exercise)
-        })
-
-        return {
-          date: dateId,
-          label,
-          exercises,
-          extras,
-          isRest: Boolean(day.isRest ?? day.is_rest) || exercises.length === 0,
-          autoFillSuppressedAt: typeof day.autoFillSuppressedAt === 'string'
-            ? day.autoFillSuppressedAt
-            : (typeof day.auto_fill_suppressed_at === 'string' ? day.auto_fill_suppressed_at : undefined),
-          planNotes: normalizeDayNotesPayload(day.planNotes ?? day.plan_notes),
-          notes: typeof day.notes === 'string' ? day.notes : '',
-        }
-      })
-
-      const nextWeekStart = rawWeekStart
-        ? rawWeekStart
-        : (normalizedDays[0]?.date ?? getWorkoutSessionId())
-      const nextPlan: WeekPlan = {
-        weekStart: nextWeekStart,
-        days: normalizedDays,
-      }
-
-      const rawWeekLogs = payload.week_set_logs ?? {}
-      const normalizedWeekLogs: WeekSetLogs = {}
-      const normalizedBaseCounts: WeekBaseCounts = {}
-
-      normalizedDays.forEach((day) => {
-        const existingLogs = rawWeekLogs[day.date]
-        const { logs, baseCounts } = buildSetLogsForExercises(day.exercises, existingLogs)
-        normalizedWeekLogs[day.date] = logs
-        normalizedBaseCounts[day.date] = baseCounts
-      })
-
-      applyWeekPlan(nextPlan, {
-        selectedIndex: typeof payload.selected_day_index === 'number' ? payload.selected_day_index : undefined,
-        logsByDay: normalizedWeekLogs,
-        baseCountsByDay: normalizedBaseCounts,
-        preferToday: true,
-      })
-      return
-    }
-
-    const workoutPayload = payload.workout
-    if (workoutPayload && Array.isArray(workoutPayload.exercises)) {
-      const normalizedExercises = normalizeWorkoutExercises(workoutPayload.exercises)
-      workoutExercisesRef.current = normalizedExercises
-      workoutExtrasRef.current = normalizeWorkoutExtras(workoutPayload.extras)
-
-      const storedLogs = workoutPayload.set_logs ?? {}
-      const normalizedLogs: Record<string, SetState[]> = {}
-      const baseCounts: Record<string, number> = {}
-
-      normalizedExercises.forEach((exercise) => {
-        const existingLogs = Array.isArray(storedLogs[exercise.id]) ? storedLogs[exercise.id] : []
-        normalizedLogs[exercise.id] = exercise.sets.map((_, index) => {
-          const stateItem = existingLogs[index]
-          return {
-            weight: typeof stateItem?.weight === 'string' ? stateItem.weight : '',
-            metric: typeof stateItem?.metric === 'string' ? stateItem.metric : '',
-            done: Boolean(stateItem?.done),
-            value_source: stateItem?.value_source === 'user_entered'
-              || stateItem?.value_source === 'accepted_target'
-              || stateItem?.value_source === 'legacy_unknown'
-              ? stateItem.value_source
-              : undefined,
-          }
-        })
-        baseCounts[exercise.id] = exercise.sets.length
-        if (!exercise.summary) updateExerciseSummary(exercise)
-      })
-
-      setLogsRef.current = normalizedLogs
-      baseSetCountsRef.current = baseCounts
-
-      const sessionId = typeof workoutPayload.session_id === 'string' && workoutPayload.session_id.trim()
-        ? workoutPayload.session_id
-        : getWorkoutSessionId()
-      const effectiveDate = sessionId === todayId ? sessionId : todayId
-      currentWorkoutSessionIdRef.current = effectiveDate
-
-      const fallbackPlan = buildWeekPlanFromSingleDay(
-        effectiveDate,
-        normalizedExercises,
-        workoutExtrasRef.current,
-        profile.language,
-        weekStartDayIndex,
-        normalizeDayNotesPayload((workoutPayload as Record<string, unknown>).planNotes ?? (workoutPayload as Record<string, unknown>).plan_notes)
-      )
-      if (typeof workoutPayload.notes === 'string') {
-        const dayIndex = findDayIndexByDate(fallbackPlan.days, effectiveDate)
-        if (dayIndex >= 0) {
-          fallbackPlan.days[dayIndex].notes = workoutPayload.notes
-        }
-      }
-      const logsForDay = sessionId === todayId ? normalizedLogs : undefined
-      const rebuiltLogs = buildSetLogsForExercises(normalizedExercises, logsForDay)
-      const nextLogs: WeekSetLogs = { ...weekSetLogsRef.current, [effectiveDate]: rebuiltLogs.logs }
-      const nextBaseCounts: WeekBaseCounts = { ...weekBaseCountsRef.current, [effectiveDate]: rebuiltLogs.baseCounts }
-
-      applyWeekPlan(fallbackPlan, {
-        selectedDate: effectiveDate,
-        preferToday: true,
-        logsByDay: nextLogs,
-        baseCountsByDay: nextBaseCounts,
-      })
-    }
-    } finally {
-      sessionHydrationInProgressRef.current = previousHydrationState
-    }
-  }, [
-    applyWeekPlan,
-    coachActAsOwnerId,
-    currentUserId,
-    initialLanguage,
-    profile.language,
-    setProfile,
-    t,
-    weekStartDayIndex,
-  ])
-
-  const fetchSessionLatest = useCallback(async (
-    userId: string,
-    includeAuth: boolean,
-    actAsOwnerId?: string | null,
-  ) => {
-    const headers: Record<string, string> = includeAuth ? await getPrivyAuthHeaders() : {}
-    const params = new URLSearchParams({ user_id: userId })
-    if (actAsOwnerId) {
-      params.set('act_as_owner_id', actAsOwnerId)
-    }
-    const url = `${API_BASE_URL}/sessions/latest?${params.toString()}`
-    let response: Response
-    const controller = new AbortController()
-    const timeoutId = window.setTimeout(() => {
-      controller.abort()
-    }, 12000)
-    try {
-      response = await apiFetch(url, { headers, signal: controller.signal })
-    } catch (error) {
-      throw error
-    } finally {
-      window.clearTimeout(timeoutId)
-    }
-
-    if (response.status === 404) return null
-    if (!response.ok) {
-      throw new Error(`Failed to load session (${response.status})`)
-    }
-
-    const payload = (await response.json()) as SessionResponse
-    profileRevisionRef.current = payload.profile_revision ?? null
-    trainingPlanRevisionRef.current = payload.training_plan_revision ?? null
-    return payload
-  }, [getPrivyAuthHeaders])
-
-  const fetchBackendChatHistory = useCallback(async (
-    userId: string,
-    includeAuth: boolean,
-    actAsOwnerId?: string | null,
-  ) => {
-    if (!isBackendHealthy || !userId) return
-    const accessKey = `${userId}:${actAsOwnerId ?? 'self'}`
-    chatHistoryAccessKeyRef.current = accessKey
-    const headers: Record<string, string> = includeAuth ? await getPrivyAuthHeaders() : {}
-    const params = new URLSearchParams({
-      user_id: userId,
-      limit: String(MAIN_CHAT_HISTORY_LIMIT),
-    })
-    if (actAsOwnerId) {
-      params.set('act_as_owner_id', actAsOwnerId)
-    }
-    const response = await apiFetch(`${API_BASE_URL}/chat/history?${params.toString()}`, { headers })
-    if (response.status === 404 || response.status === 405) return
-    if (!response.ok) {
-      throw new Error(`Failed to load chat history (${response.status})`)
-    }
-    const history = (await response.json()) as ChatHistoryPayloadItem[]
-    if (chatHistoryAccessKeyRef.current !== accessKey) return
-    await mergeBackendChatHistory(history)
-  }, [getPrivyAuthHeaders, isBackendHealthy, mergeBackendChatHistory])
-
-  const refreshAccessRef = useRef('')
-  refreshAccessRef.current = `${currentUserId}:${coachActAsOwnerId ?? 'self'}:${privyAuthenticated}`
-  const handleRefreshSession = useCallback(async () => {
-    const access = refreshAccessRef.current
-    const revision = localEditRevisionRef.current
-    if (!isBackendHealthy) return false
-    if (privyEnabled && !privyReady) return false
-    if (privyEnabled && !privyAuthenticated) return false
-    if (hasUnsyncedLocalSessionEdits()) {
-      return false
-    }
-    try {
-      const actAsOwnerId = coachActAsOwnerId
-      let session: SessionResponse | null = null
-      if (actAsOwnerId && privyAuthenticated) {
-        session = await fetchSessionLatest(currentUserId, true, actAsOwnerId)
-      } else if (privyAuthenticated && currentUserEmail) {
-        session = await fetchSessionLatest(currentUserId, true)
-      } else {
-        session = await fetchSessionLatest(currentUserId, false)
-      }
-      if (!session || access !== refreshAccessRef.current || revision !== localEditRevisionRef.current || pendingWorkoutDatesRef.current.size) return false
-      await applySessionPayload(session.payload)
-      await fetchBackendChatHistory(
-        currentUserId,
-        Boolean(privyAuthenticated),
-        coachActAsOwnerId
-      )
-      sessionHydratedRef.current = true
-      sessionReadyRef.current = true
-      lastAppliedSessionRef.current = {
-        userId: session.user_id,
-        updatedAt: session.updated_at ?? null,
-      }
-      if (access !== refreshAccessRef.current) return false
-      syncedLocalEditRevisionRef.current = revision
-      hasLocalEditsRef.current = localEditRevisionRef.current !== revision
-      return localEditRevisionRef.current === revision
-    } catch (error) {
-      console.warn('Manual refresh failed:', error)
-      return false
-    }
-  }, [
-    applySessionPayload,
-    coachActAsOwnerId,
-    currentUserEmail,
-    currentUserId,
-    fetchBackendChatHistory,
-    fetchSessionLatest,
-    hasUnsyncedLocalSessionEdits,
-    isBackendHealthy,
-    privyAuthenticated,
-    privyEnabled,
-    privyReady,
-  ])
-
-  const applyEmptyTraineeView = useCallback((targetOwnerId: string) => {
-    setMessages([])
-    const emptyPlan = buildWeekPlanFromSingleDay(todayId, [], [])
-    applyWeekPlan(emptyPlan, {
-      selectedDate: todayId,
-      logsByDay: {},
-      baseCountsByDay: {},
-    })
-    setCoachActionMessage(t('coach.noTraineeSession'))
-    console.warn('No saved trainee session found for:', targetOwnerId)
-  }, [applyWeekPlan, t, todayId])
-
-  const loadTraineeSessionNow = useCallback(async (targetOwnerId: string | null) => {
-    if (!targetOwnerId) return
-    if (!isBackendHealthy) return
-    if (!privyReady || !privyAuthenticated) return
-    try {
-      const session = await fetchSessionLatest(currentUserId, true, targetOwnerId)
-      if (!session) {
-        applyEmptyTraineeView(targetOwnerId)
-        return
-      }
-      if (session.user_id === currentUserId) {
-        console.warn('Coach view did not switch owners; backend returned current owner session.', {
-          currentUserId,
-          actAsOwnerId: targetOwnerId,
-        })
-      }
-      await applySessionPayload(session.payload)
-      syncedLocalEditRevisionRef.current = localEditRevisionRef.current
-      hasLocalEditsRef.current = false
-      setCoachActionMessage(t('coach.viewLoaded'))
-    } catch (error) {
-      console.warn('Coach view load failed:', error)
-      applyEmptyTraineeView(targetOwnerId)
-    }
-  }, [
-    applyEmptyTraineeView,
-    applySessionPayload,
-    currentUserId,
-    fetchSessionLatest,
-    isBackendHealthy,
-    privyAuthenticated,
-    privyReady,
-    t,
-  ])
-
-  useEffect(() => {
-    if (!coachActAsOwnerId) return
-    loadTraineeSessionNow(coachActAsOwnerId).catch(() => undefined)
-  }, [coachActAsOwnerId, loadTraineeSessionNow])
-
-  const saveSessionNow = useCallback(async (options: {
-    overrideUserId?: string
-    payloadOverride?: PersistedSessionPayload
-    includeAuth?: boolean
-    actAsOwnerId?: string | null
-  } = {}) => {
-    if (!isBackendHealthy) return
-    if (sessionSaveTimeoutRef.current) {
-      window.clearTimeout(sessionSaveTimeoutRef.current)
-      sessionSaveTimeoutRef.current = null
-    }
-    while (sessionSavePromiseRef.current) {
-      await sessionSavePromiseRef.current
-      if (!options.payloadOverride && !hasUnsyncedLocalSessionEdits()) return
-    }
-    const userId = options.overrideUserId ?? currentUserId
-    if (!userId) return
-    const actAsOwnerId = options.actAsOwnerId ?? coachActAsOwnerId
-
-    const payload = options.payloadOverride ?? buildSessionPayload()
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-    const shouldAuth = typeof options.includeAuth === 'boolean'
-      ? options.includeAuth
-      : (privyReady && privyAuthenticated) || Boolean(actAsOwnerId)
-
-    if (shouldAuth) {
-      Object.assign(headers, await getPrivyAuthHeaders())
-    }
-
-    const saveRevision = localEditRevisionRef.current
-    const savePromise = (async () => {
-      try {
-        const response = await apiFetch(`${API_BASE_URL}/sessions`, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({
-            user_id: userId,
-            payload,
-            act_as_owner_id: actAsOwnerId,
-            profile_revision: profileRevisionRef.current,
-            training_plan_revision: trainingPlanRevisionRef.current,
-          }),
-        })
-        if (!response.ok) {
-          throw new Error(`Failed to save session (${response.status})`)
-        }
-        const savedSession = (await response.json()) as SessionResponse
-        profileRevisionRef.current = savedSession.profile_revision ?? profileRevisionRef.current
-        trainingPlanRevisionRef.current = savedSession.training_plan_revision ?? trainingPlanRevisionRef.current
-        const savedCurrentRevision = localEditRevisionRef.current === saveRevision
-        if (savedCurrentRevision) {
-          syncedLocalEditRevisionRef.current = saveRevision
-          hasLocalEditsRef.current = false
-        }
-        lastAppliedSessionRef.current = {
-          userId: savedSession.user_id,
-          updatedAt: savedSession.updated_at ?? null,
-        }
-      } catch (error) {
-        console.warn('Session save failed:', error)
-      }
-    })()
-    sessionSavePromiseRef.current = savePromise
-    try {
-      await savePromise
-    } finally {
-      if (sessionSavePromiseRef.current === savePromise) {
-        sessionSavePromiseRef.current = null
-      }
-    }
-  }, [
-    buildSessionPayload,
-    coachActAsOwnerId,
-    currentUserId,
-    getPrivyAuthHeaders,
-    hasUnsyncedLocalSessionEdits,
-    isBackendHealthy,
-    privyAuthenticated,
-    privyReady,
-  ])
-
-  const scheduleSessionSave = useCallback(() => {
-    if (!sessionReadyRef.current || !isBackendHealthy) return
-    if (sessionSavePausedUntilEditRef.current && !hasLocalEditsRef.current) return
-    if (!sessionHydratedRef.current && !hasLocalEditsRef.current) return
-    if (!hasUnsyncedLocalSessionEdits()) return
-    if (sessionSaveTimeoutRef.current) {
-      window.clearTimeout(sessionSaveTimeoutRef.current)
-    }
-    sessionSaveTimeoutRef.current = window.setTimeout(() => {
-      saveSessionNow()
-      sessionSaveTimeoutRef.current = null
-    }, SESSION_SAVE_DEBOUNCE_MS)
-  }, [hasUnsyncedLocalSessionEdits, isBackendHealthy, saveSessionNow])
 
   const updateExerciseNotes = useCallback((exerciseId: string, value: string) => {
     if (!canEditPlanSelectedDay) return
@@ -3821,9 +2796,8 @@ const App = ({ auth }: AppProps = {}) => {
     if (!exercise) return
     exercise.notes = value
     bumpData()
-    scheduleSessionSave()
     scheduleWorkoutSave(true)
-  }, [bumpData, canEditPlanSelectedDay, getExercise, scheduleSessionSave, scheduleWorkoutSave])
+  }, [bumpData, canEditPlanSelectedDay, getExercise, scheduleWorkoutSave])
 
   const updateDayNotes = useCallback((value: string) => {
     if (!canEditPlanSelectedDay) return
@@ -3840,9 +2814,8 @@ const App = ({ auth }: AppProps = {}) => {
       )),
     }))
     bumpData()
-    scheduleSessionSave()
     scheduleWorkoutSave()
-  }, [bumpData, canEditPlanSelectedDay, scheduleSessionSave, scheduleWorkoutSave, selectedDay, selectedDay?.date, todayId])
+  }, [bumpData, canEditPlanSelectedDay, scheduleWorkoutSave, selectedDay, selectedDay?.date, todayId])
 
   const handleClearWorkoutDay = useCallback(() => {
     if (!canEditPlanSelectedDay) return
@@ -3927,7 +2900,6 @@ const App = ({ auth }: AppProps = {}) => {
     }
     setWeekPlan(nextPlan)
     bumpData()
-    scheduleSessionSave()
     void persistWorkoutSessionForDay({
       dateId: targetDate,
       sessionId: targetDate,
@@ -3945,7 +2917,6 @@ const App = ({ auth }: AppProps = {}) => {
     canEditPlanSelectedDay,
     hideWorkoutDetail,
     persistWorkoutSessionForDay,
-    scheduleSessionSave,
     selectedDay?.date,
     selectedDay,
     selectedDayLabel,
@@ -4009,9 +2980,6 @@ const App = ({ auth }: AppProps = {}) => {
     }
 
     const params = new URLSearchParams({ user_id: payload.user_id })
-    if (payload.act_as_owner_id) {
-      params.set('act_as_owner_id', payload.act_as_owner_id)
-    }
 
     const startedAt = Date.now()
     let delayMs = CHAT_JOB_INITIAL_POLL_MS
@@ -4054,86 +3022,10 @@ const App = ({ auth }: AppProps = {}) => {
     throw new Error('Chat job timed out')
   }, [getPrivyAuthHeaders])
 
-  const fetchWorkoutSessionByDate = useCallback(async (dateId: string): Promise<WorkoutSession | null> => {
-    if (!currentUserId) return null
-    if (!canQuerySavedWorkoutSessions) return null
-    const headers: Record<string, string> = {}
-    if (privyReady && privyAuthenticated) {
-      Object.assign(headers, await getPrivyAuthHeaders())
-    }
-
-    // The new contract is account-scoped by the authenticated browser identity.
-    // Keep the legacy path only for coach impersonation until that surface is
-    // migrated to an explicit scoped identity contract as well.
-    if (coachActAsOwnerId) {
-      const params = new URLSearchParams({
-        user_id: currentUserId,
-        date: dateId,
-        act_as_owner_id: coachActAsOwnerId,
-      })
-      const response = await apiFetch(`${API_BASE_URL}/workout-sessions/by-date?${params.toString()}`, { headers })
-      if (response.status === 404) return null
-      if (!response.ok) {
-        throw new Error(`Failed to load workout session (${response.status})`)
-      }
-      const session = (await response.json()) as WorkoutSession
-      if (session.revision) {
-        const revisionKey = `${coachActAsOwnerId}:${dateId}`
-        workoutRevisionByOwnerDateRef.current[revisionKey] = session.revision
-      }
-      return session
-    }
-
-    const params = new URLSearchParams({ start: dateId, end: dateId })
-    const response = await apiFetch(`${API_BASE_URL}/v1/workouts?${params.toString()}`, { headers })
-    if (!response.ok) {
-      throw new Error(`Failed to load workout session (${response.status})`)
-    }
-    const workouts = await response.json() as Array<NonNullable<BackendWorkoutReceipt['workout']>>
-    const workout = workouts.find((candidate) => candidate.date === dateId)
-    if (!workout) return null
-    const session = backendWorkoutToSession(workout, currentUserId)
-    if (session.revision) {
-      const revisionKey = `${coachActAsOwnerId ?? currentUserId}:${dateId}`
-      workoutRevisionByOwnerDateRef.current[revisionKey] = session.revision
-    }
-    return session
-  }, [
-    canQuerySavedWorkoutSessions,
-    coachActAsOwnerId,
-    currentUserId,
-    getPrivyAuthHeaders,
-    privyAuthenticated,
-    privyReady,
-  ])
-
   const fetchWorkoutSessionsByDates = useCallback(async (dateIds: string[]): Promise<WorkoutSession[]> => {
     if (!currentUserId || !canQuerySavedWorkoutSessions || dateIds.length === 0) return []
     const sortedDates = [...dateIds].sort()
-    const headers: Record<string, string> = {}
-    if (privyReady && privyAuthenticated) {
-      Object.assign(headers, await getPrivyAuthHeaders())
-    }
-
-    if (coachActAsOwnerId) {
-      const params = new URLSearchParams({
-        user_id: currentUserId,
-        start_date: sortedDates[0],
-        end_date: sortedDates[sortedDates.length - 1],
-        act_as_owner_id: coachActAsOwnerId,
-      })
-      const response = await apiFetch(`${API_BASE_URL}/workout-sessions/by-dates?${params.toString()}`, { headers })
-      if (!response.ok) {
-        throw new Error(`Failed to load workout sessions (${response.status})`)
-      }
-      const sessions = (await response.json()) as WorkoutSession[]
-      sessions.forEach((session) => {
-        if (!session.revision) return
-        const revisionKey = `${coachActAsOwnerId}:${session.date}`
-        workoutRevisionByOwnerDateRef.current[revisionKey] = session.revision
-      })
-      return sessions
-    }
+    const headers = await getPrivyAuthHeaders()
 
     const params = new URLSearchParams({
       start: sortedDates[0],
@@ -4150,13 +3042,12 @@ const App = ({ auth }: AppProps = {}) => {
       .map((workout) => backendWorkoutToSession(workout, currentUserId))
     sessions.forEach((session) => {
       if (!session.revision) return
-      const revisionKey = `${coachActAsOwnerId ?? currentUserId}:${session.date}`
+      const revisionKey = `${currentUserId}:${session.date}`
       workoutRevisionByOwnerDateRef.current[revisionKey] = session.revision
     })
     return sessions
   }, [
     canQuerySavedWorkoutSessions,
-    coachActAsOwnerId,
     currentUserId,
     getPrivyAuthHeaders,
     privyAuthenticated,
@@ -4164,73 +3055,11 @@ const App = ({ auth }: AppProps = {}) => {
   ])
 
   const handleRequestExerciseHistory = useCallback(async (exercise: WorkoutExercise) => {
-    // The history sheet is retrospective, so include completed work from the
-    // selected day. Coach/generation contexts keep their stricter pre-workout cutoff.
-    const beforeDate = shiftDateId(selectedDay?.date ?? todayId, 1)
-    const loadBasis = resolveWeightMode(exercise) ?? 'total'
-    const cacheKey = [
-      coachActAsOwnerId ?? currentUserId,
-      beforeDate,
-      exercise.exerciseKey ?? exercise.standardName ?? exercise.name,
-      exercise.equipment ?? 'other',
-      loadBasis,
-    ].join('|')
-    exerciseHistoryRequestKeyRef.current = cacheKey
-    const cached = exerciseHistoryCacheRef.current.get(cacheKey)
-    if (cached) {
-      setExerciseHistory(cached)
-      setExerciseHistoryError(null)
-      setExerciseHistoryLoading(false)
-      return
-    }
-
+    void exercise
     setExerciseHistory(null)
-    setExerciseHistoryError(null)
-    setExerciseHistoryLoading(true)
-    try {
-      const params = new URLSearchParams({
-        user_id: currentUserId,
-        before_date: beforeDate,
-        limit: '10',
-        name: exercise.name,
-        equipment: exercise.equipment ?? 'other',
-        load_basis: loadBasis,
-      })
-      if (exercise.exerciseKey) params.set('exercise_key', exercise.exerciseKey)
-      if (exercise.movementFamilyKey) params.set('movement_family_key', exercise.movementFamilyKey)
-      if (exercise.standardName) params.set('standard_name', exercise.standardName)
-      if (exercise.primaryMuscle) params.set('primary_muscle', exercise.primaryMuscle)
-      if (coachActAsOwnerId) params.set('act_as_owner_id', coachActAsOwnerId)
-      const headers: Record<string, string> = {}
-      if ((privyReady && privyAuthenticated) || coachActAsOwnerId) {
-        Object.assign(headers, await getPrivyAuthHeaders())
-      }
-      const response = await apiFetch(`${API_BASE_URL}/exercise-history?${params.toString()}`, { headers })
-      if (!response.ok) throw new Error(`History request failed (${response.status})`)
-      const payload = (await response.json()) as ExerciseHistoryResponse
-      exerciseHistoryCacheRef.current.set(cacheKey, payload)
-      if (exerciseHistoryRequestKeyRef.current === cacheKey) {
-        setExerciseHistory(payload)
-      }
-    } catch (error) {
-      console.error('Exercise history error:', error)
-      if (exerciseHistoryRequestKeyRef.current === cacheKey) {
-        setExerciseHistoryError(t('workout.historyError'))
-      }
-    } finally {
-      if (exerciseHistoryRequestKeyRef.current === cacheKey) {
-        setExerciseHistoryLoading(false)
-      }
-    }
+    setExerciseHistoryLoading(false)
+    setExerciseHistoryError('Exercise history is not available until the canonical exercise projection is connected.')
   }, [
-    coachActAsOwnerId,
-    currentUserId,
-    getPrivyAuthHeaders,
-    privyAuthenticated,
-    privyReady,
-    selectedDay?.date,
-    t,
-    todayId,
   ])
 
   const applySavedWorkoutSessionsToWeek = useCallback((
@@ -4338,59 +3167,8 @@ const App = ({ auth }: AppProps = {}) => {
   ), [applySavedWorkoutSessionsToWeek])
 
   const handleCopyLastWeek = async () => {
-    if (!canEditPlanSelectedDay || !canQuerySavedWorkoutSessions || !isBackendHealthy || copyingLastWeekRef.current) return
-    const targetDate = selectedDay?.date ?? todayId
-    if (pendingWorkoutDatesRef.current.has(targetDate)) return
-    const sourceDate = shiftDateId(targetDate, -7)
-    copyingLastWeekRef.current = true
-    setCopyingLastWeek(true)
-    try {
-      const [source, target] = await Promise.all([
-        fetchWorkoutSessionByDate(sourceDate),
-        fetchWorkoutSessionByDate(targetDate),
-      ])
-      if (!source || !hasWorkoutContent(source.workout?.exercises ?? [], source.workout?.extras ?? [])) {
-        window.alert(t('workout.copyLastWeekMissing', { date: sourceDate }))
-        return
-      }
-      if (Object.values(target?.workout?.set_logs ?? {}).some((sets) => sets.some((set) => set.done))) {
-        window.alert(t('workout.copyLastWeekLogged'))
-        return
-      }
-      if (hasWorkoutContent(target?.workout?.exercises ?? [], target?.workout?.extras ?? [])
-        && !window.confirm(t('workout.copyLastWeekConfirm', { date: sourceDate }))) return
-      if (pendingWorkoutDatesRef.current.has(targetDate)) return
-      const headers = { 'Content-Type': 'application/json', ...await getPrivyAuthHeaders() }
-      const response = await apiFetch(`${API_BASE_URL}/workout-sessions`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          user_id: currentUserId,
-          act_as_owner_id: coachActAsOwnerId ?? undefined,
-          session_id: targetDate,
-          date: targetDate,
-          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-          base_revision: target?.revision ?? undefined,
-          label: selectedDayLabel,
-          notes: source.notes ?? '',
-          auto_fill_suppressed_at: null,
-          generation_context: { source: 'copy_last_week' },
-          workout: { exercises: source.workout?.exercises ?? [], extras: source.workout?.extras ?? [], set_logs: {} },
-        }),
-      })
-      if (!response.ok) throw new Error(`Copy workout failed (${response.status})`)
-      const saved = await response.json() as WorkoutSession
-      if ((weekPlan.days[selectedDayIndexRef.current]?.date ?? todayId) === targetDate) {
-        applySavedWorkoutSessionToWeek(saved)
-      }
-      exerciseHistoryCacheRef.current.clear()
-    } catch (error) {
-      console.warn('Copy last week failed:', error)
-      window.alert(t('workout.copyLastWeekFailed'))
-    } finally {
-      copyingLastWeekRef.current = false
-      setCopyingLastWeek(false)
-    }
+    if (!canEditPlanSelectedDay || copyingLastWeekRef.current) return
+    window.alert('Copying a workout is not available in the public canonical API yet.')
   }
 
   useEffect(() => {
@@ -4400,7 +3178,7 @@ const App = ({ auth }: AppProps = {}) => {
     if (sessionLoading || !sessionReadyRef.current) return
 
     const actAsKey = coachActAsOwnerId ? `:act-as:${coachActAsOwnerId}` : ''
-    const sessionKey = `${privyAuthenticated ? 'auth' : 'anon'}:${currentUserId}${actAsKey}:sub=${privySubjectId ?? ''}:uid=${pendingPrivyUserId ?? ''}:online=${isBackendHealthy ? '1' : '0'}`
+    const sessionKey = `auth:${currentUserId}${actAsKey}:sub=${privySubjectId ?? ''}:uid=${pendingPrivyUserId ?? ''}:online=${isBackendHealthy ? '1' : '0'}`
     if (serverSessionLoadSettledKey !== sessionKey) return
 
     const visibleDates = buildWorkoutStripDates(todayId, weekStartDayIndex)
@@ -4595,6 +3373,20 @@ const App = ({ auth }: AppProps = {}) => {
     weekStartDayIndex,
   ])
 
+  const handleRefreshSession = useCallback(async () => {
+    if (!currentUserId || !canQuerySavedWorkoutSessions) return false
+    try {
+      await Promise.all([
+        fetchBackendChatHistory(currentUserId),
+        refreshVisibleWorkoutSessions(),
+      ])
+      return true
+    } catch (error) {
+      console.warn('Canonical refresh failed:', error)
+      return false
+    }
+  }, [canQuerySavedWorkoutSessions, currentUserId, fetchBackendChatHistory, refreshVisibleWorkoutSessions])
+
   const fetchChatReply = useCallback(async (
     payload: ChatRequestPayload,
     messageId?: string | null,
@@ -4703,7 +3495,6 @@ const App = ({ auth }: AppProps = {}) => {
         request_id: crypto.randomUUID(),
         message: value,
         reference_date: selectedDay?.date ?? todayId,
-        act_as_owner_id: coachActAsOwnerId ?? undefined,
       }
 
       await fetchChatReply(payload, statusId)
@@ -4720,7 +3511,6 @@ const App = ({ auth }: AppProps = {}) => {
     addThinkingMessage,
     chatInput,
     coachChatEnabled,
-    coachActAsOwnerId,
     currentUserId,
     fetchChatReply,
     removeMessage,
@@ -4731,33 +3521,21 @@ const App = ({ auth }: AppProps = {}) => {
   ])
 
   const handleFastGenerateDayWorkout = useCallback(async (mode: 'recommended' | 'jev') => {
-    if (!canEditPlanSelectedDay || !canQuerySavedWorkoutSessions || !isBackendHealthy) return
+    if (!canGenerateWorkoutSelectedDay || !canQuerySavedWorkoutSessions || !isBackendHealthy) return
     const targetDate = selectedDay?.date ?? todayId
     if (pendingWorkoutDatesRef.current.has(targetDate)) return
     pendingWorkoutDatesRef.current.add(targetDate)
     try {
       const headers = { 'Content-Type': 'application/json', ...await getPrivyAuthHeaders() }
-      const response = coachActAsOwnerId
-        ? await apiFetch(`${API_BASE_URL}/workout-sessions/generate/fast`, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({
-            user_id: currentUserId,
-            act_as_owner_id: coachActAsOwnerId,
-            target_date: targetDate,
-            timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-            mode,
-          }),
-        })
-        : await apiFetch(`${API_BASE_URL}/v1/workouts/generate`, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({
-            date: targetDate,
-            source: mode === 'jev' ? 'jev' : 'default',
-            request_id: crypto.randomUUID(),
-          }),
-        })
+      const response = await apiFetch(`${API_BASE_URL}/v1/workouts/generate`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          date: targetDate,
+          source: mode === 'jev' ? 'jev' : 'default',
+          request_id: crypto.randomUUID(),
+        }),
+      })
       if (!response.ok) {
         const body = await response.json().catch(() => null) as { detail?: string | { message?: string } } | null
         const detail = typeof body?.detail === 'string' ? body.detail : body?.detail?.message
@@ -4765,12 +3543,8 @@ const App = ({ auth }: AppProps = {}) => {
       }
       const responseBody = await response.json() as unknown
       let saved: WorkoutSession | null = null
-      if (coachActAsOwnerId) {
-        saved = responseBody as WorkoutSession
-      } else {
-        const receipt = responseBody as BackendWorkoutReceipt
-        if (receipt.workout) saved = backendWorkoutToSession(receipt.workout, currentUserId)
-      }
+      const receipt = responseBody as BackendWorkoutReceipt
+      if (receipt.workout) saved = backendWorkoutToSession(receipt.workout, currentUserId)
       if (!saved) throw new Error('Workout generation returned no workout record')
       // The response is authoritative for this request. Clear the in-flight
       // guard before hydration, otherwise applySavedWorkoutSessionsToWeek
@@ -4786,7 +3560,7 @@ const App = ({ auth }: AppProps = {}) => {
     }
   }, [
     applySavedWorkoutSessionToWeek,
-    canEditPlanSelectedDay,
+    canGenerateWorkoutSelectedDay,
     canQuerySavedWorkoutSessions,
     coachActAsOwnerId,
     currentUserId,
@@ -4849,7 +3623,6 @@ const App = ({ auth }: AppProps = {}) => {
       scope_id: scopeId,
       reference_date: selectedDay?.date ?? todayId,
       exercise_id: exercise.id,
-      act_as_owner_id: coachActAsOwnerId ?? undefined,
     }
 
     try {
@@ -4866,7 +3639,6 @@ const App = ({ auth }: AppProps = {}) => {
     addCoachMessage,
     addCoachThinkingMessage,
     coachChatEnabled,
-    coachActAsOwnerId,
     currentUserId,
     ensureWorkoutSession,
     fetchCoachReply,
@@ -4880,180 +3652,21 @@ const App = ({ auth }: AppProps = {}) => {
   ])
 
   const handleSuggestWeight = useCallback(async (exercise: WorkoutExercise) => {
-    if (!coachChatEnabled) return
-    ensureWorkoutSession()
-    const scopeId = getCoachScopeId(exercise.id)
-    addCoachMessage(scopeId, t('workout.promptSuggestWeight'), 'user')
-    const thinkingId = addCoachThinkingMessage(scopeId, selectedModelLabel)
-    try {
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-        ...(await getPrivyAuthHeaders()),
-      }
-      const response = await apiFetch(`${API_BASE_URL}/exercise-decisions/suggest-weight`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          user_id: currentUserId,
-          before_date: shiftDateId(selectedDay?.date ?? todayId, 1),
-          exercise,
-          act_as_owner_id: coachActAsOwnerId ?? undefined,
-        }),
-      })
-      if (!response.ok) throw new Error(`Fast weight suggestion failed (${response.status})`)
-      const result = await response.json() as {
-        load: string
-        choice: string
-        confidence: number
-        comparable_exposures: number
-        source_date?: string | null
-        options?: Array<{
-          choice: string
-          recommendation: Record<string, unknown>
-          confidence: number
-        }>
-      }
-      removeCoachMessage(scopeId, thinkingId)
-      const quickActions: QuickActionOption[] = (result.options ?? []).map((option) => ({
-        id: `weight:${option.choice}`,
-        action: 'weight',
-        label: `${String(option.recommendation.load ?? option.choice)} · ${option.choice}`,
-        payload: option.recommendation,
-      }))
-      addCoachMessage(scopeId, t('workout.fastWeightSuggestion', {
-        load: result.load,
-        decision: result.choice,
-        confidence: Math.round(result.confidence * 100),
-        count: result.comparable_exposures,
-      }), 'ai', quickActions)
-    } catch (error) {
-      console.error('Fast weight suggestion error:', error)
-      removeCoachMessage(scopeId, thinkingId)
-      addCoachMessage(scopeId, t('workout.fastWeightUnavailable'), 'ai')
-    }
+    void exercise
+    addMessage('Weight suggestions are not available until a canonical history decision API is connected.', 'ai')
   }, [
-    addCoachMessage,
-    addCoachThinkingMessage,
-    coachActAsOwnerId,
-    coachChatEnabled,
-    currentUserId,
-    ensureWorkoutSession,
-    getCoachScopeId,
-    getPrivyAuthHeaders,
-    removeCoachMessage,
-    selectedDay?.date,
-    selectedModelLabel,
-    t,
-    todayId,
+    addMessage,
   ])
 
   const handleQuickExerciseDecision = useCallback(async (
     action: 'last_time' | 'swap_similar' | 'progress_or_deload' | 'rest_time' | 'volume_adjustment' | 'next_exercise',
     exercise: WorkoutExercise,
   ) => {
-    if (!coachChatEnabled) return
-    ensureWorkoutSession()
-    const scopeId = getCoachScopeId(exercise.id)
-    const labelKey = {
-      last_time: 'workout.promptLastTime',
-      swap_similar: 'workout.promptSwapSimilar',
-      progress_or_deload: 'workout.promptProgressOrDeload',
-      rest_time: 'workout.promptRestTime',
-      volume_adjustment: 'workout.promptAdjustVolume',
-      next_exercise: 'workout.promptNextExercise',
-    }[action]
-    addCoachMessage(scopeId, t(labelKey), 'user')
-    const thinkingId = addCoachThinkingMessage(scopeId, selectedModelLabel)
-    try {
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-        ...(await getPrivyAuthHeaders()),
-      }
-      const response = await apiFetch(`${API_BASE_URL}/exercise-decisions/quick`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          user_id: currentUserId,
-          before_date: shiftDateId(selectedDay?.date ?? todayId, 1),
-          target_date: selectedDay?.date ?? todayId,
-          action,
-          exercise,
-          workout_exercises: selectedDay?.exercises ?? [],
-          act_as_owner_id: coachActAsOwnerId ?? undefined,
-        }),
-      })
-      if (!response.ok) throw new Error(`Quick exercise decision failed (${response.status})`)
-      const result = await response.json() as {
-        choice: string
-        confidence: number
-        recommendation: Record<string, unknown>
-        options?: Array<{
-          choice: string
-          recommendation: Record<string, unknown>
-          confidence: number
-        }>
-      }
-      const recommendation = result.recommendation
-      const detail = action === 'last_time'
-        ? t('workout.quickLastTimeResult', {
-            date: String(recommendation.date ?? ''),
-            sets: String(recommendation.working_sets ?? ''),
-            load: String((recommendation.top_set as Record<string, unknown> | undefined)?.load_display ?? '—'),
-            reps: String((recommendation.top_set as Record<string, unknown> | undefined)?.reps ?? '—'),
-          })
-        : action === 'swap_similar' || action === 'next_exercise'
-        ? String(recommendation.name ?? result.choice)
-        : action === 'rest_time'
-          ? t('workout.quickRestResult', { seconds: String(recommendation.seconds ?? '') })
-          : action === 'progress_or_deload'
-            ? `${String(recommendation.load ?? '')} — ${result.choice}`
-            : t('workout.quickVolumeResult', {
-                sets: String(recommendation.sets ?? ''),
-                target: String(recommendation.target ?? '—'),
-              })
-      removeCoachMessage(scopeId, thinkingId)
-      const quickActions: QuickActionOption[] = action === 'last_time' ? [] : (result.options ?? []).map((option) => {
-        const candidate = option.recommendation
-        const label = action === 'swap_similar'
-          ? [String(candidate.name ?? option.choice), String(candidate.suggested_load ?? '')].filter(Boolean).join(' · ')
-          : action === 'next_exercise'
-          ? String(candidate.name ?? option.choice)
-          : action === 'rest_time'
-            ? `${String(candidate.seconds ?? option.choice)} sec`
-            : action === 'progress_or_deload'
-              ? `${String(candidate.load ?? '')} · ${option.choice}`
-              : `${String(candidate.sets ?? '')} sets × ${String(candidate.target ?? '—')}`
-        return {
-          id: `${action}:${option.choice}`,
-          action: action === 'progress_or_deload' ? 'weight' : action,
-          label,
-          payload: { ...candidate, choice: option.choice },
-        }
-      })
-      addCoachMessage(scopeId, t('workout.quickDecisionResult', {
-        result: detail,
-        confidence: Math.round(result.confidence * 100),
-      }), 'ai', quickActions)
-    } catch (error) {
-      console.error('Quick exercise decision error:', error)
-      removeCoachMessage(scopeId, thinkingId)
-      addCoachMessage(scopeId, t('workout.quickDecisionUnavailable'), 'ai')
-    }
+    void action
+    void exercise
+    addMessage('Exercise decisions are not available until a canonical decision API is connected.', 'ai')
   }, [
-    addCoachMessage,
-    addCoachThinkingMessage,
-    coachActAsOwnerId,
-    coachChatEnabled,
-    currentUserId,
-    ensureWorkoutSession,
-    getCoachScopeId,
-    getPrivyAuthHeaders,
-    removeCoachMessage,
-    selectedDay?.date,
-    selectedDay?.exercises,
-    selectedModelLabel,
-    t,
-    todayId,
+    addMessage,
   ])
 
   const handleClearChat = useCallback(async () => {
@@ -5070,7 +3683,6 @@ const App = ({ auth }: AppProps = {}) => {
         body: JSON.stringify({
           user_id: currentUserId,
           expected_session: modelControl?.active_session_id ?? null,
-          act_as_owner_id: coachActAsOwnerId ?? undefined,
         }),
       })
       if (!response.ok) {
@@ -5082,25 +3694,17 @@ const App = ({ auth }: AppProps = {}) => {
     } catch (error) {
       console.warn('New chat failed:', error)
     }
-  }, [coachActAsOwnerId, coachChatEnabled, currentUserId, getPrivyAuthHeaders, modelControl?.active_session_id])
+  }, [coachChatEnabled, currentUserId, getPrivyAuthHeaders, modelControl?.active_session_id])
 
   const setUserEmail = useCallback((email: string | null, userIdOverride?: string | null) => {
     const normalized = email && email.includes('@') ? email.trim().toLowerCase() : null
     setCurrentUserEmail(normalized)
 
     if (normalized) {
-      localStorage.setItem(PRIVY_EMAIL_STORAGE_KEY, normalized)
       setPrivyAuthError(null)
-    } else {
-      localStorage.removeItem(PRIVY_EMAIL_STORAGE_KEY)
     }
 
-    if (userIdOverride) {
-      setCurrentUserId(userIdOverride)
-    } else {
-      const nextId = getUserId()
-      setCurrentUserId(nextId)
-    }
+    setCurrentUserId(userIdOverride ?? normalized ?? '')
   }, [])
 
   const resetProfileForSignOut = useCallback(() => {
@@ -5183,7 +3787,7 @@ const App = ({ auth }: AppProps = {}) => {
   }, [currentUserEmail, currentUserId, privySubjectId, privyUserId])
 
   useEffect(() => {
-    if (!privyEnabled || !privyReady) return
+    if (!privyReady) return
 
     const wasAuthenticated = prevPrivyAuthenticatedRef.current
     prevPrivyAuthenticatedRef.current = privyAuthenticated
@@ -5193,9 +3797,7 @@ const App = ({ auth }: AppProps = {}) => {
 
     if (!privyAuthenticated) {
       privyAccessTokenRef.current = null
-      if (currentUserEmail) {
-        setUserEmail(null)
-      }
+      setUserEmail(null)
       if (privyAuthError) {
         setPrivyAuthError(null)
       }
@@ -5203,7 +3805,7 @@ const App = ({ auth }: AppProps = {}) => {
     }
 
     const email = extractEmailFromUser(privyUser)
-    const preferredUserId = privyUserId || privySubjectId || null
+    const preferredUserId = privyUserId || privySubjectId || email
     setUserEmail(email, preferredUserId)
 
     if (!email) {
@@ -5212,12 +3814,9 @@ const App = ({ auth }: AppProps = {}) => {
       setPrivyAuthError(null)
     }
   }, [
-    currentUserEmail,
-    currentUserId,
     extractEmailFromUser,
     privyAuthenticated,
     privyAuthError,
-    privyEnabled,
     privyReady,
     privyUser,
     resetProfileForSignOut,
@@ -5233,7 +3832,7 @@ const App = ({ auth }: AppProps = {}) => {
   }, [getPrivyAuthHeaders, privyAuthenticated, privyReady, privySubjectId])
 
   useEffect(() => {
-    if (!privyEnabled || !privyReady || !privyAuthenticated || !isBackendHealthy) return
+    if (!privyReady || !privyAuthenticated || !isBackendHealthy) return
     let cancelled = false
     const provision = async () => {
       try {
@@ -5255,7 +3854,7 @@ const App = ({ auth }: AppProps = {}) => {
     return () => {
       cancelled = true
     }
-  }, [getPrivyAuthHeaders, isBackendHealthy, privyAuthenticated, privyEnabled, privyReady, t])
+  }, [getPrivyAuthHeaders, isBackendHealthy, privyAuthenticated, privyReady, t])
 
   useEffect(() => {
     if (!isBackendHealthy || !privyReady || !privyAuthenticated) {
@@ -5278,7 +3877,7 @@ const App = ({ auth }: AppProps = {}) => {
   }, [isBackendHealthy, privyAuthenticated, privyReady, refreshModelControl])
 
   const handleAuthClick = useCallback(async () => {
-    if (!privyEnabled || !privyReady) return
+    if (!privyReady) return
 
     setPrivyAuthError(null)
 
@@ -5294,18 +3893,9 @@ const App = ({ auth }: AppProps = {}) => {
       console.error('Privy auth failed:', error)
       setPrivyAuthError(error instanceof Error ? error.message : t('auth.signInFailed'))
     }
-  }, [privyAuthenticated, privyEnabled, privyLogin, privyLogout, privyReady, setUserEmail, t])
+  }, [privyAuthenticated, privyLogin, privyLogout, privyReady, setUserEmail, t])
 
   const authState = useMemo<AuthUiState>(() => {
-    if (!privyEnabled) {
-      return {
-        enabled: false,
-        buttonLabel: t('auth.signIn'),
-        statusVisible: false,
-        loading: false,
-      }
-    }
-
     if (!privyReady) {
       return {
         enabled: true,
@@ -5344,7 +3934,7 @@ const App = ({ auth }: AppProps = {}) => {
       statusVisible: false,
       loading: false,
     }
-  }, [currentUserEmail, privyAuthenticated, privyAuthError, privyEnabled, privyReady, t])
+  }, [currentUserEmail, privyAuthenticated, privyAuthError, privyReady, t])
 
   const showHeaderAuthButton = useMemo(
     () => authState.enabled && !privyAuthenticated,
@@ -5360,9 +3950,7 @@ const App = ({ auth }: AppProps = {}) => {
       setPrivySubjectId(null)
       return
     }
-    if (!privyReady || !isBackendHealthy) return
-    fetchCoachLinks().catch(() => undefined)
-  }, [fetchCoachLinks, isBackendHealthy, privyAuthenticated, privyReady, setCoachActAs])
+  }, [privyAuthenticated, setCoachActAs])
 
   useEffect(() => {
     if (!coachActAsOwnerId) return
@@ -5403,18 +3991,6 @@ const App = ({ auth }: AppProps = {}) => {
     }
   }, [])
 
-  const pruneVideoCache = useCallback(() => {
-    if (videoCacheRef.current.size <= videoCacheMaxEntries) return
-    const entries = Array.from(videoCacheRef.current.entries())
-      .sort((a, b) => b[1].ts - a[1].ts)
-      .slice(0, videoCacheMaxEntries)
-
-    videoCacheRef.current.clear()
-    entries.forEach(([key, value]) => {
-      videoCacheRef.current.set(key, value)
-    })
-  }, [])
-
   const loadVideoCache = useCallback(() => {
     try {
       const raw = localStorage.getItem(videoCacheStorageKey)
@@ -5443,13 +4019,6 @@ const App = ({ auth }: AppProps = {}) => {
     return entry
   }, [normalizeVideoQuery, persistVideoCache])
 
-  const setCachedVideos = useCallback((query: string, limit: number, vids: Video[], exactMatch: boolean | null) => {
-    const key = normalizeVideoQuery(query, limit)
-    videoCacheRef.current.set(key, { ts: Date.now(), videos: vids, exactMatch })
-    pruneVideoCache()
-    persistVideoCache()
-  }, [normalizeVideoQuery, persistVideoCache, pruneVideoCache])
-
   const fetchVideos = useCallback(async ({
     query,
     exerciseName,
@@ -5466,6 +4035,7 @@ const App = ({ auth }: AppProps = {}) => {
     force?: boolean
   }) => {
     if (!query) return
+    void exerciseName
     const requestId = videoRequestIdRef.current + 1
     videoRequestIdRef.current = requestId
     const isStale = () => videoRequestIdRef.current !== requestId
@@ -5491,44 +4061,10 @@ const App = ({ auth }: AppProps = {}) => {
       }
     }
 
-    setVideoLoading(true)
     setVideos([])
-
-    if (!isBackendHealthy) {
-      if (isStale()) return
-      setVideos([])
-      setVideoExactMatch(null)
-      setVideoLoading(false)
-      return
-    }
-
-    try {
-      const params = new URLSearchParams({ q: query, limit: String(limit) })
-      if (exerciseName) {
-        params.set('exercise_name', exerciseName)
-      }
-      const headers = await getPrivyAuthHeaders()
-      const response = await apiFetch(`${API_BASE_URL}/search_videos?${params.toString()}`, { headers })
-      const data = await response.json()
-      const vids = data.videos || []
-      const exactMatch = typeof data.exact_match === 'boolean' ? data.exact_match : null
-      if (isStale()) return
-      // Only cache hits. Caching empty "not found" for hours locks in bad plan-name misses.
-      if (vids.length > 0) {
-        setCachedVideos(query, limit, vids, exactMatch)
-      }
-      setVideos(vids)
-      setVideoExactMatch(exactMatch)
-    } catch (e) {
-      if (isStale()) return
-      console.error('Video Fetch Error:', e)
-      setVideos([])
-      setVideoExactMatch(null)
-    } finally {
-      if (isStale()) return
-      setVideoLoading(false)
-    }
-  }, [getCachedVideos, getPrivyAuthHeaders, isBackendHealthy, normalizeVideoQuery, persistVideoCache, setCachedVideos])
+    setVideoExactMatch(null)
+    setVideoLoading(false)
+  }, [getCachedVideos, normalizeVideoQuery, persistVideoCache])
 
   useEffect(() => {
     if (restState.active && restState.endTs) {
@@ -5675,8 +4211,6 @@ const App = ({ auth }: AppProps = {}) => {
   }, [warmBackend])
 
   useEffect(() => {
-    if (devPreviewWorkout) return
-
     const warmIfVisible = () => {
       if (document.visibilityState === 'visible') {
         void warmBackend()
@@ -5700,177 +4234,42 @@ const App = ({ auth }: AppProps = {}) => {
   }, [warmBackend])
 
   useEffect(() => {
-    if (devPreviewWorkout) {
-      sessionReadyRef.current = true
-      setSessionLoading(false)
-      return
-    }
-
-    if (privyEnabled && !privyReady) {
+    if (!privyReady || !privyAuthenticated) {
+      sessionReadyRef.current = false
       setSessionLoading(true)
       return
     }
-    if (privyEnabled && !privyAuthenticated) {
-      sessionReadyRef.current = true
-      setSessionLoading(false)
-      return
-    }
     const preferredUserId = privyUserId || privySubjectId || currentUserEmail || null
-    if (privyEnabled && privyAuthenticated && !preferredUserId) {
-      sessionReadyRef.current = true
-      setSessionLoading(false)
+    if (!preferredUserId || !currentUserId) {
+      sessionReadyRef.current = false
+      setSessionLoading(true)
       return
     }
-    if (privyAuthenticated && preferredUserId && currentUserId !== preferredUserId && !coachActAsOwnerId) {
+    if (preferredUserId && currentUserId !== preferredUserId && !coachActAsOwnerId) {
       setSessionLoading(true)
       return
     }
 
     const actAsKey = coachActAsOwnerId ? `:act-as:${coachActAsOwnerId}` : ''
-    const authKey = `${privyAuthenticated ? 'auth' : 'anon'}:${currentUserId}${actAsKey}:sub=${privySubjectId ?? ''}:uid=${privyUserId ?? ''}:online=${isBackendHealthy ? '1' : '0'}`
+    const authKey = `auth:${currentUserId}${actAsKey}:sub=${privySubjectId ?? ''}:uid=${privyUserId ?? ''}:online=${isBackendHealthy ? '1' : '0'}`
     if (sessionLoadKeyRef.current === authKey) return
     sessionLoadKeyRef.current = authKey
-    sessionReadyRef.current = false
-    sessionHydratedRef.current = false
-    hasLocalEditsRef.current = false
-    localEditRevisionRef.current = 0
-    syncedLocalEditRevisionRef.current = 0
     pendingWorkoutDatesRef.current = new Set()
     pendingWorkoutPlanDatesRef.current = new Set()
     workoutWriteVersionByDateRef.current = {}
-    setServerSessionLoadSettledKey(null)
-    setSessionLoading(true)
-
-    let cancelled = false
-    let applied = false
-
-    const safeFetch = async (userId: string, includeAuth: boolean, actAsOwnerId?: string | null) => {
-      try {
-        return await fetchSessionLatest(userId, includeAuth, actAsOwnerId)
-      } catch (error) {
-        console.warn('Session load failed:', error)
-        return null
-      }
-    }
-
-    const shouldApplySession = (
-      session: SessionResponse | null,
-      expectedUserIds: Array<string | null | undefined>,
-    ) => {
-      if (!session) return false
-      const updatedAt = session.updated_at ?? null
-      const last = lastAppliedSessionRef.current
-      if (last && last.userId === session.user_id && last.updatedAt === updatedAt) {
-        return false
-      }
-      const sessionUserId = session.user_id
-      return expectedUserIds.some((expectedUserId) => {
-        if (!expectedUserId) return false
-        return sessionUserId === expectedUserId
-          || (
-            sessionUserId.includes('@')
-            && expectedUserId.includes('@')
-            && sessionUserId.toLowerCase() === expectedUserId.toLowerCase()
-          )
-      })
-    }
-
-    const markAppliedSession = (session: SessionResponse) => {
-      lastAppliedSessionRef.current = {
-        userId: session.user_id,
-        updatedAt: session.updated_at ?? null,
-      }
-      syncedLocalEditRevisionRef.current = localEditRevisionRef.current
-      hasLocalEditsRef.current = false
-    }
-
-    const hydrateBackendHistory = async () => {
-      try {
-        await fetchBackendChatHistory(
-          currentUserId,
-          Boolean(privyAuthenticated),
-          coachActAsOwnerId
-        )
-      } catch (error) {
-        console.warn('Chat history load failed:', error)
-      }
-    }
-
-    const loadSession = async () => {
-      let usedPayload = false
-      if (!isBackendHealthy) {
-        sessionLoadKeyRef.current = null
-        sessionReadyRef.current = true
-        setSessionLoading(false)
-        return
-      }
-      if (coachActAsOwnerId && privyAuthenticated) {
-        const coachSession = await safeFetch(currentUserId, true, coachActAsOwnerId)
-        if (coachSession && !cancelled && shouldApplySession(coachSession, [coachActAsOwnerId])) {
-          await applySessionPayload(coachSession.payload)
-          markAppliedSession(coachSession)
-          applied = true
-          usedPayload = true
-          setCoachActionMessage(t('coach.viewLoaded'))
-        } else if (!cancelled && !coachSession) {
-          setCoachActionMessage(t('coach.noTraineeSession'))
-        }
-      } else if (privyAuthenticated && currentUserEmail) {
-        const expectedOwnerId = privyUserId || privySubjectId || privyAccessTokenRef.current?.sub || currentUserId
-        const signedSession = await safeFetch(currentUserId, true)
-        if (signedSession && !cancelled && shouldApplySession(signedSession, [
-          expectedOwnerId,
-          currentUserEmail,
-        ])) {
-          await applySessionPayload(signedSession.payload)
-          markAppliedSession(signedSession)
-          applied = true
-          usedPayload = true
-        }
-      } else {
-        const session = await safeFetch(currentUserId, false)
-        if (session && !cancelled && shouldApplySession(session, [currentUserId])) {
-          await applySessionPayload(session.payload)
-          markAppliedSession(session)
-          applied = true
-          usedPayload = true
-        }
-      }
-
-      if (cancelled) return
-      if (usedPayload) {
-        sessionHydratedRef.current = true
-      }
-      // Workout rows and generation recovery may now start immediately. Chat
-      // history is independent and should never hold the workout UI loader.
-      sessionReadyRef.current = true
-      setServerSessionLoadSettledKey(authKey)
-      setSessionLoading(false)
-      void hydrateBackendHistory()
-    }
-
-    loadSession().catch((error) => {
-      console.warn('Session load failed:', error)
-      sessionReadyRef.current = true
-      setSessionLoading(false)
+    sessionReadyRef.current = true
+    setServerSessionLoadSettledKey(authKey)
+    setSessionLoading(false)
+    fetchBackendChatHistory(currentUserId).catch((error) => {
+      console.warn('Chat history load failed:', error)
     })
-
-    return () => {
-      cancelled = true
-      if (!applied && sessionLoadKeyRef.current === authKey) {
-        sessionLoadKeyRef.current = null
-      }
-    }
   }, [
-    applySessionPayload,
-    currentUserEmail,
     coachActAsOwnerId,
+    currentUserEmail,
     currentUserId,
     fetchBackendChatHistory,
-    fetchSessionLatest,
     isBackendHealthy,
     privyAuthenticated,
-    privyEnabled,
     privyReady,
     privySubjectId,
     privyUserId,
@@ -5891,11 +4290,6 @@ const App = ({ auth }: AppProps = {}) => {
   useEffect(() => {
     document.documentElement.style.setProperty('--font-scale', profile.fontScale.toString())
   }, [profile.fontScale])
-
-  useEffect(() => {
-    if (!sessionReadyRef.current) return
-    scheduleSessionSave()
-  }, [dataVersion, profile, scheduleSessionSave])
 
   useEffect(() => {
     if (didAutoSelectTodayRef.current) return
@@ -6249,7 +4643,7 @@ const App = ({ auth }: AppProps = {}) => {
             inputValue={chatInput}
             inputDisabled={!coachChatEnabled}
             modelOptions={modelOptions}
-            showModelLabels={modelSelectionAvailable}
+            showModelLabels
             selectedModel={selectedModelValue}
             modelSelectionDisabled={modelSelectionPending || messages.some((message) => message.thinking)}
             onModelChange={handleModelSelection}
@@ -6292,7 +4686,7 @@ const App = ({ auth }: AppProps = {}) => {
             videoOffline={!isBackendHealthy}
             videoOwnerKey={videoOwnerKey}
             coachMessages={activeCoachMessages}
-            showModelLabels={modelSelectionAvailable}
+            showModelLabels
             exerciseHistory={exerciseHistory}
             exerciseHistoryLoading={exerciseHistoryLoading}
             exerciseHistoryError={exerciseHistoryError}
@@ -6361,7 +4755,7 @@ const App = ({ auth }: AppProps = {}) => {
             onUpdateExerciseNotes={updateExerciseNotes}
           />
           <HealthTimelineView
-            key={`${currentUserId}:${coachActAsOwnerId ?? 'self'}`}
+            key={currentUserId}
             kind={activeView === 'diet' ? 'diet' : 'health'}
             active={activeView === 'diet' || activeView === 'health'}
             weekDays={weekDaySummaries}
@@ -6369,10 +4763,9 @@ const App = ({ auth }: AppProps = {}) => {
             onSelectDay={handleSelectDay}
             onChat={() => handleActiveViewChange('home')}
             apiBase={API_BASE_URL}
-            userId={devPreviewWorkout ? 'aifit-meal-local-preview' : currentUserId}
-            actAsOwnerId={coachActAsOwnerId}
+            userId={currentUserId}
             enabled={canQuerySavedWorkoutSessions}
-            canEdit={!coachActAsOwnerId || (activeCoachLink?.permissions.view_progress === true && activeCoachLink.permissions.edit_programs === true)}
+            canEdit
             getAuthHeaders={getPrivyAuthHeaders}
           />
           <ProfileView
@@ -6420,7 +4813,7 @@ const App = ({ auth }: AppProps = {}) => {
               canCopyLastWeek={canEditPlanSelectedDay && canQuerySavedWorkoutSessions && isBackendHealthy && !copyingLastWeek}
               copyingLastWeek={copyingLastWeek}
               onCopyLastWeek={handleCopyLastWeek}
-              canGeneratePlan={canEditPlanSelectedDay && canQuerySavedWorkoutSessions && isBackendHealthy}
+              canGeneratePlan={canGenerateWorkoutSelectedDay && canQuerySavedWorkoutSessions && isBackendHealthy}
               canGenerateWithCoach={canLlmEditPlanSelectedDay && coachChatEnabled}
               clearMode={workoutClearMode}
               onGenerateWorkout={handleGenerateDayWorkout}

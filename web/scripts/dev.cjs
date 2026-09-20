@@ -43,7 +43,7 @@ const restartExistingDevServer = async () => {
 const main = async () => {
   await restartExistingDevServer()
   const webpackCli = require.resolve('webpack-cli/bin/cli.js')
-  const child = spawn(process.execPath, [webpackCli, 'serve', '--config', 'webpack.config.cjs', '--mode', 'development', '--host', '0.0.0.0', '--port', String(port)], {
+  const child = spawn(process.execPath, [webpackCli, 'serve', '--config', 'webpack.config.cjs', '--mode', 'development', '--host', '127.0.0.1', '--port', String(port)], {
     stdio: 'inherit',
   })
   child.once('error', (error) => { throw error })

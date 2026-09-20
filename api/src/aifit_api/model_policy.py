@@ -8,11 +8,26 @@ from typing import Any
 from fastapi import HTTPException
 
 
+OPENROUTER_MODELS = frozenset({"deepseek/deepseek-v4.1-flash"})
+
+
 @dataclass(frozen=True)
 class ModelChoice:
     cli: str
     model: str
     effort: str
+
+
+def routing_provider(cli: str, model: str | None) -> str | None:
+    """Return the user-visible provider for a known routed model choice.
+
+    Ez keeps the executable key as ``codex``. The local deployment's Codex
+    provider binding routes the DeepSeek model to OpenRouter, so expose that
+    distinction to the AIFit UI without inventing an unsupported Ez CLI.
+    """
+    if cli == "codex" and model in OPENROUTER_MODELS:
+        return "openrouter"
+    return None
 
 
 @dataclass(frozen=True)

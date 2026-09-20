@@ -28,7 +28,7 @@ type Props = {
   kind: 'diet' | 'health'; active: boolean
   weekDays: ComponentProps<typeof WeekStrip>['days']; selectedDayLabel: string
   onSelectDay: ComponentProps<typeof WeekStrip>['onSelectDay']; onChat: () => void
-  apiBase: string; userId: string; actAsOwnerId: string | null; enabled: boolean; canEdit: boolean
+  apiBase: string; userId: string; enabled: boolean; canEdit: boolean
   getAuthHeaders: () => Promise<Record<string, string>>
 }
 const amount = (estimate: Estimate | undefined, unit: string) => estimate
@@ -95,11 +95,11 @@ function MealCard({ meal, request, retry, remove, deleting, actionsOpen, onActio
     </div></li>
 }
 
-export default function HealthTimelineView({ kind, active, weekDays, selectedDayLabel, onSelectDay, onChat, apiBase, userId, actAsOwnerId, enabled, canEdit, getAuthHeaders }: Props) {
+export default function HealthTimelineView({ kind, active, weekDays, selectedDayLabel, onSelectDay, onChat, apiBase, userId, enabled, canEdit, getAuthHeaders }: Props) {
   const selectedDate = weekDays.find(day => day.isSelected)?.date || ''
   const [weekMeals, setWeekMeals] = useState<Meal[]>([])
   const [pendingAdds, setPendingAdds] = useState<{ entry: Entry; meal: Meal }[]>([])
-  const accountKey = `${userId}:${actAsOwnerId || ''}`
+  const accountKey = userId
   const currentAccount = useRef(accountKey)
   currentAccount.current = accountKey
   const sending = useRef(new Set<string>())
@@ -144,7 +144,6 @@ export default function HealthTimelineView({ kind, active, weekDays, selectedDay
     if (!enabled) throw new Error('Sign in to use your meal log.')
     const url = new URL(path, apiBase)
     url.searchParams.set('user_id', userId)
-    if (actAsOwnerId) url.searchParams.set('act_as_owner_id', actAsOwnerId)
     const headers = await getAuthHeaders()
     const response = await fetch(url, { ...init, headers: { ...headers, ...init?.headers } })
     if (!response.ok) {
@@ -152,7 +151,7 @@ export default function HealthTimelineView({ kind, active, weekDays, selectedDay
       throw new Error(typeof body?.detail === 'string' ? body.detail : `Request failed (${response.status}).`)
     }
     return response
-  }, [apiBase, userId, actAsOwnerId, enabled, getAuthHeaders])
+  }, [apiBase, userId, enabled, getAuthHeaders])
   useEffect(() => {
     if (!active || !enabled || !selectedDate || kind !== 'diet') return
     const controller = new AbortController()
@@ -182,7 +181,7 @@ export default function HealthTimelineView({ kind, active, weekDays, selectedDay
   }, [active, enabled, kind, selectedDate, week.start, week.end, request, refreshKey])
   useEffect(() => {
     setUsuals([]); setWeekMeals([]); setPendingAdds([]); setEditingMeal(null); pendingFavorites.current = {}; setSuggestions([]); setSuggestionState('loading');
-  }, [userId, actAsOwnerId])
+  }, [userId])
   useEffect(() => {
     if (!active || !enabled || kind !== 'diet') return
     const controller = new AbortController()

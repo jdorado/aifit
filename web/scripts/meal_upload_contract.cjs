@@ -19,7 +19,7 @@ vm.runInContext(ts.transpileModule(body + '\nglobalThis.handlers = {upload, sele
   await new Promise(setImmediate)
   assert.match(state.error, /Photo not confirmed saved/)
   assert.ok(pendingUpload.current)
-  const loadingEffect = source.slice(source.indexOf('    const load = async'), source.indexOf('  const addEntry = async'))
+  const loadingEffect = source.slice(source.indexOf('    const load = async'), source.indexOf('  const addEntry = '))
   assert.doesNotMatch(loadingEffect, /setUploadError|pendingUpload/, 'Refresh cannot clear upload failure or its retry file')
   fail = false
   await context.handlers.upload()

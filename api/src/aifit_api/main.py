@@ -17,10 +17,11 @@ from .auth import (
     Identity,
     mint_agent_capability,
     require_agent_capability,
+    require_agent_request,
     require_identity,
 )
 from .ez import call as ez_call, provision_telegram, telegram_provisioning_configured, verified_binding
-from .model_policy import fallback_available, fallback_choice, filter_control, require_allowed
+from .model_policy import fallback_available, fallback_choice, filter_control, require_allowed, routing_provider
 from .workouts import (
     BlueprintInput,
     ExerciseDefinitionInput,
@@ -65,6 +66,19 @@ MAX_MESSAGE_TEXT = 64_000
 AGENT_API_BASE_URL = os.getenv("AIFIT_AGENT_API_BASE_URL", "").rstrip("/")
 
 
+def agent_api_base_url() -> str | None:
+    """Accept only an operator-supplied HTTP(S) origin without userinfo."""
+    value = AGENT_API_BASE_URL.strip()
+    if not value or any(character.isspace() for character in value):
+        return None
+    parsed = urlparse(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        return None
+    if parsed.username or parsed.password or parsed.query or parsed.fragment:
+        return None
+    return value
+
+
 def workouts() -> WorkoutService:
     return WorkoutService(db)
 
@@ -80,21 +94,16 @@ def require_agent_permission(capability: AgentCapability, permission: str) -> No
 
 def agent_run_context(account: dict[str, Any], request_id: str) -> dict[str, Any] | None:
     """Opaque data for the AIFit Ez plugin; never sent to or stored by the browser."""
-    if not AIFIT_AGENT_CAPABILITY_SECRET or not AGENT_API_BASE_URL:
+    api_base_url = agent_api_base_url()
+    if not AIFIT_AGENT_CAPABILITY_SECRET or not api_base_url:
         return None
     return {"plugins": {"aifit": {
-        "api_base_url": AGENT_API_BASE_URL,
+        "api_base_url": api_base_url,
         "capability": mint_agent_capability(
             account_id=account["account_id"], tenant_id=account["tenant_id"], job_id=request_id,
             permissions={"blueprints:write", "workouts:swap", "workouts:override"},
         ),
     }}}
-
-
-class SessionInput(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-    user_id: str
-    payload: dict[str, Any]
 
 
 class ChatInput(BaseModel):
@@ -107,13 +116,13 @@ class ChatInput(BaseModel):
     exercise_id: str | None = Field(default=None, min_length=1, max_length=200)
     workout_id: str | None = Field(default=None, min_length=1, max_length=200)
     exercise_instance_id: str | None = Field(default=None, min_length=1, max_length=200)
-    act_as_owner_id: str | None = None
 
 
 class ModelSelectionInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     expected_session: str | None = None
     cli: str = Field(min_length=1, max_length=80)
+    provider: str | None = Field(default=None, min_length=1, max_length=80)
     model: str | None = Field(default=None, min_length=1, max_length=160)
     effort: str | None = Field(default=None, min_length=1, max_length=40)
 
@@ -127,7 +136,6 @@ class NewChatInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     user_id: str
     expected_session: str | None = None
-    act_as_owner_id: str | None = None
 
 
 class ProfileUpdateInput(BaseModel):
@@ -223,9 +231,6 @@ async def mini_chat_workout_context(account: dict[str, Any], body: ChatInput) ->
     try:
         active = await service.active_blueprint(account["account_id"])
     except WorkoutDomainError:
-        # An exception day may legitimately have no matching blueprint day.
-        # The agent can still explain that a blueprint-constrained swap is not
-        # available; it must not invent one from an incomplete context.
         pass
     blueprint = active["blueprint"] if active else None
     workout_lineage = workout.get("lineage", {})
@@ -336,6 +341,12 @@ def validated_preset(value: Any) -> dict | None:
             if not isinstance(item, str) or not item:
                 raise HTTPException(502, "Ez returned an invalid model receipt.")
             projected[field] = item
+    provider = value.get("provider")
+    if provider is not None and (not isinstance(provider, str) or not provider or len(provider) > 80):
+        raise HTTPException(502, "Ez returned an invalid model receipt.")
+    provider = provider or routing_provider(projected["cli"], projected.get("model"))
+    if provider:
+        projected["provider"] = provider
     return projected
 
 
@@ -358,6 +369,12 @@ def public_model_control(value: Any) -> dict:
             if not isinstance(item["model"], str):
                 raise HTTPException(502, "Ez returned invalid model controls.")
             model["model"] = item["model"]
+        provider = item.get("provider")
+        if provider is not None and (not isinstance(provider, str) or not provider or len(provider) > 80):
+            raise HTTPException(502, "Ez returned invalid model controls.")
+        provider = provider or routing_provider(model["cli"], model.get("model"))
+        if provider:
+            model["provider"] = provider
         models.append(model)
     active_session = value.get("activeSessionId")
     if active_session is not None and not isinstance(active_session, str):
@@ -377,6 +394,9 @@ async def lock_control(binding: dict, identity: Identity, control: dict | None =
         "action": "model", "expectedSession": current["active_session_id"],
         "cli": fallback.cli, "model": fallback.model, "effort": fallback.effort,
     }
+    provider = routing_provider(fallback.cli, fallback.model)
+    if provider:
+        selection["provider"] = provider
     return filter_control(public_model_control(await ez_call(binding, "POST", "/v1/control", selection)), identity.subject)
 
 
@@ -423,7 +443,6 @@ async def reconcile_turn(account: dict, turn: dict, snapshot: dict | None = None
 async def indexes() -> None:
     await db.accounts.create_index([("privy_subject", ASCENDING)], unique=True)
     await db.accounts.create_index([("account_id", ASCENDING)], unique=True)
-    await db.sessions.create_index([("account_id", ASCENDING)], unique=True)
     await db.chat_turns.create_index(
         [("tenant_id", ASCENDING), ("request_id", ASCENDING)],
         unique=True,
@@ -503,6 +522,9 @@ async def select_chat_model(body: ModelSelectionInput, identity: Identity = Depe
     binding = await verified_binding(account["account_id"])
     require_allowed(identity.subject, body.cli, body.model, body.effort)
     selection: dict[str, Any] = {"action": "model", "expectedSession": body.expected_session, "cli": body.cli}
+    provider = body.provider or routing_provider(body.cli, body.model)
+    if provider:
+        selection["provider"] = provider
     if body.model is not None:
         selection["model"] = body.model
     if body.effort is not None:
@@ -518,8 +540,6 @@ async def select_chat_model(body: ModelSelectionInput, identity: Identity = Depe
 
 @app.post("/chat/clear")
 async def clear_chat(body: NewChatInput, identity: Identity = Depends(require_identity)) -> dict:
-    if body.act_as_owner_id:
-        raise HTTPException(403, "Coach mode is not part of Stage 1.")
     account = await owned_account(identity, body.user_id)
     binding = await verified_binding(account["account_id"])
     control = public_model_control(await ez_call(binding, "POST", "/v1/control", {
@@ -527,28 +547,6 @@ async def clear_chat(body: NewChatInput, identity: Identity = Depends(require_id
     }))
     await db.chat_turns.delete_many({"tenant_id": account["tenant_id"]})
     return await lock_control(binding, identity, control)
-
-
-@app.get("/sessions/latest")
-async def latest_session(user_id: str, identity: Identity = Depends(require_identity)) -> dict:
-    account = await owned_account(identity, user_id)
-    session = await db.sessions.find_one({"account_id": account["account_id"]})
-    if not session:
-        raise HTTPException(404, "No session yet.")
-    return {"user_id": identity.subject, "payload": session["payload"], "created_at": session["created_at"],
-            "updated_at": session["updated_at"], "profile_revision": None, "training_plan_revision": None}
-
-
-@app.post("/sessions")
-async def save_session(body: SessionInput, identity: Identity = Depends(require_identity)) -> dict:
-    account = await owned_account(identity, body.user_id)
-    timestamp = now()
-    session = await db.sessions.find_one_and_update(
-        {"account_id": account["account_id"]},
-        {"$set": {"payload": body.payload, "updated_at": timestamp}, "$setOnInsert": {"created_at": timestamp}},
-        upsert=True, return_document=ReturnDocument.AFTER)
-    return {"user_id": identity.subject, "payload": session["payload"], "created_at": session["created_at"],
-            "updated_at": session["updated_at"], "profile_revision": None, "training_plan_revision": None}
 
 
 async def inbox_snapshots(binding: dict) -> list[dict]:
@@ -603,8 +601,6 @@ async def chat_history(user_id: str, limit: int = 40, identity: Identity = Depen
 
 @app.post("/chat/async", status_code=202)
 async def enqueue_chat(body: ChatInput, identity: Identity = Depends(require_identity)) -> dict:
-    if body.act_as_owner_id:
-        raise HTTPException(403, "Coach mode is not part of Stage 1.")
     account = await owned_account(identity, body.user_id)
     binding = await verified_binding(account["account_id"])
     request_id = str(body.request_id)
@@ -734,8 +730,7 @@ async def draft_plan_v1(body: PlanDraftInput, identity: Identity = Depends(requi
 
 @app.post("/v1/blueprints/validate")
 async def validate_blueprint_v1(body: BlueprintInput, identity: Identity = Depends(require_identity)) -> dict:
-    account = await browser_account(identity)
-    await workouts()._validate_blueprint_exercises(account["account_id"], body)
+    await browser_account(identity)
     return {"valid": True, "schema_version": body.schema_version}
 
 
@@ -829,6 +824,7 @@ async def agent_solidify_blueprint_v1(
     capability: AgentCapability = Depends(require_agent_capability),
 ) -> dict:
     require_agent_permission(capability, "blueprints:write")
+    require_agent_request(capability, body.request_id)
     blueprint = BlueprintInput(**body.model_dump(exclude={"expected_revision", "request_id", "blueprint_id"}))
     return await workouts().solidify_blueprint(
         capability.account_id,
@@ -846,6 +842,7 @@ async def agent_override_workout_v1(
     capability: AgentCapability = Depends(require_agent_capability),
 ) -> dict:
     require_agent_permission(capability, "workouts:override")
+    require_agent_request(capability, body.request_id)
     return await workouts().override(capability.account_id, body, agent_actor(capability))
 
 
@@ -855,6 +852,7 @@ async def agent_swap_v1(
     capability: AgentCapability = Depends(require_agent_capability),
 ) -> dict:
     require_agent_permission(capability, "workouts:swap")
+    require_agent_request(capability, body.request_id)
     return await workouts().swap(
         capability.account_id,
         body.workout_id,

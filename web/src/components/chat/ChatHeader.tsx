@@ -32,6 +32,7 @@ const ChatHeader: FC<ChatHeaderProps> = ({
           <label className="chat-model-control">
             <select
               aria-label="AI model"
+              title={modelOptions.find((option) => option.value === selectedModel)?.label}
               value={selectedModel}
               disabled={modelSelectionDisabled}
               onChange={(event) => onModelChange(event.target.value)}

@@ -93,4 +93,4 @@ export type WorkoutExtra = {
     isReadOnly?: boolean
 }
 
-// Types only; workout data comes from llm-workout.json.
+// Types only; workout data comes from the authenticated backend.

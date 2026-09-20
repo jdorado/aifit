@@ -48,12 +48,11 @@ used by the frontend.
 
 ## 2. Solidify is validate + publish
 
-The plugin sends one complete `BlueprintInput` JSON object. The API performs:
-
-1. JSON and typed-schema validation;
-2. date, ID, ordering, constraint, prescription, and progression validation;
-3. existence of every referenced exercise revision for the account;
-4. compatibility between each exercise revision and its prescribed metric.
+The plugin sends one complete `BlueprintInput` JSON object. The API performs
+typed-schema validation (JSON shape, dates, ID patterns, numeric loads and
+units, ordering, and nested field types) so the frontend can render the record.
+The agent authors exercise IDs and revisions; the API does not require a prior
+catalog row.
 
 If a check fails, the API returns feedback and writes neither a new active
 pointer nor a partially accepted blueprint. The CLI prints that feedback so the
@@ -148,12 +147,9 @@ sends this small intent through the plugin:
 The CLI adds the request ID and current workout revision. The agent route always
 uses JEV selection. The backend verifies the expected active blueprint revision
 and the workout's blueprint lineage, then selects an unused candidate from the
-same blueprint slot, validates its canonical exercise revision and metric,
-preserves every other workout item, and records the active blueprint ID/revision
-in the swap receipt. It rejects stale or completed workouts and returns
-`no_eligible_swap` when the blueprint has no alternative. A missing context is
-feedback for the agent, not permission to invent a candidate or fall back to an
-exception.
+same blueprint slot, preserves every other workout item, and records the active
+blueprint ID/revision in the swap receipt. It rejects stale or completed
+workouts and returns `no_eligible_swap` when the blueprint has no alternative.
 
 The receipt has the same shape as other AIFit writes, with `resource: "workout"`
 and `effect: "swapped"`.
@@ -261,7 +257,7 @@ important rules are:
   changes. An exception-day slot is different: it must contain exactly one
   already-resolved candidate.
 - A target uses exactly one primary metric: repetitions or duration.
-- Exercise revisions and prescribed metrics must match canonical AIFit records.
+- Loads use a numeric `value` and a `kg` or `lb` unit.
 - Hard-forbidden exercises cannot appear as candidates.
 - Progression fields are present only for their declared progression kind.
 
@@ -333,8 +329,8 @@ use a stable error code and message, for example:
 ```json
 {
   "detail": {
-    "code": "exercise_revision_not_found",
-    "message": "Blueprint references unavailable exercise ex_row."
+    "code": "validation_error",
+    "message": "load value must be a number with unit kg or lb."
   }
 }
 ```

@@ -1,74 +1,66 @@
 # AIFit
 
-Stage 1 is a clean local development baseline:
+AIFit is an open-source fitness product with a removable web interface, a
+minimal canonical API, and a narrow Ez plugin boundary.
 
-- `web/` preserves the existing React/TypeScript frontend;
-- `api/` is a new FastAPI/PyMongo application boundary;
-- MongoDB uses the fresh `aifit_dev` database by default;
-- chat runs through an isolated Ez application profile for each account;
-- Telegram is the native channel on that same Ez agent;
-- workouts, meals, Health, Coach and onboarding are not implemented yet.
+- `web/` is the React/TypeScript interaction surface;
+- `api/` owns authentication, canonical records, and deterministic domain
+  operations;
+- `plugins/aifit/` exposes the three bounded workout writes used by Ez;
+- `docs/tenant/AGENTS.md` is the tenant-runtime context template.
 
-Local secrets and Ez runtime state stay outside this repository under the
-operator-selected private directory. Never commit a development auth token,
-Ez binding registry, agent workspace or native session state.
+Ez owns native context, memory, sessions, reasoning, and execution. The
+frontend consumes the API and never invokes the plugin directly. Deployment
+provisioning, binding registries, credentials, and runtime state are
+intentionally outside this repository.
 
-## Stage 1 QA
+For the public tenant contract, see [`docs/new_tenant.md`](docs/new_tenant.md).
 
-Sign in through the existing AIFit Privy client app. Do not create a second
-Privy application. Copy `api/.env.example` and `web/.env.example` to `.env`
-files and fill in that client’s `PRIVY_APP_ID`, `PRIVY_APP_SECRET`, and
-`PRIVY_CLIENT_ID`. Leave `AIFIT_DEV_AUTH_TOKEN` and `DEV_LOCAL_AUTH_TOKEN`
-unset so the development account is created from the signed-in Privy identity.
+## Local development
 
-Allow `http://localhost:5175` on that Privy app if it is not already listed.
-With the private local environment configured, run the API on port `8100`, the
-copied frontend on port `5175`, and the standard Ez container on port `8793`.
-Never start an application-only Ez listener directly on the host. The relay uses
-the existing AIFit private state and standard host-executor binding:
+Install MongoDB, Python 3.11+, `uv`, Node.js, and `pnpm`. Create a separate
+private configuration directory and copy the example files into it:
 
 ```sh
-AIFIT_EZ_STATE_DIR=/absolute/private/aifit-dev \
-  docker compose -f deploy/compose.local.yml up -d --build --wait
+export AIFIT_CONFIG_DIR=/path/outside/this/repository/aifit
+mkdir -p "$AIFIT_CONFIG_DIR"
+cp api/.env.example "$AIFIT_CONFIG_DIR/api.env"
+cp web/.env.example "$AIFIT_CONFIG_DIR/web.env"
+chmod 700 "$AIFIT_CONFIG_DIR"
+chmod 600 "$AIFIT_CONFIG_DIR/api.env" "$AIFIT_CONFIG_DIR/web.env"
 ```
 
-Point the API at the matching binding registry and start both servers from their
-env files:
+Use your own Privy application credentials and your own Ez deployment
+configuration. Never create `api/.env` or `web/.env` in the checkout, and never
+commit a binding registry, token file, workspace, native session, or bot token.
+
+Run the API and frontend with the external environment files:
 
 ```sh
-export AIFIT_EZ_STATE_DIR=/absolute/private/aifit-dev
+(cd api && uv run uvicorn --env-file "$AIFIT_CONFIG_DIR/api.env" \
+  aifit_api.main:app --host 127.0.0.1 --port 8100)
 
-(cd api && EZ_BINDINGS_FILE="$AIFIT_EZ_STATE_DIR/ez-bindings.json" \
-  .venv/bin/uvicorn --env-file .env aifit_api.main:app --host 127.0.0.1 --port 8100)
-
-(cd web && pnpm exec webpack serve --config webpack.config.cjs --mode development --host ::1 --port 5175)
+(cd web && AIFIT_WEB_ENV_FILE="$AIFIT_CONFIG_DIR/web.env" pnpm dev)
 ```
 
-Open `http://localhost:5175` (not `http://127.0.0.1:5175`), sign in with the
-Privy account already used on the previous AIFit client, and confirm the
-development account is created from that identity. Then send two related
-messages, reload, and confirm both replies remain visible and contextual.
+Chat and agent-authored workout writes require an Ez deployment and server-side
+binding that you operate separately. This repository does not contain a
+provider-specific provisioning command or deployment manifest for that service.
+The web release reads canonical workout records and can request typed day
+generation; arbitrary plan rewrites, coach impersonation, and provider-specific
+video/history helpers stay disabled until their own typed public contracts exist.
 
-The optional local development auth token exists only as a fallback before
-Privy sign-in. It is disabled when unset and must never be used in a deployed
-build.
+## Testing
 
-## Telegram connection
+```sh
+api/.venv/bin/pytest
+pnpm --dir web build
+```
 
-Telegram is the channel for the account's existing Ez agent, not an AIFit relay
-or a second AIFit agent. An agent starts application-only; on Profile, the
-authenticated user creates or selects their own bot in BotFather and supplies
-its token once. A private Ez provisioning manager stores that token only in the
-agent's relay secret, restarts that one relay, and asks the same Ez application
-binding for a short-lived `t.me` link. The user opens the bot and presses
-**Start**; Ez verifies the one-time link and persists the Telegram channel on
-the existing owner. The AIFit API only forwards the one-time token and projects
-state: it never stores a Telegram ID, pairing code, or bot token. The agent
-continues to work in Telegram if the frontend is closed.
+The API tests cover identity, tenant isolation, agent capabilities, and the
+typed workout contract. The frontend build runs the critical timeline and PWA
+contract checks before compiling the production bundle.
 
-Each account agent owns its bot. Do not share a bot or a relay between accounts:
-that would require tenant routing at the channel boundary and would break the
-one-account, one-agent isolation model. Telegram needs no feature flag: it
-becomes active when Ez has that agent's private bot token. The Profile tab
-intentionally has no disconnect action. Signing out remains the existing AIFit
-authentication action and does not alter the user's Ez agent.
+## License
+
+This project is licensed under the MIT License; see [`LICENSE`](LICENSE).

@@ -16,8 +16,6 @@ PRIVY_USER_API_URL = os.getenv("PRIVY_USER_API_URL", "https://api.privy.io/v1").
 PRIVY_APP_ID = os.getenv("PRIVY_APP_ID", "").strip()
 PRIVY_APP_SECRET = os.getenv("PRIVY_APP_SECRET", "").strip()
 PRIVY_ISSUER = os.getenv("PRIVY_ISSUER", "privy.io")
-AIFIT_DEV_AUTH_TOKEN = os.getenv("AIFIT_DEV_AUTH_TOKEN", "").strip()
-AIFIT_DEV_SUBJECT = os.getenv("AIFIT_DEV_SUBJECT", "dev:aifit-local").strip()
 AIFIT_AGENT_CAPABILITY_SECRET = os.getenv("AIFIT_AGENT_CAPABILITY_SECRET", "").strip()
 
 _key_cache: dict[str, Any] = {"value": None, "expires": 0.0}
@@ -84,6 +82,11 @@ async def require_agent_capability(authorization: str | None = Header(default=No
     return AgentCapability(account_id, tenant_id, job_id, frozenset(permissions))
 
 
+def require_agent_request(capability: AgentCapability, request_id: str) -> None:
+    if not secrets.compare_digest(request_id, capability.job_id):
+        raise HTTPException(403, "This agent capability does not match the request.")
+
+
 async def _verification_key() -> str:
     if not PRIVY_APP_ID or not PRIVY_APP_SECRET:
         raise HTTPException(500, "Privy is not configured.")
@@ -131,8 +134,6 @@ async def require_identity(authorization: str | None = Header(default=None)) -> 
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(401, "Sign in required.")
     token = authorization.removeprefix("Bearer ").strip()
-    if AIFIT_DEV_AUTH_TOKEN and secrets.compare_digest(token, AIFIT_DEV_AUTH_TOKEN):
-        return Identity(subject=AIFIT_DEV_SUBJECT, email="developer@local.aifit")
     try:
         payload = jwt.decode(
             token,

@@ -13,11 +13,23 @@ type ReplyElapsedProps = {
   modelLabel?: string
 }
 
+const MODEL_LABEL_MAX_CHARS = 32
+
 const formatElapsedTime = (elapsedSeconds: number) => {
   const wholeSeconds = Math.max(0, Math.floor(elapsedSeconds))
   const minutes = Math.floor(wholeSeconds / 60)
   const seconds = String(wholeSeconds % 60).padStart(2, '0')
   return minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`
+}
+
+const truncateModelLabel = (label: string) => {
+  if (label.length <= MODEL_LABEL_MAX_CHARS) return label
+
+  const suffixStart = label.lastIndexOf(' · ')
+  const suffix = suffixStart > 0 ? label.slice(suffixStart) : ''
+  const prefixLength = MODEL_LABEL_MAX_CHARS - suffix.length - 1
+  if (prefixLength <= 0) return `${label.slice(0, MODEL_LABEL_MAX_CHARS - 1)}…`
+  return `${label.slice(0, prefixLength).trimEnd()}…${suffix}`
 }
 
 const ThinkingCounter: FC<ThinkingCounterProps> = ({ label, statusText, startedAt }) => {
@@ -54,6 +66,7 @@ const ThinkingCounter: FC<ThinkingCounterProps> = ({ label, statusText, startedA
 
 export const ReplyElapsed: FC<ReplyElapsedProps> = ({ label, seconds, modelLabel }) => {
   const displayTime = formatElapsedTime(seconds)
+  const displayModelLabel = modelLabel ? truncateModelLabel(modelLabel) : undefined
   const ariaLabel = modelLabel
     ? `${label} ${displayTime}, ${modelLabel}`
     : `${label} ${displayTime}`
@@ -63,7 +76,7 @@ export const ReplyElapsed: FC<ReplyElapsedProps> = ({ label, seconds, modelLabel
       <span>{label}</span>
       <span className="reply-elapsed-time">{displayTime}</span>
       {modelLabel ? <span aria-hidden="true">·</span> : null}
-      {modelLabel ? <span className="reply-model">{modelLabel}</span> : null}
+      {displayModelLabel ? <span className="reply-model" title={modelLabel}>{displayModelLabel}</span> : null}
     </span>
   )
 }

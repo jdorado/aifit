@@ -7,7 +7,9 @@ call the same service so neither transport can create a second workout contract.
 from __future__ import annotations
 
 from collections import defaultdict
+from contextvars import ContextVar
 from datetime import UTC, datetime
+from functools import wraps
 from hashlib import sha256
 from typing import Any, Literal
 from uuid import uuid4
@@ -381,11 +383,107 @@ def _quantity_dict(value: Quantity | dict[str, Any] | None) -> dict[str, Any] | 
     return {"value": value["value"], "unit": value["unit"]}
 
 
+_SESSION_AWARE_COLLECTION_METHODS = {
+    "aggregate",
+    "bulk_write",
+    "count_documents",
+    "delete_many",
+    "delete_one",
+    "distinct",
+    "find",
+    "find_one",
+    "find_one_and_delete",
+    "find_one_and_replace",
+    "find_one_and_update",
+    "insert_many",
+    "insert_one",
+    "replace_one",
+    "update_many",
+    "update_one",
+}
+
+
+class _SessionCollection:
+    """Inject the active transaction session into collection operations."""
+
+    def __init__(self, collection: Any, session_var: ContextVar[Any]):
+        self._collection = collection
+        self._session_var = session_var
+
+    def __getattr__(self, name: str) -> Any:
+        operation = getattr(self._collection, name)
+        if name not in _SESSION_AWARE_COLLECTION_METHODS or not callable(operation):
+            return operation
+
+        @wraps(operation)
+        def with_session(*args: Any, **kwargs: Any) -> Any:
+            session = self._session_var.get()
+            if session is not None:
+                kwargs.setdefault("session", session)
+            return operation(*args, **kwargs)
+
+        return with_session
+
+    def __getitem__(self, name: str) -> "_SessionCollection":
+        return _SessionCollection(self._collection[name], self._session_var)
+
+
+class _SessionDatabase:
+    """Keep collection access transaction-aware without changing domain calls."""
+
+    def __init__(self, database: Any, session_var: ContextVar[Any]):
+        self._database = database
+        self._session_var = session_var
+
+    def __getattr__(self, name: str) -> Any:
+        value = getattr(self._database, name)
+        if name in {"client", "name", "read_concern", "read_preference", "write_concern"}:
+            return value
+        return _SessionCollection(value, self._session_var)
+
+    def __getitem__(self, name: str) -> _SessionCollection:
+        return _SessionCollection(self._database[name], self._session_var)
+
+
+def transactional_mutation(method: Any) -> Any:
+    """Run a mutation and its authoritative receipt in one Mongo transaction."""
+
+    @wraps(method)
+    async def wrapped(self: "WorkoutService", *args: Any, **kwargs: Any) -> Any:
+        if self._session_var.get() is not None:
+            return await method(self, *args, **kwargs)
+        try:
+            return await self._run_transaction(lambda: method(self, *args, **kwargs))
+        except DuplicateKeyError:
+            # A concurrent request may win a unique-key race after this
+            # transaction's snapshot. Retry the complete operation so its
+            # request receipt becomes the idempotent source of truth.
+            return await self._run_transaction(lambda: method(self, *args, **kwargs))
+
+    return wrapped
+
+
 class WorkoutService:
-    """Canonical persistence service for end-state workout records."""
+    """Canonical persistence service for end-state workout records.
+
+    Mutation methods require a MongoDB deployment that supports multi-document
+    transactions, such as a replica set or mongos.
+    """
 
     def __init__(self, database: Any):
-        self.db = database
+        self._session_var: ContextVar[Any] = ContextVar("aifit_workout_transaction_session", default=None)
+        self.db = _SessionDatabase(database, self._session_var)
+
+    async def _run_transaction(self, operation: Any) -> Any:
+        async with self.db.client.start_session() as session:
+            async def callback(transaction_session: Any) -> Any:
+                token = self._session_var.set(transaction_session)
+                try:
+                    return await operation()
+                finally:
+                    self._session_var.reset(token)
+
+            return await session.with_transaction(callback)
 
     async def ensure_indexes(self) -> None:
         await self.db.profiles.create_index([("account_id", ASCENDING)], unique=True)
@@ -413,6 +511,11 @@ class WorkoutService:
             await self.db.mutation_receipts.insert_one(document)
             return response
         except DuplicateKeyError:
+            # A duplicate inside a transaction aborts that transaction. Let the
+            # transaction wrapper roll it back; the non-transactional fallback
+            # preserves the existing idempotency behavior for direct callers.
+            if self._session_var.get() is not None:
+                raise
             existing = await self._receipt(account_id, request_id, fingerprint)
             if existing is None:
                 raise
@@ -429,6 +532,7 @@ class WorkoutService:
             return self._public(existing, ("account_id",))
         return {"profile_id": new_id("prof"), "schema_version": SCHEMA_VERSION, "revision": None, "content_md": "", "updated_at": None}
 
+    @transactional_mutation
     async def put_profile(self, account_id: str, content_md: str, expected_revision: str | None, request_id: str, actor: dict[str, Any]) -> dict[str, Any]:
         fingerprint = _fingerprint({"profile": content_md, "expected_revision": expected_revision, "actor": actor})
         prior = await self._receipt(account_id, request_id, fingerprint)
@@ -445,6 +549,7 @@ class WorkoutService:
         await self.db.profiles.replace_one({"account_id": account_id}, document, upsert=True)
         return await self._save_receipt(account_id, request_id, fingerprint, self.receipt("profile", document["profile_id"], revision, request_id))
 
+    @transactional_mutation
     async def create_exercise(self, account_id: str, definition: ExerciseDefinitionInput, request_id: str, actor: dict[str, Any], expected_revision: str | None = None) -> dict[str, Any]:
         fingerprint = _fingerprint({"definition": definition.model_dump(mode="json"), "expected_revision": expected_revision, "actor": actor})
         prior = await self._receipt(account_id, request_id, fingerprint)
@@ -477,6 +582,7 @@ class WorkoutService:
             raise WorkoutDomainError("exercise_not_found", "Exercise revision was not found.", 404)
         return self._public(document, ("account_id", "_id"))
 
+    @transactional_mutation
     async def draft_plan(self, account_id: str, input: PlanInput, expected_revision: str | None, request_id: str, actor: dict[str, Any], plan_id: str | None = None) -> dict[str, Any]:
         fingerprint = _fingerprint({"plan": input.model_dump(mode="json"), "expected_revision": expected_revision, "plan_id": plan_id, "actor": actor})
         prior = await self._receipt(account_id, request_id, fingerprint)
@@ -494,6 +600,7 @@ class WorkoutService:
         await self.db.plans.insert_one(document)
         return await self._save_receipt(account_id, request_id, fingerprint, self.receipt("plan", identifier, revision, request_id))
 
+    @transactional_mutation
     async def draft_blueprint(self, account_id: str, input: BlueprintInput, expected_revision: str | None, request_id: str, actor: dict[str, Any], blueprint_id: str | None = None) -> dict[str, Any]:
         fingerprint = _fingerprint({"blueprint": input.model_dump(mode="json"), "expected_revision": expected_revision, "blueprint_id": blueprint_id, "actor": actor})
         prior = await self._receipt(account_id, request_id, fingerprint)
@@ -505,13 +612,13 @@ class WorkoutService:
                 raise WorkoutDomainError("stale_revision", "Blueprint changed. Pull it before editing.")
         elif expected_revision is not None:
             raise WorkoutDomainError("invalid_blueprint_revision", "A new blueprint cannot declare an expected revision.", 422)
-        await self._validate_blueprint_exercises(account_id, input)
         identifier, revision, timestamp = blueprint_id or new_id("bp"), new_revision(), utc_now()
         document = {"account_id": account_id, "blueprint_id": identifier, "revision": revision, "schema_version": SCHEMA_VERSION,
                     "status": "draft", "created_at": timestamp, "updated_at": timestamp, "updated_by": actor, **input.model_dump(mode="json")}
         await self.db.blueprints.insert_one(document)
         return await self._save_receipt(account_id, request_id, fingerprint, self.receipt("blueprint", identifier, revision, request_id))
 
+    @transactional_mutation
     async def solidify_blueprint(self, account_id: str, input: BlueprintInput, expected_revision: str | None,
                                  request_id: str, actor: dict[str, Any], blueprint_id: str | None = None) -> dict[str, Any]:
         """Validate, persist, and activate one complete blueprint revision."""
@@ -532,8 +639,6 @@ class WorkoutService:
         elif expected_revision is not None:
             raise WorkoutDomainError("invalid_blueprint_revision", "A new blueprint cannot declare an expected revision.", 422)
 
-        # Complete validation happens before the canonical revision or active pointer is written.
-        await self._validate_blueprint_exercises(account_id, input)
         identifier, revision, timestamp = blueprint_id or new_id("bp"), new_revision(), utc_now()
         document = {
             "account_id": account_id,
@@ -561,19 +666,7 @@ class WorkoutService:
         response["blueprint"] = self._public(document, ("account_id", "_id"))
         return await self._save_receipt(account_id, request_id, fingerprint, response)
 
-    async def _validate_blueprint_exercises(self, account_id: str, input: BlueprintInput) -> None:
-        await self._validate_candidates(account_id, [
-            candidate for day in input.days for segment in day.segments for slot in segment.slots for candidate in slot.candidates
-        ])
-
-    async def _validate_candidates(self, account_id: str, candidates: list[Candidate]) -> None:
-        for candidate in candidates:
-            document = await self.db.exercises.find_one({"account_id": account_id, "exercise_id": candidate.exercise_id, "revision": candidate.exercise_revision})
-            if not document:
-                raise WorkoutDomainError("exercise_revision_not_found", f"Blueprint references unavailable exercise {candidate.exercise_id}.", 422)
-            if candidate.prescription.metric not in document["metrics"]:
-                raise WorkoutDomainError("exercise_metric_mismatch", f"{candidate.exercise_id} does not support this prescription metric.", 422)
-
+    @transactional_mutation
     async def publish(self, account_id: str, input: PublishInput, actor: dict[str, Any]) -> dict[str, Any]:
         fingerprint = _fingerprint(input.model_dump(mode="json"))
         prior = await self._receipt(account_id, input.request_id, fingerprint)
@@ -638,6 +731,7 @@ class WorkoutService:
             raise WorkoutDomainError("blueprint_date_uncovered", "The active blueprint does not cover this date.")
         return {"blueprint": self._public(blueprint, ("account_id", "_id"))}
 
+    @transactional_mutation
     async def generate(self, account_id: str, input: GenerateInput) -> dict[str, Any]:
         fingerprint = _fingerprint(input.model_dump(mode="json"))
         prior = await self._receipt(account_id, input.request_id, fingerprint)
@@ -654,13 +748,7 @@ class WorkoutService:
         if not day:
             raise WorkoutDomainError("blueprint_day_missing", "The active blueprint has no day for this date.")
         workout = await self._materialize(account_id, blueprint, day, input)
-        try:
-            await self.db.workouts.insert_one(workout)
-        except DuplicateKeyError:
-            current = await self.db.workouts.find_one({"account_id": account_id, "date": input.date})
-            if not current:
-                raise
-            workout = current
+        await self.db.workouts.insert_one(workout)
         response = self.receipt("workout", workout["workout_id"], workout["revision"], input.request_id, "generated")
         response["workout"] = self._public(workout, ("account_id", "_id"))
         return await self._save_receipt(account_id, input.request_id, fingerprint, response)
@@ -684,7 +772,7 @@ class WorkoutService:
                     candidate = sorted(available, key=lambda item: (item["priority"], item["candidate_id"]))[index]
                     available = [item for item in available if item["candidate_id"] != candidate["candidate_id"]]
                     selected_exercises.add(candidate["exercise_id"])
-                    exercise = await self.exercise(account_id, candidate["exercise_id"], candidate["exercise_revision"])
+                    exercise = await self._candidate_exercise(account_id, candidate)
                     snapshot = {key: exercise[key] for key in ("exercise_id", "revision", "name", "movement_pattern", "primary_muscles", "secondary_muscles", "equipment_kind", "laterality", "load_basis")}
                     snapshot["exercise_revision"] = snapshot.pop("revision")
                     snapshot["equipment_profile_id"] = candidate.get("equipment_profile_id")
@@ -709,6 +797,29 @@ class WorkoutService:
                 "lineage": {"source": input.source, "blueprint_id": blueprint["blueprint_id"],
                             "blueprint_revision": blueprint["revision"], "day_id": day["day_id"], "decision_receipt": {"engine": "bounded_ranker_v1", "selections": decisions}},
                 "created_at": timestamp, "updated_at": timestamp}
+
+    async def _candidate_exercise(self, account_id: str, candidate: dict[str, Any]) -> dict[str, Any]:
+        document = await self.db.exercises.find_one({
+            "account_id": account_id,
+            "exercise_id": candidate["exercise_id"],
+            "revision": candidate["exercise_revision"],
+        })
+        if document:
+            return document
+        exercise_id = candidate["exercise_id"]
+        name = exercise_id.removeprefix("ex_").replace("_", " ").strip().title() or exercise_id
+        return {
+            "exercise_id": exercise_id,
+            "revision": candidate["exercise_revision"],
+            "name": name,
+            "movement_pattern": "",
+            "primary_muscles": [],
+            "secondary_muscles": [],
+            "equipment_kind": "",
+            "laterality": "bilateral",
+            "load_basis": "total",
+            "instructions_md": candidate.get("rationale_md") or "",
+        }
 
     @staticmethod
     def _cues(candidate: dict[str, Any], exercise: dict[str, Any]) -> str:
@@ -757,6 +868,7 @@ class WorkoutService:
         rows = await self.db.workouts.find({"account_id": account_id, "date": {"$gte": start, "$lte": end}, "deleted_at": {"$exists": False}}).sort("date", ASCENDING).to_list()
         return [self._public(row, ("account_id", "_id")) for row in rows]
 
+    @transactional_mutation
     async def log_set(self, account_id: str, workout_id: str, set_id: str, input: SetLogInput) -> dict[str, Any]:
         fingerprint = _fingerprint({"workout_id": workout_id, "set_id": set_id, **input.model_dump(mode="json")})
         prior = await self._receipt(account_id, input.request_id, fingerprint)
@@ -808,6 +920,7 @@ class WorkoutService:
                     "rpe": actual.get("rpe")}
         await self.db.performance_index.replace_one({"account_id": account_id, "workout_id": workout["workout_id"], "set_id": set_row["set_id"]}, document, upsert=True)
 
+    @transactional_mutation
     async def swap(self, account_id: str, workout_id: str, instance_id: str, input: SwapInput) -> dict[str, Any]:
         fingerprint = _fingerprint({"workout_id": workout_id, "instance_id": instance_id, **input.model_dump(mode="json")})
         prior = await self._receipt(account_id, input.request_id, fingerprint)
@@ -852,7 +965,7 @@ class WorkoutService:
             raise WorkoutDomainError("no_eligible_swap", "No eligible candidate remains in this blueprint slot.")
         index, probabilities = _decision_index(f"{workout_id}:{instance_id}:{input.request_id}", candidates, input.source)
         candidate = sorted(candidates, key=lambda item: (item["priority"], item["candidate_id"]))[index]
-        exercise = await self.exercise(account_id, candidate["exercise_id"], candidate["exercise_revision"])
+        exercise = await self._candidate_exercise(account_id, candidate)
         snapshot = {key: exercise[key] for key in ("exercise_id", "revision", "name", "movement_pattern", "primary_muscles", "secondary_muscles", "equipment_kind", "laterality", "load_basis")}
         snapshot["exercise_revision"] = snapshot.pop("revision")
         snapshot["equipment_profile_id"] = candidate.get("equipment_profile_id")
@@ -878,6 +991,7 @@ class WorkoutService:
         response["workout"] = self._public(workout, ("account_id", "_id"))
         return await self._save_receipt(account_id, input.request_id, fingerprint, response)
 
+    @transactional_mutation
     async def override(self, account_id: str, input: WorkoutOverrideInput, actor: dict[str, Any]) -> dict[str, Any]:
         """Replace an unstarted day with a typed agent exception and preserve lineage."""
         fingerprint = _fingerprint({"override": input.model_dump(mode="json")})
@@ -892,9 +1006,6 @@ class WorkoutService:
         target_revision = current["revision"] if current else None
         if current and any(set_row.get("actual") is not None for segment in current["segments"] for item in segment["items"] for set_row in item["sets"]):
             raise WorkoutDomainError("completed_workout_locked", "A workout with completed sets cannot be replaced.")
-        await self._validate_candidates(account_id, [
-            candidate for segment in input.segments for slot in segment.slots for candidate in slot.candidates
-        ])
         # An exception can target a date that the current blueprint does not
         # cover. The active blueprint still supplies timezone and hard
         # constraints, while the exception owns the target day's structure.

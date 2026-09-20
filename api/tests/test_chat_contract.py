@@ -201,7 +201,19 @@ async def test_completed_turn_backfills_missing_execution_preset(monkeypatch):
         {"account_id": "acc_1"}, turn,
         {"status": "completed", "messages": turn["messages"], "preset": preset},
     )
-    assert result["preset"] == preset
+    assert result["preset"] == {**preset, "provider": "openrouter"}
+
+
+def test_openrouter_route_is_projected_without_changing_ez_cli():
+    projected = main.public_model_control({
+        "ai": {"selectedId": "deepseek", "presets": [DEEPSEEK_PRESET]},
+        "models": [{"cli": "codex", "model": DEEPSEEK["model"], "name": "DeepSeek", "efforts": ["max"]}],
+        "activeSessionId": "session_1",
+    })
+
+    assert projected["presets"][0]["cli"] == "codex"
+    assert projected["presets"][0]["provider"] == "openrouter"
+    assert projected["models"][0]["provider"] == "openrouter"
 
 
 def ez_control(selected_id, presets, models, session="session_1"):
@@ -233,7 +245,8 @@ async def test_chat_models_locks_disallowed_ez_selection(tmp_path, monkeypatch, 
             return ez_control("grok", [GROK_PRESET, DEEPSEEK_PRESET, LUNA_PRESET], CATALOG)
         assert body == {
             "action": "model", "expectedSession": "session_1",
-            "cli": DEEPSEEK["cli"], "model": DEEPSEEK["model"], "effort": DEEPSEEK["effort"],
+            "cli": DEEPSEEK["cli"], "provider": "openrouter",
+            "model": DEEPSEEK["model"], "effort": DEEPSEEK["effort"],
         }
         return ez_control("deepseek", [GROK_PRESET, DEEPSEEK_PRESET, LUNA_PRESET], CATALOG, "session_2")
 
@@ -245,6 +258,32 @@ async def test_chat_models_locks_disallowed_ez_selection(tmp_path, monkeypatch, 
     assert result["selected_id"] == "deepseek"
     assert calls[0] == ("GET", "/v1/control", None)
     assert calls[1][0:2] == ("POST", "/v1/control")
+
+
+@pytest.mark.asyncio
+async def test_model_selection_forwards_the_ez_provider_binding(tmp_path, monkeypatch, identity):
+    configure_policy(tmp_path, monkeypatch)
+    calls = []
+
+    async def ez_call(_binding, method, path, body=None):
+        calls.append((method, path, body))
+        if body and body["action"] == "new":
+            return ez_control("deepseek", [DEEPSEEK_PRESET], CATALOG[:2], "session_new")
+        return ez_control("deepseek", [DEEPSEEK_PRESET], CATALOG[:2], "session_selected")
+
+    monkeypatch.setattr(main, "db", SimpleNamespace(chat_turns=Turns()))
+    monkeypatch.setattr(main, "account_for", lambda *_args: async_value({"account_id": "acc_1", "tenant_id": "ten_1"}))
+    monkeypatch.setattr(main, "verified_binding", lambda *_args: async_value({"bindingId": "binding_1"}))
+    monkeypatch.setattr(main, "ez_call", ez_call)
+
+    await main.select_chat_model(main.ModelSelectionInput(
+        expected_session="session_old", cli=DEEPSEEK["cli"], model=DEEPSEEK["model"], effort=DEEPSEEK["effort"],
+    ), identity)
+
+    assert calls[1] == ("POST", "/v1/control", {
+        "action": "model", "expectedSession": "session_new", "cli": "codex",
+        "provider": "openrouter", "model": DEEPSEEK["model"], "effort": "max",
+    })
 
 
 @pytest.mark.asyncio

@@ -72,10 +72,11 @@ async def call(binding: dict, method: str, path: str, body: dict | None = None) 
 async def verified_binding(principal_id: str) -> dict:
     """Resolve the private binding and prove it still belongs to this owner."""
     binding = binding_for(principal_id)
+    if binding.get("ownerId") != principal_id:
+        raise HTTPException(503, "Chat binding does not match this account.")
     registration = await call(binding, "GET", "/v1/registration")
     binding_id = registration.get("bindingId")
-    configured_owner = binding.get("ownerId", principal_id)
-    if registration.get("ownerId") != configured_owner or not isinstance(binding_id, str) or not binding_id:
+    if registration.get("ownerId") != principal_id or not isinstance(binding_id, str) or not binding_id:
         raise HTTPException(503, "Chat binding does not match this account.")
     return {**binding, "bindingId": binding_id}
 

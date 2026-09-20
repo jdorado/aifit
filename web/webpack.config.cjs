@@ -4,14 +4,12 @@ const webpack = require('webpack')
 const HtmlWebpackPlugin = require('html-webpack-plugin')
 const CopyWebpackPlugin = require('copy-webpack-plugin')
 const dotenv = require('dotenv')
+const repositoryRoot = path.resolve(__dirname, '..')
 
 const envKeys = [
   'PRIVY_APP_ID',
   'PRIVY_CLIENT_ID',
   'API_BASE_URL',
-  'DISABLE_DEV_WORKOUT',
-  'DEV_PREVIEW_WORKOUT',
-  'DEV_LOCAL_AUTH_TOKEN',
   'APP_VERSION',
   'BUILD_TIME',
   'DEV_TLS_CERT',
@@ -22,16 +20,33 @@ const envKeys = [
   'VERCEL_GIT_COMMIT_REF',
 ]
 
-const parseEnvFile = (filename) => {
-  const envPath = path.resolve(__dirname, filename)
-  if (!fs.existsSync(envPath)) return {}
+const parseEnvFile = (filename, { required = false, external = false } = {}) => {
+  const envPath = external ? filename : path.resolve(__dirname, filename)
+  if (!fs.existsSync(envPath)) {
+    if (required) throw new Error(`Configured AIFIT_WEB_ENV_FILE does not exist: ${envPath}`)
+    return {}
+  }
   return dotenv.parse(fs.readFileSync(envPath))
 }
 
 const loadEnv = () => {
+  const externalEnvFile = (process.env.AIFIT_WEB_ENV_FILE || '').trim()
+  if (externalEnvFile) {
+    if (!path.isAbsolute(externalEnvFile)) {
+      throw new Error('AIFIT_WEB_ENV_FILE must be an absolute path outside the repository')
+    }
+    const relativeToRepository = path.relative(repositoryRoot, path.resolve(externalEnvFile))
+    if (!relativeToRepository
+      || (!relativeToRepository.startsWith('..') && !path.isAbsolute(relativeToRepository))) {
+      throw new Error('AIFIT_WEB_ENV_FILE must point outside the repository')
+    }
+  }
   const parsed = {
     ...parseEnvFile('.env'),
     ...parseEnvFile('.env.local'),
+    ...(externalEnvFile
+      ? parseEnvFile(externalEnvFile, { required: true, external: true })
+      : {}),
     ...process.env,
   }
   return envKeys.reduce((acc, key) => {
@@ -47,6 +62,9 @@ module.exports = (_env, argv) => {
   if (!env.BUILD_TIME) {
     env.BUILD_TIME = new Date().toISOString()
   }
+  const clientEnv = Object.fromEntries(
+    Object.entries(env).filter(([key]) => !['DEV_TLS_CERT', 'DEV_TLS_KEY'].includes(key))
+  )
   const serviceWorkerBuildId = [
     env.VERCEL_GIT_COMMIT_SHA || env.APP_VERSION || 'build',
     env.BUILD_TIME,
@@ -117,7 +135,7 @@ module.exports = (_env, argv) => {
         ],
       }),
       new webpack.DefinePlugin({
-        'process.env': JSON.stringify(env),
+        'process.env': JSON.stringify(clientEnv),
       }),
     ],
     devServer: {
@@ -133,10 +151,10 @@ module.exports = (_env, argv) => {
       static: {
         directory: path.resolve(__dirname, 'public'),
       },
-      allowedHosts: 'all',
+      allowedHosts: ['localhost', '127.0.0.1'],
       historyApiFallback: true,
       port: 5175,
-      host: '::',
+      host: '127.0.0.1',
       hot: true,
       client: {
         overlay: { errors: true, warnings: false },

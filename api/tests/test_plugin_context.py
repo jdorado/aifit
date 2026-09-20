@@ -35,6 +35,19 @@ def test_plugin_agent_surface_has_three_domain_routes():
     }
 
 
+@pytest.mark.parametrize("value", [
+    "file:///tmp/aifit-api",
+    "https://user:password@example.test/aifit",
+    "https://example.test/aifit?token=leak",
+    "https://example.test/aifit#fragment",
+])
+def test_agent_context_rejects_unsafe_api_origins(monkeypatch, value):
+    monkeypatch.setattr(main, "AIFIT_AGENT_CAPABILITY_SECRET", "test-secret-with-at-least-thirty-two-bytes")
+    monkeypatch.setattr(main, "AGENT_API_BASE_URL", value)
+
+    assert main.agent_run_context({"account_id": "acc_one", "tenant_id": "ten_one"}, "job_one") is None
+
+
 def test_agent_swap_intent_requires_blueprint_revision_and_has_no_source_choice():
     intent = main.AgentWorkoutSwapInput(
         workout_id="wrk_0123456789abcdef0123456789abcdef",
