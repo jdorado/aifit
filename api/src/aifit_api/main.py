@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import logging
 import os
 from datetime import UTC, datetime
 from typing import Any, Literal
@@ -64,6 +65,13 @@ MAX_INBOX_RUNS = 500
 MAX_MESSAGES_PER_RUN = 200
 MAX_MESSAGE_TEXT = 64_000
 AGENT_API_BASE_URL = os.getenv("AIFIT_AGENT_API_BASE_URL", "").rstrip("/")
+
+logger = logging.getLogger("aifit.api")
+if not AGENT_API_BASE_URL:
+    logger.warning(
+        "AIFIT_AGENT_API_BASE_URL is not configured; chat runs are admitted "
+        "without AIFit plugin context and every agent write refuses with "
+        "'no scoped application context'.")
 
 
 def agent_api_base_url() -> str | None:
