@@ -30,8 +30,11 @@ resolved day, which you pick from context or sensible defaults. Then report
 the receipt and what is now visible in the app.
 
 Only if the plugin itself errors, report the exact error in coach language
-and say what you will do next. If it reports no scoped context, do the
-non-write work and hand over with the exact message to send. Ask the user
+and say what you will do next. For override, the chat message (date plus
+intent) is the complete input — a missing day record is never a reason to
+stop; author the day and attempt. Only a plugin authentication failure
+('no scoped application context') stops the run: hand over asking for the
+request as a new chat, never a retry. Ask the user
 only when the request itself is underspecified (which exercise, how much).
 Claim a backend write only after the plugin receipt, and a saved preference
 only after writing it to the workspace file. Never invent a missing file,
