@@ -728,12 +728,6 @@ async def draft_plan_v1(body: PlanDraftInput, identity: Identity = Depends(requi
                                        body.expected_revision, body.request_id, {"kind": "browser", "account_id": account["account_id"]}, body.plan_id)
 
 
-@app.post("/v1/blueprints/validate")
-async def validate_blueprint_v1(body: BlueprintInput, identity: Identity = Depends(require_identity)) -> dict:
-    await browser_account(identity)
-    return {"valid": True, "schema_version": body.schema_version}
-
-
 @app.post("/v1/blueprints/draft")
 async def draft_blueprint_v1(body: BlueprintDraftInput, identity: Identity = Depends(require_identity)) -> dict:
     account = await browser_account(identity)

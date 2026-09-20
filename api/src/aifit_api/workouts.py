@@ -16,7 +16,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pymongo import ASCENDING, DESCENDING, ReturnDocument
-from pymongo.errors import DuplicateKeyError
+from pymongo.errors import DuplicateKeyError, OperationFailure
 
 
 SCHEMA_VERSION = 1
@@ -459,8 +459,20 @@ def transactional_mutation(method: Any) -> Any:
             # transaction's snapshot. Retry the complete operation so its
             # request receipt becomes the idempotent source of truth.
             return await self._run_transaction(lambda: method(self, *args, **kwargs))
+        except OperationFailure as error:
+            if not _transactions_unsupported(error):
+                raise
+            # Standalone MongoDB (the local development default) cannot run
+            # multi-document transactions. Fall back to direct execution;
+            # request receipts still provide idempotency.
+            return await method(self, *args, **kwargs)
 
     return wrapped
+
+
+def _transactions_unsupported(error: OperationFailure) -> bool:
+    """Detect a deployment without multi-document transaction support."""
+    return getattr(error, "code", None) == 20 or "Transaction numbers are only allowed" in str(error)
 
 
 class WorkoutService:
@@ -806,6 +818,9 @@ class WorkoutService:
         })
         if document:
             return document
+        # Agent-authored IDs need no prior catalog row. Synthesize display
+        # metadata from the ID only; never present the author's rationale as
+        # user-facing instructions.
         exercise_id = candidate["exercise_id"]
         name = exercise_id.removeprefix("ex_").replace("_", " ").strip().title() or exercise_id
         return {
@@ -818,7 +833,7 @@ class WorkoutService:
             "equipment_kind": "",
             "laterality": "bilateral",
             "load_basis": "total",
-            "instructions_md": candidate.get("rationale_md") or "",
+            "instructions_md": "",
         }
 
     @staticmethod

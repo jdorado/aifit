@@ -1,6 +1,7 @@
 from copy import deepcopy
 
 import pytest
+from pymongo.errors import OperationFailure
 
 from aifit_api.workouts import BlueprintInput, GenerateInput, WorkoutService
 
@@ -89,6 +90,21 @@ class FakeDatabase:
         if name in self.documents:
             return FakeCollection(self, name)
         raise AttributeError(name)
+
+
+class StandaloneClient(FakeClient):
+    """Mimic a standalone mongod without transaction support."""
+
+    def start_session(self):
+        raise OperationFailure(
+            "Transaction numbers are only allowed on a replica set member or mongos"
+        )
+
+
+class StandaloneDatabase(FakeDatabase):
+    def __init__(self):
+        super().__init__()
+        self.client = StandaloneClient(self)
 
 
 def matches(document, query):
@@ -190,3 +206,21 @@ async def test_solidify_and_generate_accept_agent_authored_exercise_ids():
     assert snapshot["exercise_id"] == "ex_chest_supported_row_machine"
     assert snapshot["name"] == "Chest Supported Row Machine"
     assert snapshot["exercise_revision"] == "rev_0123456789abcdef0123456789abcdef"
+
+
+@pytest.mark.asyncio
+async def test_solidify_falls_back_without_transaction_support():
+    database = StandaloneDatabase()
+    service = WorkoutService(database)
+    published = await service.solidify_blueprint(
+        "acc_one",
+        BlueprintInput(**blueprint()),
+        None,
+        "solidify-standalone-001",
+        {"kind": "agent", "job_id": "job_one"},
+    )
+
+    assert published["effect"] == "published"
+    assert len(database.documents["blueprints"]) == 1
+    assert database.documents["program_state"][0]["active_blueprint_id"] == published["resource_id"]
+    assert len(database.documents["mutation_receipts"]) == 1
