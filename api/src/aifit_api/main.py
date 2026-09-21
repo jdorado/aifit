@@ -28,12 +28,14 @@ from .model_policy import filter_control, require_allowed
 from .workouts import (
     BlueprintInput,
     ExerciseDefinitionInput,
+    ExerciseNoteInput,
     GenerateInput,
     PlanInput,
     PublishInput,
     SetLogInput,
     SwapInput,
     WorkoutDomainError,
+    WorkoutNotesInput,
     WorkoutOverrideInput,
     WorkoutService,
 )
@@ -694,6 +696,20 @@ async def log_workout_set_v1(workout_id: str, set_id: str, body: SetLogInput,
                              identity: Identity = Depends(require_identity)) -> dict:
     account = await browser_account(identity)
     return await workouts().log_set(account["account_id"], workout_id, set_id, body)
+
+
+@app.patch("/v1/workouts/{workout_id}/notes")
+async def update_workout_notes_v1(workout_id: str, body: WorkoutNotesInput,
+                                  identity: Identity = Depends(require_identity)) -> dict:
+    account = await browser_account(identity)
+    return await workouts().update_notes(account["account_id"], workout_id, body)
+
+
+@app.patch("/v1/workouts/{workout_id}/exercises/{exercise_instance_id}/notes")
+async def update_workout_exercise_notes_v1(workout_id: str, exercise_instance_id: str, body: ExerciseNoteInput,
+                                           identity: Identity = Depends(require_identity)) -> dict:
+    account = await browser_account(identity)
+    return await workouts().update_exercise_notes(account["account_id"], workout_id, exercise_instance_id, body)
 
 
 @app.post("/v1/workouts/{workout_id}/exercises/{exercise_instance_id}/swap")

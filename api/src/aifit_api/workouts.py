@@ -346,6 +346,19 @@ class SetLogInput(StrictModel):
     request_id: str = Field(min_length=1, max_length=160, pattern=r"^[A-Za-z0-9_.:-]+$")
 
 
+class WorkoutNotesInput(StrictModel):
+    notes: str = Field(max_length=4_000)
+    expected_revision: str = Field(pattern=r"^rev_[a-f0-9]{32}$")
+    request_id: str = Field(min_length=1, max_length=160, pattern=r"^[A-Za-z0-9_.:-]+$")
+
+
+class ExerciseNoteInput(StrictModel):
+    note: str = Field(max_length=2_000)
+    preset: Literal["pain", "hard", "easy", "form"] | None = None
+    expected_revision: str = Field(pattern=r"^rev_[a-f0-9]{32}$")
+    request_id: str = Field(min_length=1, max_length=160, pattern=r"^[A-Za-z0-9_.:-]+$")
+
+
 def exercise_load_key(snapshot: dict[str, Any]) -> str:
     return "|".join([
         str(snapshot.get("exercise_id", "")),
@@ -781,7 +794,7 @@ class WorkoutService:
                              "rest_after_round_seconds": segment["rest_after_round_seconds"], "items": items})
         timestamp = utc_now()
         return {"account_id": account_id, "workout_id": new_id("wrk"), "schema_version": SCHEMA_VERSION, "revision": new_revision(),
-                "date": day["date"], "timezone": blueprint["timezone"], "status": "planned", "title": day["title"], "segments": segments,
+                "date": day["date"], "timezone": blueprint["timezone"], "status": "planned", "title": day["title"], "notes": "", "segments": segments,
                 "lineage": {"source": input.source, "blueprint_id": blueprint["blueprint_id"],
                             "blueprint_revision": blueprint["revision"], "day_id": day["day_id"], "decision_receipt": {"engine": "bounded_ranker_v1", "selections": decisions}},
                 "created_at": timestamp, "updated_at": timestamp}
@@ -921,6 +934,60 @@ class WorkoutService:
         await self.db.performance_index.replace_one({"account_id": account_id, "workout_id": workout["workout_id"], "set_id": set_row["set_id"]}, document, upsert=True)
 
     @transactional_mutation
+    async def update_notes(self, account_id: str, workout_id: str, input: WorkoutNotesInput) -> dict[str, Any]:
+        """Store the typed day note on the workout record."""
+        fingerprint = _fingerprint({"workout_id": workout_id, **input.model_dump(mode="json")})
+        prior = await self._receipt(account_id, input.request_id, fingerprint)
+        if prior:
+            return prior
+        workout = await self.db.workouts.find_one({"account_id": account_id, "workout_id": workout_id, "deleted_at": {"$exists": False}})
+        if not workout:
+            raise WorkoutDomainError("workout_not_found", "Workout was not found.", 404)
+        if workout["revision"] != input.expected_revision:
+            raise WorkoutDomainError("stale_revision", "Workout changed. Pull the current revision before editing notes.")
+        workout["notes"] = input.notes
+        workout["revision"], workout["updated_at"] = new_revision(), utc_now()
+        replaced = await self.db.workouts.replace_one(
+            {"account_id": account_id, "workout_id": workout_id, "revision": input.expected_revision}, workout,
+        )
+        if not replaced.modified_count:
+            raise WorkoutDomainError("stale_revision", "Workout changed. Pull the current revision before editing notes.")
+        response = self.receipt("workout", workout_id, workout["revision"], input.request_id, "notes_updated")
+        response["workout"] = self._public(workout, ("account_id", "_id"))
+        return await self._save_receipt(account_id, input.request_id, fingerprint, response)
+
+    @transactional_mutation
+    async def update_exercise_notes(self, account_id: str, workout_id: str, instance_id: str, input: ExerciseNoteInput) -> dict[str, Any]:
+        """Store a typed feedback note on one workout exercise instance."""
+        fingerprint = _fingerprint({"workout_id": workout_id, "exercise_instance_id": instance_id, **input.model_dump(mode="json")})
+        prior = await self._receipt(account_id, input.request_id, fingerprint)
+        if prior:
+            return prior
+        workout = await self.db.workouts.find_one({"account_id": account_id, "workout_id": workout_id, "deleted_at": {"$exists": False}})
+        if not workout:
+            raise WorkoutDomainError("workout_not_found", "Workout was not found.", 404)
+        if workout["revision"] != input.expected_revision:
+            raise WorkoutDomainError("stale_revision", "Workout changed. Pull the current revision before editing feedback.")
+        target_item: dict[str, Any] | None = None
+        for segment in workout["segments"]:
+            for item in segment["items"]:
+                if item["exercise_instance_id"] == instance_id:
+                    target_item = item
+                    break
+        if not target_item:
+            raise WorkoutDomainError("exercise_instance_not_found", "Workout exercise was not found.", 404)
+        target_item["notes"] = {"note": input.note, "preset": input.preset, "updated_at": utc_now()}
+        workout["revision"], workout["updated_at"] = new_revision(), utc_now()
+        replaced = await self.db.workouts.replace_one(
+            {"account_id": account_id, "workout_id": workout_id, "revision": input.expected_revision}, workout,
+        )
+        if not replaced.modified_count:
+            raise WorkoutDomainError("stale_revision", "Workout changed. Pull the current revision before editing feedback.")
+        response = self.receipt("workout", workout_id, workout["revision"], input.request_id, "feedback_updated")
+        response["workout"] = self._public(workout, ("account_id", "_id"))
+        return await self._save_receipt(account_id, input.request_id, fingerprint, response)
+
+    @transactional_mutation
     async def swap(self, account_id: str, workout_id: str, instance_id: str, input: SwapInput) -> dict[str, Any]:
         fingerprint = _fingerprint({"workout_id": workout_id, "instance_id": instance_id, **input.model_dump(mode="json")})
         prior = await self._receipt(account_id, input.request_id, fingerprint)
@@ -991,6 +1058,9 @@ class WorkoutService:
             for index, item in enumerate(target_segment["items"]):
                 item["order"] = index + 1
         else:
+            # Feedback describes the substituted exercise; a different
+            # exercise must not inherit it.
+            target_item.pop("notes", None)
             target_item.update({"candidate_id": candidate["candidate_id"], "exercise_snapshot": snapshot, "cues_md": self._cues(candidate, exercise),
                                 "sets": new_sets})
         workout["status"] = self._workout_status(workout)
@@ -1086,6 +1156,9 @@ class WorkoutService:
         if current:
             materialized["workout_id"] = current["workout_id"]
             materialized["created_at"] = current["created_at"]
+            # A day note belongs to the target date, not to the replaced
+            # exercise selection; keep it while the override owns the day.
+            materialized["notes"] = current.get("notes", "")
         materialized["revision"] = new_revision()
         materialized["updated_at"] = timestamp
         if current:
