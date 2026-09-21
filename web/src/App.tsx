@@ -133,6 +133,14 @@ type ProfileState = {
   fontScale: number
 }
 
+type SetSyncRevert = {
+  weight: string
+  metric: string
+  done: boolean
+  skipped?: boolean
+  value_source?: SetState['value_source']
+}
+
 type PersistedMessage = {
   variant: 'user' | 'ai'
   text: string
@@ -896,9 +904,9 @@ const App = () => {
   const layoutViewportHeightRef = useRef(0)
   const workoutRevisionByOwnerDateRef = useRef<Record<string, string>>({})
   const workoutIdByOwnerDateRef = useRef<Record<string, string>>({})
-  const syncedSetKeysRef = useRef(new Set<string>())
+  const syncedSetKeysRef = useRef(new Map<string, string>())
   const pendingSetSyncsByDateRef = useRef<Record<string, number>>({})
-  const syncLoggedSetRef = useRef<((exerciseId: string, index: number) => void) | null>(null)
+  const syncLoggedSetRef = useRef<((exerciseId: string, index: number, previous?: SetSyncRevert | null) => void) | null>(null)
   const pendingWorkoutDatesRef = useRef(new Set<string>())
   const sessionLoadKeyRef = useRef<string | null>(null)
   const sessionReadyRef = useRef(false)
@@ -2550,16 +2558,29 @@ const App = () => {
     weekStartDayIndex,
   ])
 
-  const syncLoggedSet = useCallback(async (exerciseId: string, index: number) => {
+  const restoreSetState = useCallback((exerciseId: string, index: number, previous?: SetSyncRevert | null) => {
+    const currentList = setLogsRef.current[exerciseId]
+    const currentItem = currentList?.[index]
+    if (!currentItem) return
+    if (previous) {
+      currentItem.weight = previous.weight
+      currentItem.metric = previous.metric
+      currentItem.done = previous.done
+      currentItem.skipped = previous.skipped
+      currentItem.value_source = previous.value_source
+    } else if (currentItem.done) {
+      currentItem.done = false
+      currentItem.skipped = undefined
+    } else {
+      return
+    }
+    bumpData()
+  }, [bumpData])
+
+  const syncLoggedSet = useCallback(async (exerciseId: string, index: number, previous?: SetSyncRevert | null) => {
     // A set is only rendered as logged when its canonical actual lands. Any
     // local failure clears the optimistic done flag instead of diverging.
-    const revertLocal = () => {
-      const currentList = setLogsRef.current[exerciseId]
-      const currentItem = currentList?.[index]
-      if (!currentItem?.done) return
-      currentItem.done = false
-      bumpData()
-    }
+    const revertLocal = () => restoreSetState(exerciseId, index, previous)
     if (!canQuerySavedWorkoutSessions) { revertLocal(); return }
     const ownerId = coachActAsOwnerId ?? currentUserId
     const targetDate = selectedDay?.date ?? todayId
@@ -2572,16 +2593,19 @@ const App = () => {
     const setTarget = exercise?.sets[index]
     if (!workoutId || !revision || !exercise || !setItem || !setTarget?.setId || !setItem.done) { revertLocal(); return }
 
-    const load = parseActualLoad(setItem.weight)
-    const metric = parseActualMetric(exercise, setItem.metric)
-    if (!metric) { revertLocal(); return }
+    const skipped = setItem.skipped === true
+    const load = skipped ? null : parseActualLoad(setItem.weight)
+    const metric = skipped ? null : parseActualMetric(exercise, setItem.metric)
+    if (!skipped && !metric) { revertLocal(); return }
 
-    const fingerprint = JSON.stringify([workoutId, setTarget.setId, load, metric])
-    if (syncedSetKeysRef.current.has(fingerprint)) return
+    const setKey = `${workoutId}:${setTarget.setId}`
+    const fingerprint = JSON.stringify([skipped ? 'skipped' : metric, skipped ? null : load])
+    if (syncedSetKeysRef.current.get(setKey) === fingerprint) return
 
     const pending = pendingSetSyncsByDateRef.current
     pending[targetDate] = (pending[targetDate] ?? 0) + 1
     pendingWorkoutDatesRef.current.add(targetDate)
+    let refetchAfterSync = false
     try {
       const headers = { 'Content-Type': 'application/json', ...(await getPrivyAuthHeaders()) }
       const response = await apiFetch(
@@ -2590,7 +2614,7 @@ const App = () => {
           method: 'PATCH',
           headers,
           body: JSON.stringify({
-            actual: { status: 'completed', ...metric, ...(load ? { load } : {}) },
+            actual: skipped ? { status: 'skipped' } : { status: 'completed', ...metric, ...(load ? { load } : {}) },
             expected_revision: revision,
             request_id: crypto.randomUUID(),
           }),
@@ -2601,15 +2625,14 @@ const App = () => {
         // instead of retrying this write; if the pull fails, drop the
         // optimistic state so the UI never shows an unconfirmed actual.
         delete workoutRevisionByOwnerDateRef.current[ownerKey]
-        const refreshed = await refreshVisibleWorkoutSessions().catch(() => false)
-        if (!refreshed) revertLocal()
+        refetchAfterSync = true
         return
       }
       if (!response.ok) throw new Error(`Set log failed (${response.status})`)
       const receipt = await response.json() as BackendWorkoutReceipt
       const nextRevision = receipt.revision ?? receipt.workout?.revision
       if (nextRevision) workoutRevisionByOwnerDateRef.current[ownerKey] = nextRevision
-      syncedSetKeysRef.current.add(fingerprint)
+      syncedSetKeysRef.current.set(setKey, fingerprint)
     } catch (error) {
       console.warn('Canonical set log failed:', error)
       revertLocal()
@@ -2621,15 +2644,87 @@ const App = () => {
       } else {
         pending[targetDate] = remaining
       }
+      if (refetchAfterSync) {
+        const refreshed = await refreshVisibleWorkoutSessions().catch(() => false)
+        if (!refreshed) revertLocal()
+      }
     }
   }, [
-    bumpData,
     canQuerySavedWorkoutSessions,
     coachActAsOwnerId,
     currentUserId,
     getExercise,
     getPrivyAuthHeaders,
     refreshVisibleWorkoutSessions,
+    restoreSetState,
+    selectedDay?.date,
+    todayId,
+  ])
+
+  const unlogLoggedSet = useCallback(async (exerciseId: string, index: number, previous?: SetSyncRevert | null) => {
+    // Undo removes the canonical actual, then the local state returns to
+    // pending; a failed undo restores the logged state.
+    const revertLocal = () => restoreSetState(exerciseId, index, previous)
+    if (!canQuerySavedWorkoutSessions) { revertLocal(); return }
+    const ownerId = coachActAsOwnerId ?? currentUserId
+    const targetDate = selectedDay?.date ?? todayId
+    const ownerKey = `${ownerId}:${targetDate}`
+    const workoutId = workoutIdByOwnerDateRef.current[ownerKey]
+    const revision = workoutRevisionByOwnerDateRef.current[ownerKey]
+    const exercise = getExercise(exerciseId)
+    const stateList = setLogsRef.current[exerciseId]
+    const setItem = stateList?.[index]
+    const setTarget = exercise?.sets[index]
+    if (!workoutId || !revision || !exercise || !setItem || !setTarget?.setId) { revertLocal(); return }
+
+    const pending = pendingSetSyncsByDateRef.current
+    pending[targetDate] = (pending[targetDate] ?? 0) + 1
+    pendingWorkoutDatesRef.current.add(targetDate)
+    let refetchAfterSync = false
+    try {
+      const headers = { 'Content-Type': 'application/json', ...(await getPrivyAuthHeaders()) }
+      const response = await apiFetch(
+        `${API_BASE_URL}/v1/workouts/${encodeURIComponent(workoutId)}/sets/${encodeURIComponent(setTarget.setId)}/unlog`,
+        {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ expected_revision: revision, request_id: crypto.randomUUID() }),
+        },
+      )
+      if (response.status === 409) {
+        delete workoutRevisionByOwnerDateRef.current[ownerKey]
+        refetchAfterSync = true
+        return
+      }
+      if (!response.ok) throw new Error(`Set undo failed (${response.status})`)
+      const receipt = await response.json() as BackendWorkoutReceipt
+      const nextRevision = receipt.revision ?? receipt.workout?.revision
+      if (nextRevision) workoutRevisionByOwnerDateRef.current[ownerKey] = nextRevision
+      syncedSetKeysRef.current.delete(`${workoutId}:${setTarget.setId}`)
+    } catch (error) {
+      console.warn('Canonical set undo failed:', error)
+      revertLocal()
+    } finally {
+      const remaining = (pending[targetDate] ?? 1) - 1
+      if (remaining <= 0) {
+        delete pending[targetDate]
+        pendingWorkoutDatesRef.current.delete(targetDate)
+      } else {
+        pending[targetDate] = remaining
+      }
+      if (refetchAfterSync) {
+        const refreshed = await refreshVisibleWorkoutSessions().catch(() => false)
+        if (!refreshed) revertLocal()
+      }
+    }
+  }, [
+    canQuerySavedWorkoutSessions,
+    coachActAsOwnerId,
+    currentUserId,
+    getExercise,
+    getPrivyAuthHeaders,
+    refreshVisibleWorkoutSessions,
+    restoreSetState,
     selectedDay?.date,
     todayId,
   ])
@@ -2637,6 +2732,38 @@ const App = () => {
   useEffect(() => {
     syncLoggedSetRef.current = syncLoggedSet
   }, [syncLoggedSet])
+
+  const skipSet = useCallback((exerciseId: string, index: number) => {
+    if (!canLogSelectedDay) return
+    const exercise = getExercise(exerciseId)
+    const stateList = setLogsRef.current[exerciseId]
+    const setItem = stateList?.[index]
+    if (!exercise || !setItem || setItem.done) return
+    const previous: SetSyncRevert = { ...setItem }
+    setItem.weight = ''
+    setItem.metric = ''
+    setItem.value_source = undefined
+    setItem.done = true
+    setItem.skipped = true
+    bumpData()
+    void syncLoggedSetRef.current?.(exerciseId, index, previous)
+  }, [bumpData, canLogSelectedDay, getExercise])
+
+  const unlogSet = useCallback((exerciseId: string, index: number) => {
+    if (!canLogSelectedDay) return
+    const exercise = getExercise(exerciseId)
+    const stateList = setLogsRef.current[exerciseId]
+    const setItem = stateList?.[index]
+    if (!exercise || !setItem || !setItem.done) return
+    const previous: SetSyncRevert = { ...setItem }
+    setItem.weight = ''
+    setItem.metric = ''
+    setItem.value_source = undefined
+    setItem.done = false
+    setItem.skipped = undefined
+    bumpData()
+    void unlogLoggedSet(exerciseId, index, previous)
+  }, [bumpData, canLogSelectedDay, getExercise, unlogLoggedSet])
 
   const handleRefreshSession = useCallback(async () => {
     if (!currentUserId || !canQuerySavedWorkoutSessions) return false
@@ -3536,6 +3663,8 @@ const App = () => {
             onSelectDay={handleSelectDay}
             onBack={hideWorkoutDetail}
             onLogSet={logNextSet}
+            onSkipSet={skipSet}
+            onUnlogSet={unlogSet}
             onStartEditingSet={(exerciseId, index) => {
               const stateList = setLogsRef.current[exerciseId]
               const setItem = stateList?.[index]
@@ -3557,7 +3686,17 @@ const App = () => {
                   if (exercise?.metric === 'reps') {
                     setItem.metric = normalizeRepValue(setItem.metric)
                   }
-                  if (setItem.done) void syncLoggedSetRef.current?.(editingSet.exerciseId, editingSet.index)
+                  if (setItem.done) {
+                    const previous = editingSetSnapshot
+                      ? {
+                        weight: editingSetSnapshot.weight,
+                        metric: editingSetSnapshot.metric,
+                        done: true,
+                        value_source: editingSetSnapshot.value_source,
+                      }
+                      : null
+                    void syncLoggedSetRef.current?.(editingSet.exerciseId, editingSet.index, previous)
+                  }
                 }
               }
               setEditingSet(null)

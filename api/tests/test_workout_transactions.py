@@ -13,6 +13,11 @@ class ReplaceResult:
         self.modified_count = modified_count
 
 
+class DeleteResult:
+    def __init__(self, deleted_count):
+        self.deleted_count = deleted_count
+
+
 class FakeCollection:
     def __init__(self, database, name):
         self.database = database
@@ -36,6 +41,13 @@ class FakeCollection:
         if upsert:
             self.documents.append(deepcopy(document))
         return ReplaceResult(0)
+
+    async def delete_one(self, query, **_kwargs):
+        for index, row in enumerate(self.documents):
+            if matches(row, query):
+                del self.documents[index]
+                return DeleteResult(1)
+        return DeleteResult(0)
 
     async def find_one_and_update(self, query, update, upsert=False, **_kwargs):
         for index, row in enumerate(self.documents):

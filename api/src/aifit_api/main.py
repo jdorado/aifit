@@ -32,6 +32,7 @@ from .workouts import (
     PlanInput,
     PublishInput,
     SetLogInput,
+    SetUnlogInput,
     SwapInput,
     WorkoutDomainError,
     WorkoutOverrideInput,
@@ -694,6 +695,13 @@ async def log_workout_set_v1(workout_id: str, set_id: str, body: SetLogInput,
                              identity: Identity = Depends(require_identity)) -> dict:
     account = await browser_account(identity)
     return await workouts().log_set(account["account_id"], workout_id, set_id, body)
+
+
+@app.post("/v1/workouts/{workout_id}/sets/{set_id}/unlog")
+async def unlog_workout_set_v1(workout_id: str, set_id: str, body: SetUnlogInput,
+                               identity: Identity = Depends(require_identity)) -> dict:
+    account = await browser_account(identity)
+    return await workouts().unlog_set(account["account_id"], workout_id, set_id, body)
 
 
 @app.post("/v1/workouts/{workout_id}/exercises/{exercise_instance_id}/swap")

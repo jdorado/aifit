@@ -346,6 +346,11 @@ class SetLogInput(StrictModel):
     request_id: str = Field(min_length=1, max_length=160, pattern=r"^[A-Za-z0-9_.:-]+$")
 
 
+class SetUnlogInput(StrictModel):
+    expected_revision: str = Field(pattern=r"^rev_[a-f0-9]{32}$")
+    request_id: str = Field(min_length=1, max_length=160, pattern=r"^[A-Za-z0-9_.:-]+$")
+
+
 def exercise_load_key(snapshot: dict[str, Any]) -> str:
     return "|".join([
         str(snapshot.get("exercise_id", "")),
@@ -893,9 +898,45 @@ class WorkoutService:
         replaced = await self.db.workouts.replace_one({"account_id": account_id, "workout_id": workout_id, "revision": input.expected_revision}, workout)
         if not replaced.modified_count:
             raise WorkoutDomainError("stale_revision", "Workout changed. Pull the current revision before logging.")
-        if actual["status"] == "completed":
-            await self._index_performance(account_id, workout, item, set_row)
+        # A set edit keeps history exact: a completed set refreshes its row, a
+        # skipped or load-less edit removes the row it no longer owns.
+        await self._index_performance(account_id, workout, item, set_row)
         response = self.receipt("workout", workout_id, workout["revision"], input.request_id, "set_logged")
+        response["workout"] = self._public(workout, ("account_id", "_id"))
+        return await self._save_receipt(account_id, input.request_id, fingerprint, response)
+
+    @transactional_mutation
+    async def unlog_set(self, account_id: str, workout_id: str, set_id: str, input: SetUnlogInput) -> dict[str, Any]:
+        """Return one logged set to pending and remove its history effect."""
+        fingerprint = _fingerprint({"workout_id": workout_id, "set_id": set_id, **input.model_dump(mode="json")})
+        prior = await self._receipt(account_id, input.request_id, fingerprint)
+        if prior:
+            return prior
+        workout = await self.db.workouts.find_one({"account_id": account_id, "workout_id": workout_id, "deleted_at": {"$exists": False}})
+        if not workout:
+            raise WorkoutDomainError("workout_not_found", "Workout was not found.", 404)
+        if workout["revision"] != input.expected_revision:
+            raise WorkoutDomainError("stale_revision", "Workout changed. Pull the current revision before unlogging.")
+        matched: tuple[dict[str, Any], dict[str, Any]] | None = None
+        for segment in workout["segments"]:
+            for item in segment["items"]:
+                for set_row in item["sets"]:
+                    if set_row["set_id"] == set_id:
+                        matched = item, set_row
+                        break
+        if not matched:
+            raise WorkoutDomainError("set_not_found", "Workout set was not found.", 404)
+        item, set_row = matched
+        if set_row.get("actual") is None:
+            raise WorkoutDomainError("set_not_logged", "Workout set is not logged.")
+        set_row["actual"] = None
+        workout["status"] = self._workout_status(workout)
+        workout["revision"], workout["updated_at"] = new_revision(), utc_now()
+        replaced = await self.db.workouts.replace_one({"account_id": account_id, "workout_id": workout_id, "revision": input.expected_revision}, workout)
+        if not replaced.modified_count:
+            raise WorkoutDomainError("stale_revision", "Workout changed. Pull the current revision before unlogging.")
+        await self._index_performance(account_id, workout, item, set_row)
+        response = self.receipt("workout", workout_id, workout["revision"], input.request_id, "set_unlogged")
         response["workout"] = self._public(workout, ("account_id", "_id"))
         return await self._save_receipt(account_id, input.request_id, fingerprint, response)
 
@@ -909,11 +950,15 @@ class WorkoutService:
         return "planned"
 
     async def _index_performance(self, account_id: str, workout: dict[str, Any], item: dict[str, Any], set_row: dict[str, Any]) -> None:
-        actual = set_row["actual"]
-        snapshot = item["exercise_snapshot"]
-        load = actual.get("load")
-        if not load:
+        """Keep the history row for one set exact, or remove the one it no longer owns."""
+        actual = set_row.get("actual")
+        load = actual.get("load") if actual else None
+        if actual is None or actual.get("status") != "completed" or not load:
+            await self.db.performance_index.delete_one({
+                "account_id": account_id, "workout_id": workout["workout_id"], "set_id": set_row["set_id"],
+            })
             return
+        snapshot = item["exercise_snapshot"]
         document = {"account_id": account_id, "load_key": exercise_load_key(snapshot), "workout_id": workout["workout_id"],
                     "exercise_instance_id": item["exercise_instance_id"], "set_id": set_row["set_id"], "date": workout["date"],
                     "completed_at": actual["completed_at"], "load": load, "reps": actual.get("reps"), "duration_seconds": actual.get("duration_seconds"),

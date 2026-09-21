@@ -62,6 +62,8 @@ type WorkoutViewProps = {
   onSelectDay: (index: number, date: string) => void
   onBack: () => void
   onLogSet: (exerciseId?: string) => void
+  onSkipSet: (exerciseId: string, index: number) => void
+  onUnlogSet: (exerciseId: string, index: number) => void
   onStartEditingSet: (exerciseId: string, index: number) => void
   onSaveEditingSet: () => void
   onCancelEditingSet: () => void
@@ -112,6 +114,8 @@ const WorkoutView: FC<WorkoutViewProps> = ({
   onSelectDay,
   onBack,
   onLogSet,
+  onSkipSet,
+  onUnlogSet,
   onStartEditingSet,
   onSaveEditingSet,
   onCancelEditingSet,
@@ -374,6 +378,8 @@ const WorkoutView: FC<WorkoutViewProps> = ({
           holdTargetSec={holdTargetSec}
           holdPrepSec={holdPrepSec}
           canLogDay={canLogDay}
+          onSkipSet={onSkipSet}
+          onUnlogSet={onUnlogSet}
           onStartEditingSet={onStartEditingSet}
           onSaveEditingSet={onSaveEditingSet}
           onCancelEditingSet={onCancelEditingSet}

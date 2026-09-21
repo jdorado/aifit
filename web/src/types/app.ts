@@ -2,6 +2,7 @@ export type SetState = {
   weight: string
   metric: string
   done: boolean
+  skipped?: boolean
   value_source?: 'user_entered' | 'accepted_target' | 'legacy_unknown'
 }
 
