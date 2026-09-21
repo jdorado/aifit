@@ -16,7 +16,6 @@ aifit profile show
 aifit exercise show EXERCISE_ID [--revision REV]
 aifit exercise history EXERCISE_ID [--before DATE] [--limit N]
 aifit blueprint active [--date DATE]
-aifit program active [--date DATE]
 aifit workout show WORKOUT_ID
 aifit workout list --start DATE --end DATE
 ```
@@ -32,17 +31,11 @@ template.
 aifit profile update --markdown FILE|- --request-id KEY [--expected-revision REV]
 aifit exercise create --input FILE|- --request-id KEY [--expected-revision REV]
 
-aifit plan draft --markdown FILE|- --title TITLE --request-id KEY \
-  [--plan-id ID --expected-revision REV]
-
 aifit blueprint draft --input FILE|- --request-id KEY \
   [--blueprint-id ID --expected-revision REV]
 
 aifit blueprint solidify --input FILE|- --request-id KEY \
   [--blueprint-id ID --expected-revision REV]
-
-aifit program publish --plan-id ID --plan-revision REV \
-  --blueprint-id ID --blueprint-revision REV --request-id KEY
 
 aifit workout generate --date DATE [--source default|jev] --request-id KEY
 
@@ -66,11 +59,6 @@ reads or copies workout records for you.
 ## Profile artifact
 
 `profile update` takes Markdown only: the tenant profile and coaching context.
-
-## Plan artifact
-
-`plan draft` takes a `--title` and Markdown only: the long-form plan the owner
-reads.
 
 ## Exercise definition artifact
 

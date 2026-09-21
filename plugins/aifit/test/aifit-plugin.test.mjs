@@ -68,12 +68,9 @@ test('help exposes the canonical reads and the full write surface', async () => 
     'aifit exercise show',
     'aifit exercise history',
     'aifit exercise create',
-    'aifit plan draft',
     'aifit blueprint active',
     'aifit blueprint draft',
     'aifit blueprint solidify',
-    'aifit program active',
-    'aifit program publish',
     'aifit workout show',
     'aifit workout list',
     'aifit workout generate',
@@ -191,7 +188,7 @@ test('valid input is transported with only the Ez capability and typed options',
   });
 });
 
-test('profile and plan artifacts stream Markdown, never a JSON wrapper', async () => {
+test('profile streams Markdown, never a JSON wrapper', async () => {
   await withFetchOutput(async (fetchOutput) => {
     const profile = await runCli([
       'profile', 'update', '--markdown', '-', '--request-id', 'profile-test',
@@ -205,20 +202,10 @@ test('profile and plan artifacts stream Markdown, never a JSON wrapper', async (
       body: { content_md: '# Profile\n\nReturns from injury.\n', expected_revision: 'rev_test', request_id: 'profile-test' },
     });
 
-    const plan = await runCli([
-      'plan', 'draft', '--markdown', '-', '--title', 'Base block', '--request-id', 'plan-test',
-    ], { context: scopedContext, fetchOutput, input: '## Week 1\n' });
-    assert.equal(plan.code, 0, plan.stderr);
-    assert.deepEqual(await fetchRequest(fetchOutput), {
-      url: 'https://aifit.test/v1/agent/plans/draft',
-      method: 'POST',
-      headers: { authorization: 'Bearer capability-test', 'content-type': 'application/json' },
-      body: { title: 'Base block', content_md: '## Week 1\n', plan_id: null, expected_revision: null, request_id: 'plan-test' },
-    });
   });
 });
 
-test('exercise, log-set, generate, publish, and swap transport their typed payloads', async () => {
+test('exercise, log-set, generate, and swap transport their typed payloads', async () => {
   await withFetchOutput(async (fetchOutput) => {
     const definition = { exercise_id: 'ex_goblet_squat', name: 'Goblet squat' };
     const created = await runCli(['exercise', 'create', '--input', '-', '--request-id', 'exercise-test'], {
@@ -248,22 +235,6 @@ test('exercise, log-set, generate, publish, and swap transport their typed paylo
     assert.equal(generated.code, 0, generated.stderr);
     assert.deepEqual((await fetchRequest(fetchOutput)).body, {
       date: '2026-09-21', source: 'default', request_id: 'generate-test',
-    });
-
-    const published = await runCli([
-      'program', 'publish', '--plan-id', 'plan_0123456789abcdef0123456789abcdef',
-      '--plan-revision', 'rev_0123456789abcdef0123456789abcdef',
-      '--blueprint-id', 'bp_0123456789abcdef0123456789abcdef',
-      '--blueprint-revision', 'rev_abcdef0123456789abcdef0123456789',
-      '--request-id', 'publish-test',
-    ], { context: scopedContext, fetchOutput });
-    assert.equal(published.code, 0, published.stderr);
-    assert.deepEqual((await fetchRequest(fetchOutput)).body, {
-      plan_id: 'plan_0123456789abcdef0123456789abcdef',
-      plan_revision: 'rev_0123456789abcdef0123456789abcdef',
-      blueprint_id: 'bp_0123456789abcdef0123456789abcdef',
-      blueprint_revision: 'rev_abcdef0123456789abcdef0123456789',
-      request_id: 'publish-test',
     });
 
     const swap = await runCli([

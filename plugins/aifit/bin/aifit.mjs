@@ -30,17 +30,14 @@ Read:
   aifit exercise show EXERCISE_ID [--revision REV]
   aifit exercise history EXERCISE_ID [--before DATE] [--limit N]
   aifit blueprint active [--date DATE]
-  aifit program active [--date DATE]
   aifit workout show WORKOUT_ID
   aifit workout list --start DATE --end DATE
 
 Write (all require --request-id):
   aifit profile update --markdown FILE|- [--expected-revision REV]
   aifit exercise create --input FILE|- [--expected-revision REV]
-  aifit plan draft --markdown FILE|- --title TITLE [--plan-id ID --expected-revision REV]
   aifit blueprint draft --input FILE|- [--blueprint-id ID --expected-revision REV]
   aifit blueprint solidify --input FILE|- [--blueprint-id ID --expected-revision REV]
-  aifit program publish --plan-id ID --plan-revision REV --blueprint-id ID --blueprint-revision REV
   aifit workout generate --date DATE [--source default|jev]
   aifit workout log-set WORKOUT_ID SET_ID --input FILE|- --expected-revision REV
   aifit workout override --input FILE|- [--expected-revision REV]
@@ -48,7 +45,6 @@ Write (all require --request-id):
 
 Artifacts (full typed schema and rules are in the installed aifit skill):
   profile: Markdown
-  plan: title plus Markdown
   exercise definition: exercise_id, name, movement_pattern, primary_muscles,
     secondary_muscles, equipment_kind, laterality, load_basis, metrics,
     instructions_md
@@ -228,15 +224,6 @@ async function main() {
       expected_revision: optional(values, '--expected-revision') || null,
       request_id: required(values, '--request-id'),
     });
-  } else if (area === 'plan' && action === 'draft') {
-    const { values } = parseArgs(rest, new Set(['--markdown', '--title', '--plan-id', '--expected-revision', '--request-id']));
-    result = await call(context, 'POST', '/plans/draft', {
-      title: required(values, '--title'),
-      content_md: await textFile(required(values, '--markdown')),
-      plan_id: optional(values, '--plan-id') || null,
-      expected_revision: optional(values, '--expected-revision') || null,
-      request_id: required(values, '--request-id'),
-    });
   } else if (area === 'blueprint' && action === 'active') {
     const { values } = parseArgs(rest, new Set(['--date']));
     result = await call(context, 'GET', '/blueprints/active', undefined, {
@@ -256,20 +243,6 @@ async function main() {
       ...await jsonFile(required(values, '--input'), jsonShape('blueprint object', ['blueprint_id', 'expected_revision', 'request_id'])),
       blueprint_id: optional(values, '--blueprint-id') || null,
       expected_revision: optional(values, '--expected-revision') || null,
-      request_id: required(values, '--request-id'),
-    });
-  } else if (area === 'program' && action === 'active') {
-    const { values } = parseArgs(rest, new Set(['--date']));
-    result = await call(context, 'GET', '/programs/active', undefined, {
-      date: optional(values, '--date') ? date(values['--date'], '--date') : undefined,
-    });
-  } else if (area === 'program' && action === 'publish') {
-    const { values } = parseArgs(rest, new Set(['--plan-id', '--plan-revision', '--blueprint-id', '--blueprint-revision', '--request-id']));
-    result = await call(context, 'POST', '/programs/publish', {
-      plan_id: required(values, '--plan-id'),
-      plan_revision: required(values, '--plan-revision'),
-      blueprint_id: required(values, '--blueprint-id'),
-      blueprint_revision: required(values, '--blueprint-revision'),
       request_id: required(values, '--request-id'),
     });
   } else if (area === 'workout' && action === 'show') {

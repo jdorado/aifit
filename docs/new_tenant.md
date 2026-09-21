@@ -85,10 +85,9 @@ The native Ez agent owns conversation, context, memory, sessions, and decisions.
 The AIFit plugin is the deterministic app boundary:
 
 - canonical reads: `profile show`, `exercise show|history`, `blueprint active`,
-  `program active`, `workout show|list`;
-- writes: `profile update`, `exercise create`, `plan draft`,
-  `blueprint draft|solidify`, `program publish`, `workout generate`,
-  `workout log-set`, `workout swap`, `workout override`.
+  `workout show|list`;
+- writes: `profile update`, `exercise create`, `blueprint draft|solidify`,
+  `workout generate`, `workout log-set`, `workout swap`, `workout override`.
 
 The frontend reads canonical AIFit API data. It never reads or invokes the
 tenant plugin directly. The full typed artifact schema is in the plugin

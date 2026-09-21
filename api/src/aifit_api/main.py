@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import logging
 import os
@@ -21,6 +22,7 @@ from .auth import (
     require_agent_request,
     require_identity,
 )
+from . import telegram_admit
 from .ez import call as ez_call, provision_telegram, telegram_provisioning_configured, verified_binding
 from .model_policy import filter_control, require_allowed
 from .workouts import (
@@ -376,11 +378,29 @@ def public_turn_from_snapshot(run_id: str, request_id: str, snapshot: dict) -> d
     return result
 
 
+_telegram_admit_task: asyncio.Task | None = None
+_telegram_admit_stop: asyncio.Event | None = None
+
+
 @app.on_event("startup")
 async def indexes() -> None:
     await db.accounts.create_index([("privy_subject", ASCENDING)], unique=True)
     await db.accounts.create_index([("account_id", ASCENDING)], unique=True)
     await workouts().ensure_indexes()
+    global _telegram_admit_task, _telegram_admit_stop
+    if telegram_admit.admit_enabled() and _telegram_admit_task is None:
+        _telegram_admit_stop = asyncio.Event()
+        _telegram_admit_task = asyncio.create_task(telegram_admit.run_forever(_telegram_admit_stop))
+
+
+@app.on_event("shutdown")
+async def stop_background() -> None:
+    global _telegram_admit_task, _telegram_admit_stop
+    if _telegram_admit_stop is not None:
+        _telegram_admit_stop.set()
+    if _telegram_admit_task is not None:
+        await asyncio.gather(_telegram_admit_task, return_exceptions=True)
+    _telegram_admit_task, _telegram_admit_stop = None, None
 
 
 @app.get("/health")
@@ -782,19 +802,6 @@ async def agent_exercise_history_v1(
     return await workouts().history(capability.account_id, exercise_id, before, limit)
 
 
-@app.post("/v1/agent/plans/draft")
-async def agent_draft_plan_v1(
-    body: PlanDraftInput,
-    capability: AgentCapability = Depends(require_agent_capability),
-) -> dict:
-    require_agent_permission(capability, AGENT_WRITE)
-    require_agent_request(capability, body.request_id)
-    return await workouts().draft_plan(
-        capability.account_id, PlanInput(title=body.title, content_md=body.content_md),
-        body.expected_revision, body.request_id, agent_actor(capability), body.plan_id,
-    )
-
-
 @app.post("/v1/agent/blueprints/draft")
 async def agent_draft_blueprint_v1(
     body: BlueprintDraftInput,
@@ -864,25 +871,6 @@ async def agent_swap_v1(
             request_id=body.request_id,
         ),
     )
-
-
-@app.post("/v1/agent/programs/publish")
-async def agent_publish_program_v1(
-    body: PublishInput,
-    capability: AgentCapability = Depends(require_agent_capability),
-) -> dict:
-    require_agent_permission(capability, AGENT_WRITE)
-    require_agent_request(capability, body.request_id)
-    return await workouts().publish(capability.account_id, body, agent_actor(capability))
-
-
-@app.get("/v1/agent/programs/active")
-async def agent_active_program_v1(
-    date: str | None = None,
-    capability: AgentCapability = Depends(require_agent_capability),
-) -> dict:
-    require_agent_permission(capability, AGENT_READ)
-    return await workouts().active_release(capability.account_id, date)
 
 
 @app.post("/v1/agent/workouts/generate")

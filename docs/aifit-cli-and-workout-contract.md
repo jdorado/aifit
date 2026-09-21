@@ -15,16 +15,13 @@ aifit profile show
 aifit exercise show EXERCISE_ID [--revision REV]
 aifit exercise history EXERCISE_ID [--before DATE] [--limit N]
 aifit blueprint active [--date DATE]
-aifit program active [--date DATE]
 aifit workout show WORKOUT_ID
 aifit workout list --start DATE --end DATE
 
 aifit profile update --markdown FILE|- --request-id KEY [--expected-revision REV]
 aifit exercise create --input FILE|- --request-id KEY [--expected-revision REV]
-aifit plan draft --markdown FILE|- --title TITLE --request-id KEY [--plan-id ID --expected-revision REV]
 aifit blueprint draft --input FILE|- --request-id KEY [--blueprint-id ID --expected-revision REV]
 aifit blueprint solidify --input FILE|- --request-id KEY [--blueprint-id ID --expected-revision REV]
-aifit program publish --plan-id ID --plan-revision REV --blueprint-id ID --blueprint-revision REV --request-id KEY
 aifit workout generate --date DATE [--source default|jev] --request-id KEY
 aifit workout log-set WORKOUT_ID SET_ID --input FILE|- --expected-revision REV --request-id KEY
 aifit workout override --input FILE|- --request-id KEY [--expected-revision REV]
@@ -68,8 +65,9 @@ If every check passes, the API stores a new canonical revision with
 `status: "published"`, points the account's active blueprint at it, and
 returns a receipt plus the public published blueprint.
 
-There is no separate agent-facing `draft`, `validate`, or `program publish`
-sequence. Solidification is the publish boundary for the new integration. The
+`blueprint draft` stores a non-active revision; there is no separate
+agent-facing `validate` or `program publish` sequence, and solidification
+remains the publish boundary. The
 active blueprint ID/revision is the canonical workout authority; an older
 release pointer is valid only when it names that same blueprint revision.
 

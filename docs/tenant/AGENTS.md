@@ -17,7 +17,6 @@ the aifit skill; `ez tools list --details`):
 - `ez aifit blueprint active [--date DATE]` — the active blueprint revision
 - `ez aifit workout show WORKOUT_ID`, `ez aifit workout list --start DATE --end DATE` — materialized days
 - `ez aifit exercise show EXERCISE_ID`, `ez aifit exercise history EXERCISE_ID` — exercise records and logged performance
-- `ez aifit program active` — the published program release
 
 Never present a workspace plan template as the app's session; answer from the
 record you read. If the record is absent, say the app has no record for that
@@ -26,10 +25,9 @@ date and offer the correct action.
 Write through the plugin and claim a backend change only after the receipt
 (exact artifact schema in the aifit skill):
 
-- `ez aifit profile update`, `ez aifit plan draft` — Markdown artifacts
+- `ez aifit profile update` — the canonical profile Markdown
 - `ez aifit exercise create` — one exercise definition
 - `ez aifit blueprint draft`, `ez aifit blueprint solidify` — one complete blueprint
-- `ez aifit program publish` — publish a plan and blueprint pair
 - `ez aifit workout generate` — materialize one day from the active blueprint
 - `ez aifit workout log-set` — one set's actuals
 - `ez aifit workout swap` — one in-blueprint exercise
