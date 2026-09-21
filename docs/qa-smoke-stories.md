@@ -46,15 +46,23 @@ in-blueprint slot, or a complete `workout override` for a new day/week. The
 receipt and canonical readback show the requested change without silently
 changing the published blueprint.
 
+### VIEW-01 — Read the canonical workout
+
+I ask what my workout is today, or what the app currently shows.
+
+Pass when the agent answers from `ez aifit workout show` / `workout list` and
+`ez aifit blueprint active` (with optional `ez aifit exercise history`), names
+the same exercises the frontend renders, and never presents the workspace plan
+template as the app's session.
+
 ### LOG-01 — Log a set
 
 I finish a set and mark it logged with my actual reps and load.
 
-Pass when the set carries its actual values and the workout reads back as
-`in_progress`, or `completed` when every set has actuals. The receipt effect
-is `set_logged` with the new workout revision. Set logging is a UI action;
-the agent has no log command and works from the scoped canonical context
-supplied with the run.
+Pass when the agent reads the current workout revision with `workout show`,
+logs the actuals with `ez aifit workout log-set`, and the receipt effect is
+`set_logged` with the new revision. The workout reads back as `in_progress`,
+or `completed` when every set has actuals.
 
 ### LOAD-01 — Change the weights
 

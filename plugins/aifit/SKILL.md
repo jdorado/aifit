@@ -1,40 +1,106 @@
-# AIFit agent artifact writes
+# AIFit agent surface
 
-Stay inside the native Ez context and the exact local artifact files named by
-the owner. Do not search sibling repositories, legacy AIFit applications,
-installed plugin packages, API source, MongoDB, or runtime logs to recover a
-schema, exercise catalog, or prior run.
+You are this tenant's coach and the app record owner. These commands are your
+canonical read and write surface for the AIFit app. Read what you need through
+them; never invent a record, and do not search sibling repositories, legacy
+AIFit applications, installed plugin packages, API source, MongoDB, or runtime
+logs for one. Workout IDs, revisions, exercise revisions, and blueprint
+revisions always come from a read or from the native session that authored
+them. Reuse a request ID only when retrying the exact same payload after an
+uncertain result.
 
-You author exercise IDs and revisions freely: the API needs no prior catalog
-row and synthesizes display metadata from the ID. The only thing you must
-never invent is someone else's record — workout IDs, revisions, and
-blueprint revisions always come from native context. Reuse a request ID only
-when retrying the exact same payload after an uncertain result.
-
-Three writes. Author the typed JSON and stream it:
+## Reads
 
 ```sh
-cat /absolute/path/blueprint.json | ez aifit blueprint solidify \
-  --input - \
-  --request-id blueprint-<unique-key> \
-  [--blueprint-id ID --expected-revision REV]
-
-cat /absolute/path/exception-day.json | ez aifit workout override \
-  --input - \
-  --request-id override-<unique-key> \
-  [--expected-revision REV]
-
-cat /absolute/path/swap.json | ez aifit workout swap \
-  --input - \
-  --request-id swap-<unique-key> \
-  --expected-revision REV
+aifit profile show
+aifit exercise show EXERCISE_ID [--revision REV]
+aifit exercise history EXERCISE_ID [--before DATE] [--limit N]
+aifit blueprint active [--date DATE]
+aifit program active [--date DATE]
+aifit workout show WORKOUT_ID
+aifit workout list --start DATE --end DATE
 ```
 
-Use stdin (`--input -`) because Ez runs the plugin in an isolated container.
+Reads print the canonical JSON record the app renders. Use them whenever the
+user asks about what the app shows, today's session, a past workout, a load, or
+a current revision. Answer from the record, never from a workspace plan
+template.
+
+## Writes
+
+```sh
+aifit profile update --markdown FILE|- --request-id KEY [--expected-revision REV]
+aifit exercise create --input FILE|- --request-id KEY [--expected-revision REV]
+
+aifit plan draft --markdown FILE|- --title TITLE --request-id KEY \
+  [--plan-id ID --expected-revision REV]
+
+aifit blueprint draft --input FILE|- --request-id KEY \
+  [--blueprint-id ID --expected-revision REV]
+
+aifit blueprint solidify --input FILE|- --request-id KEY \
+  [--blueprint-id ID --expected-revision REV]
+
+aifit program publish --plan-id ID --plan-revision REV \
+  --blueprint-id ID --blueprint-revision REV --request-id KEY
+
+aifit workout generate --date DATE [--source default|jev] --request-id KEY
+
+aifit workout log-set WORKOUT_ID SET_ID --input FILE|- \
+  --expected-revision REV --request-id KEY
+
+aifit workout override --input FILE|- --request-id KEY \
+  [--expected-revision REV]
+
+aifit workout swap --input FILE|- --request-id KEY \
+  --expected-revision REV [--source default|jev]
+```
+
+Use stdin (`--input -` or `--markdown -`) because Ez runs the plugin in an
+isolated container. The agent swap path selects with JEV unless `--source`
+says otherwise. Use swap for one in-blueprint exercise; resolve any other
+item-level request into a complete target day and use override. Copying a
+previous day is resolved by you into that complete artifact; the plugin never
+reads or copies workout records for you.
+
+## Profile artifact
+
+`profile update` takes Markdown only: the tenant profile and coaching context.
+
+## Plan artifact
+
+`plan draft` takes a `--title` and Markdown only: the long-form plan the owner
+reads.
+
+## Exercise definition artifact
+
+`exercise create` takes one exercise definition:
+
+```json
+{
+  "exercise_id": "ex_goblet_squat",
+  "name": "Goblet squat",
+  "movement_pattern": "squat",
+  "primary_muscles": ["quadriceps", "glutes"],
+  "secondary_muscles": ["core"],
+  "equipment_kind": "dumbbell",
+  "laterality": "bilateral",
+  "load_basis": "per_hand",
+  "metrics": ["reps"],
+  "instructions_md": "Brace, sit between the hips, drive the floor away."
+}
+```
+
+Rules: `exercise_id` is `ex_` then `[a-z0-9_]{3,120}`; `laterality` is
+`bilateral`, `unilateral`, or `alternating`; `load_basis` is `total`,
+`per_side`, `per_hand`, `machine_stack`, `bodyweight`, `assisted`, or
+`band_level`; `metrics` holds one or both of `reps` and `duration_seconds`.
+Revise an existing exercise by passing the same `exercise_id` with
+`--expected-revision`.
 
 ## Blueprint artifact
 
-`blueprint solidify` takes one complete blueprint object:
+`blueprint draft` and `blueprint solidify` take one complete blueprint object:
 
 ```json
 {
@@ -130,6 +196,9 @@ Rules:
   `{"kind":"double_progression","increase_when":{"completed_reps_at_or_above":N,"max_rpe":R},"increment":{"value":V,"unit":U},"load_range":[{"value":A,"unit":U},{"value":B,"unit":U}]}`.
 - Hard-forbidden exercises cannot appear as candidates.
 
+`blueprint solidify` validates, publishes, and makes the revision active;
+`blueprint draft` stores a revision without activating it.
+
 ## Exception-day artifact
 
 `workout override` takes one complete resolved day:
@@ -149,16 +218,25 @@ Rules:
 ```
 
 Every slot has exactly one candidate, `selection_count` is 1, and candidate
-exercises are unique in the day. Pass `--expected-revision` only when native
-context holds the current target workout revision; otherwise omit it and let
-the backend resolve the unstarted target atomically. An item-level request
-("swap this one exercise", "do yesterday's workout today") is resolved into
-the complete target day first; the plugin never reads or copies workout
-records.
+exercises are unique in the day. Pass `--expected-revision` only when a read or
+native context holds the current target workout revision; otherwise omit it and
+let the backend resolve the unstarted target atomically. A completed target
+workout is locked.
+
+## Set actual artifact
+
+`workout log-set` records what was actually performed for one set:
+
+```json
+{"status": "completed", "reps": 8, "load": {"value": 40, "unit": "kg"}, "rpe": 8}
+```
+
+`status` is `completed` or `skipped`; a completed repetition set needs `reps`,
+a completed duration set needs `duration_seconds`; `load` is optional
+`{"value","unit"}`. Pass the workout revision from `workout show` as
+`--expected-revision`; a stale revision is rejected.
 
 ## Swap intent
-
-`workout swap` takes one in-blueprint exercise change:
 
 ```json
 {
@@ -170,10 +248,9 @@ records.
 ```
 
 `--expected-revision` is the current workout revision. Use swap (not override)
-for in-blueprint changes; the agent path always uses JEV selection, so never
-include `source`. If the required workout or blueprint context is absent, stop
-with structured feedback; never invent a candidate or turn a swap into an
-exception day.
+for in-blueprint changes. If the required workout or blueprint context is
+absent, stop with structured feedback; never invent a candidate or turn a swap
+into an exception day.
 
 ## Receipts and errors
 

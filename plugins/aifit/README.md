@@ -1,11 +1,12 @@
 # AIFit Ez plugin
 
-This is the minimal AIFit domain plugin for Ez. It exposes three deterministic
-writes: solidifying the agent-authored flexible workout blueprint, swapping a
-workout exercise within that blueprint, and publishing one resolved exceptional
-workout day in the AIFit API. It contains
-no model loop, conversation history, context reader, workout generator, or
-workout store.
+This is the AIFit domain plugin for Ez: the coach's canonical read and write
+surface for the AIFit app. Reads return the same records the frontend renders
+(profile, exercises and history, active blueprint, active program, workouts).
+Writes are deterministic domain operations (profile, exercises, plans,
+blueprints, program publication, workout generation, set logging, swaps, and
+resolved exception days). It contains no model loop, conversation history,
+context builder, workout generator, or workout store.
 
 Install the reviewed local package through the bound tenant launcher:
 
@@ -19,16 +20,16 @@ ez plugins start aifit
 The plugin runs only from an AIFit application turn. Ez passes its own
 `run.application.context.plugins.aifit` object to the one-shot command
 container; the CLI never accepts account identity, capability, or API URL as
-arguments. `ez aifit --help` is available after installation. The three commands
-are `ez aifit blueprint solidify`, `ez aifit workout swap`, and
-`ez aifit workout override`; a real mutation requires the AIFit API to issue
-that scoped context and to be reachable from the plugin container. Ez plugin
+arguments. `ez aifit --help` is available after installation. Ez plugin
 containers are isolated from the agent workspace, so the agent streams its
 authored artifact through stdin:
 
 ```sh
+aifit workout show wrk_0123456789abcdef0123456789abcdef
+aifit workout list --start 2026-09-21 --end 2026-09-27
+
 cat /absolute/path/blueprint.json | ez aifit blueprint solidify \
- --input - --request-id blueprint-<unique-key>
+  --input - --request-id blueprint-<unique-key>
 
 cat /absolute/path/exception-day.json | ez aifit workout override \
   --input - --request-id override-<unique-key>
@@ -37,14 +38,13 @@ cat /absolute/path/swap.json | ez aifit workout swap \
   --input - --request-id swap-<unique-key> --expected-revision REV
 ```
 
-The full typed artifact schema and its rules live in `SKILL.md`, which is
-installed with the plugin and is the agent-facing format contract. The
-override input is a complete resolved target-day artifact. Every override
+The full typed artifact schema, rules, and command list live in `SKILL.md`,
+which is installed with the plugin and is the agent-facing format contract.
+The override input is a complete resolved target-day artifact. Every override
 slot contains exactly one resolved candidate. The agent resolves item changes
-and copied days from its native context; a swap input contains the current
+and copied days from native context; a swap input contains the current
 `workout_id`, `exercise_instance_id`, `expected_blueprint_revision`, and a
-reason. The agent path always uses JEV selection. The plugin does not read or
-copy workout records. The frontend consumes the backend records separately.
+reason. The frontend consumes the same backend records separately.
 
 ## Local verification
 
@@ -61,7 +61,7 @@ npm pack --ignore-scripts
 ```
 
 Then inspect the exact source or tarball, install it through the bound Ez
-executor, and verify `ez aifit --help` plus one authorized AIFit write with
-canonical API readback. AIFit's product process merges the focused local branch
-to `main` before the VM/production smoke; npm/GitHub release work is outside
-this local package process.
+executor, and verify `ez aifit --help` plus one authorized read and one
+authorized write with canonical API readback. AIFit's product process merges
+the focused local branch to `main` before the VM/production smoke; npm/GitHub
+release work is outside this local package process.

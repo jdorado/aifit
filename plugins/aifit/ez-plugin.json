@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "id": "aifit",
-  "version": "0.1.0",
-  "description": "Solidify a flexible workout blueprint, swap within it, or publish one agent-authored exception day.",
+  "version": "0.2.0",
+  "description": "Read the canonical AIFit records and apply deterministic profile, plan, blueprint, and workout operations.",
   "commands": {
     "aifit": {
       "executable": "bin/aifit.mjs",

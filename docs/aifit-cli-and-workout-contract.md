@@ -7,39 +7,45 @@ consumer of the plugin; it is a consumer of the AIFit backend.
 
 ## 1. Boundary
 
-There are three narrow agent-facing AIFit writes:
+The agent-facing CLI is the coach's full application surface: canonical reads
+plus the deterministic writes the frontend uses.
 
 ```sh
-cat /absolute/path/blueprint.json | ez aifit blueprint solidify \
-  --input - \
-  --request-id blueprint-<unique-key> \
-  [--blueprint-id ID --expected-revision REV]
+aifit profile show
+aifit exercise show EXERCISE_ID [--revision REV]
+aifit exercise history EXERCISE_ID [--before DATE] [--limit N]
+aifit blueprint active [--date DATE]
+aifit program active [--date DATE]
+aifit workout show WORKOUT_ID
+aifit workout list --start DATE --end DATE
 
-cat /absolute/path/exception-day.json | ez aifit workout override \
-  --input - \
-  --request-id override-<unique-key> \
-  [--expected-revision REV]
-
-cat /absolute/path/swap.json | ez aifit workout swap \
-  --input - \
-  --request-id swap-<unique-key> \
-  --expected-revision REV
+aifit profile update --markdown FILE|- --request-id KEY [--expected-revision REV]
+aifit exercise create --input FILE|- --request-id KEY [--expected-revision REV]
+aifit plan draft --markdown FILE|- --title TITLE --request-id KEY [--plan-id ID --expected-revision REV]
+aifit blueprint draft --input FILE|- --request-id KEY [--blueprint-id ID --expected-revision REV]
+aifit blueprint solidify --input FILE|- --request-id KEY [--blueprint-id ID --expected-revision REV]
+aifit program publish --plan-id ID --plan-revision REV --blueprint-id ID --blueprint-revision REV --request-id KEY
+aifit workout generate --date DATE [--source default|jev] --request-id KEY
+aifit workout log-set WORKOUT_ID SET_ID --input FILE|- --expected-revision REV --request-id KEY
+aifit workout override --input FILE|- --request-id KEY [--expected-revision REV]
+aifit workout swap --input FILE|- --request-id KEY --expected-revision REV [--source default|jev]
 ```
 
-`--input -` is the normal Ez form: the agent reads the artifact from its
-workspace and streams it to the isolated plugin command container. A direct
-file path is valid only when the runtime explicitly mounts that path.
+`--input -` and `--markdown -` are the normal Ez form: the agent reads the
+artifact from its workspace and streams it to the isolated plugin command
+container. A direct file path is valid only when the runtime explicitly mounts
+that path.
 
 The native Ez agent owns the conversation, normal workspace and Markdown
 context, profile, goals, constraints, research, exercise knowledge, relevant
 history, complete blueprint/exception authoring, and the decision to retry or
 ask for clarification.
 
-The AIFit plugin owns only transport of those explicit artifacts to the
-authoritative AIFit API. It does not read context, run a model, reconstruct a
-profile, generate a workout, or expose a second application workflow. A swap is
-the one small mutation for an in-blueprint mini-chat request; its candidate
-selection remains a backend decision constrained by the active blueprint.
+The AIFit plugin owns only transport: typed artifacts, ids, and read requests
+to the authoritative AIFit API. It does not run a model, reconstruct a profile,
+generate a workout outside the API's blueprint-constrained paths, or expose a
+second application workflow. The agent reads the records the frontend renders;
+it never rebuilds them from workspace files.
 
 AIFit backend owns schema and domain validation, canonical blueprint revisions,
 the active pointer, deterministic workout materialization, exceptional workout
@@ -92,8 +98,9 @@ release pointer is valid only when it names that same blueprint revision.
 ```
 
 The CLI never accepts account IDs, tenant IDs, API URLs, or capabilities. Ez
-derives those from the signed run context and grants only the three narrow
-writes: `blueprints:write`, `workouts:swap`, and `workouts:override`.
+derives those from the signed run context and grants the surface in two
+permissions: `aifit:read` for canonical reads, `aifit:write` for domain
+mutations.
 
 ## 3. Exceptional workout artifact
 
@@ -144,8 +151,9 @@ sends this small intent through the plugin:
 }
 ```
 
-The CLI adds the request ID and current workout revision. The agent route always
-uses JEV selection. The backend verifies the expected active blueprint revision
+The CLI adds the request ID and current workout revision. The agent route
+selects with JEV unless `--source default` is passed explicitly. The backend
+verifies the expected active blueprint revision
 and the workout's blueprint lineage, then selects an unused candidate from the
 same blueprint slot, preserves every other workout item, and records the active
 blueprint ID/revision in the swap receipt. It rejects stale or completed
@@ -321,9 +329,8 @@ be added to the plugin skill or CLI.
 
 The plugin receives a run-scoped signed capability from Ez. The API validates
 the capability signature and expiry, account and job binding, and the exact
-permission for each operation: `blueprints:write` for solidification,
-`workouts:swap` for an in-blueprint swap, or `workouts:override` for an
-exception. The agent supplies none of those values.
+permission for each operation: `aifit:read` for canonical reads and
+`aifit:write` for domain mutations. The agent supplies none of those values.
 
 Blueprint/schema failures return structured validation feedback. Domain failures
 use a stable error code and message, for example:
@@ -349,35 +356,31 @@ Ez context is persisted as part of the blueprint mutation.
 
 ## 8. Explicit non-goals
 
-The AIFit plugin does not expose:
+The AIFit plugin does not expose model or conversation surfaces:
 
 ```text
 aifit context ...
-aifit profile ...
-aifit exercise ...
-aifit history ...
-aifit plan ...
+aifit chat ... | aifit conversation ... | aifit message ...
 aifit blueprint validate ...
-aifit blueprint draft ...
-aifit program ...
-aifit workout generate ...
-aifit workout list/show/log ...
+aifit account ... | aifit tenant ... | aifit telegram ...
 ```
 
 There is no AIFit model runner, prompt builder, conversation store, workspace
-reader, or frontend adapter inside the plugin. The minimal surface is the
-artifact boundary: author in Ez, solidify in AIFit, consume through the
-backend.
+reader, or frontend adapter inside the plugin. The surface is the canonical
+record boundary: read the app's records, author in Ez, apply deterministic
+operations in AIFit.
 
 ## 9. Verification expectations
 
 A local installation is complete only when:
 
 1. Ez inspects and pins the exact local plugin source revision.
-2. `ez aifit --help` shows only the three artifact-write commands.
-3. An invalid blueprint returns visible feedback without publishing.
-4. A valid blueprint returns a published receipt.
-5. A valid exception returns a workout receipt without changing the active
+2. `ez aifit --help` shows the canonical reads and writes.
+3. A canonical read (for example `aifit workout list`) returns the same record
+   the frontend renders.
+4. An invalid blueprint returns visible feedback without publishing.
+5. A valid blueprint returns a published receipt.
+6. A valid exception returns a workout receipt without changing the active
    blueprint revision.
 6. The active-blueprint route observes the unchanged published revision.
 7. Backend generation consumes that revision through `default` and `jev`, and

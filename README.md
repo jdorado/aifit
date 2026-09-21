@@ -6,7 +6,7 @@ minimal canonical API, and a narrow Ez plugin boundary.
 - `web/` is the React/TypeScript interaction surface;
 - `api/` owns authentication, canonical records, and deterministic domain
   operations;
-- `plugins/aifit/` exposes the three bounded workout writes used by Ez;
+- `plugins/aifit/` exposes the canonical reads and deterministic domain writes used by Ez;
 - `docs/tenant/AGENTS.md` is the tenant-runtime context template.
 
 Ez owns native context, memory, sessions, reasoning, and execution. The

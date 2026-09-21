@@ -1,7 +1,7 @@
 {
   "name": "@aifit/ez-plugin",
-  "version": "0.1.0",
-  "description": "The deterministic Ez boundary for AIFit blueprint and workout writes.",
+  "version": "0.2.0",
+  "description": "The deterministic Ez boundary for AIFit canonical reads and domain writes.",
   "license": "MIT",
   "type": "module",
   "engines": {
