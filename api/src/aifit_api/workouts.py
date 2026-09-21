@@ -8,7 +8,8 @@ from __future__ import annotations
 
 from collections import defaultdict
 from contextvars import ContextVar
-from datetime import UTC, datetime
+from copy import deepcopy
+from datetime import UTC, datetime, timedelta
 from functools import wraps
 from hashlib import sha256
 from typing import Any, Literal
@@ -22,6 +23,7 @@ from pymongo.errors import DuplicateKeyError, OperationFailure
 SCHEMA_VERSION = 1
 SEGMENT_KINDS = {"warmup", "straight_sets", "superset", "circuit", "interval", "mobility", "cooldown"}
 LOAD_BASES = {"total", "per_side", "per_hand", "machine_stack", "bodyweight", "assisted", "band_level"}
+LineageSource = Literal["default", "jev", "agent_override", "copy_last_week"]
 
 
 class WorkoutDomainError(ValueError):
@@ -293,6 +295,17 @@ class GenerateInput(StrictModel):
     request_id: str = Field(min_length=1, max_length=160, pattern=r"^[A-Za-z0-9_.:-]+$")
 
 
+class CopyLastWeekInput(StrictModel):
+    date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    expected_revision: str | None = Field(default=None, pattern=r"^rev_[a-f0-9]{32}$")
+    request_id: str = Field(min_length=1, max_length=160, pattern=r"^[A-Za-z0-9_.:-]+$")
+
+
+class ClearWorkoutInput(StrictModel):
+    expected_revision: str = Field(pattern=r"^rev_[a-f0-9]{32}$")
+    request_id: str = Field(min_length=1, max_length=160, pattern=r"^[A-Za-z0-9_.:-]+$")
+
+
 class SwapInput(StrictModel):
     source: Literal["default", "jev"] = "default"
     reason: str = Field(min_length=1, max_length=500)
@@ -353,6 +366,10 @@ def exercise_load_key(snapshot: dict[str, Any]) -> str:
         str(snapshot.get("load_basis", "")),
         str(snapshot.get("laterality", "")),
     ])
+
+
+def shift_date(date: str, days: int) -> str:
+    return (datetime.strptime(date, "%Y-%m-%d").date() + timedelta(days=days)).isoformat()
 
 
 def _decision_index(seed: str, candidates: list[dict[str, Any]], source: str) -> tuple[int, dict[str, float]]:
@@ -1101,6 +1118,154 @@ class WorkoutService:
                 raise WorkoutDomainError("stale_revision", "A workout was created concurrently. Pull it before overriding.") from None
         response = self.receipt("workout", materialized["workout_id"], materialized["revision"], input.request_id, "agent_override")
         response["workout"] = self._public(materialized, ("account_id", "_id"))
+        return await self._save_receipt(account_id, input.request_id, fingerprint, response)
+
+    @staticmethod
+    def _has_logged_sets(workout: dict[str, Any]) -> bool:
+        return any(
+            set_row.get("actual") is not None
+            for segment in workout.get("segments", [])
+            for item in segment["items"]
+            for set_row in item["sets"]
+        )
+
+    @transactional_mutation
+    async def copy_last_week(self, account_id: str, input: CopyLastWeekInput) -> dict[str, Any]:
+        """Copy the same weekday seven days earlier as fresh planned structure.
+
+        Only the segment/item shape, snapshots and targets travel; every set is
+        unlogged and every id is new. A target day that owns logged history is
+        never replaced.
+        """
+        try:
+            source_date = shift_date(input.date, -7)
+        except ValueError:
+            raise WorkoutDomainError("invalid_date", "date must be a valid calendar date.", 422) from None
+        fingerprint = _fingerprint({"date": input.date, "source_date": source_date, "expected_revision": input.expected_revision})
+        prior = await self._receipt(account_id, input.request_id, fingerprint)
+        if prior:
+            return prior
+        source = await self.db.workouts.find_one({"account_id": account_id, "date": source_date, "deleted_at": {"$exists": False}})
+        if not source:
+            raise WorkoutDomainError("copy_source_missing", f"No workout was saved for {source_date}.", 404)
+        current = await self.db.workouts.find_one({"account_id": account_id, "date": input.date, "deleted_at": {"$exists": False}})
+        if input.expected_revision is not None and (not current or current["revision"] != input.expected_revision):
+            raise WorkoutDomainError("stale_revision", "Workout changed. Pull the current revision before copying.")
+        if current and self._has_logged_sets(current):
+            raise WorkoutDomainError("workout_has_logged_sets", "This day has logged sets and cannot be replaced.")
+        timestamp = utc_now()
+        segments: list[dict[str, Any]] = []
+        for segment in source["segments"]:
+            items: list[dict[str, Any]] = []
+            for item in segment["items"]:
+                sets = [
+                    {"set_id": new_id("set"), "kind": set_row.get("kind", "work"), "target": deepcopy(set_row["target"]),
+                     "actual": None, "round": set_row.get("round", 1)}
+                    for set_row in item["sets"]
+                ]
+                items.append({
+                    "exercise_instance_id": new_id("wex"),
+                    "slot_id": item["slot_id"],
+                    "candidate_id": item["candidate_id"],
+                    "order": item["order"],
+                    "exercise_snapshot": deepcopy(item["exercise_snapshot"]),
+                    "sets": sets,
+                    "cues_md": item.get("cues_md", ""),
+                })
+            segments.append({
+                "segment_id": new_id("seg"),
+                "order": segment["order"],
+                "kind": segment["kind"],
+                "rounds": segment["rounds"],
+                "rest_after_round_seconds": segment["rest_after_round_seconds"],
+                "items": items,
+            })
+        source_lineage = source.get("lineage", {})
+        source_kind: LineageSource = "copy_last_week"
+        lineage: dict[str, Any] = {
+            "source": source_kind,
+            "copied_from": {"workout_id": source["workout_id"], "date": source["date"], "revision": source["revision"]},
+        }
+        # Keep the canonical blueprint identity so an in-blueprint swap can
+        # still resolve this day; exceptional-day metadata never travels.
+        for key in ("blueprint_id", "blueprint_revision", "day_id"):
+            if source_lineage.get(key):
+                lineage[key] = source_lineage[key]
+        document = {
+            "account_id": account_id,
+            "workout_id": current["workout_id"] if current else new_id("wrk"),
+            "schema_version": SCHEMA_VERSION,
+            "revision": new_revision(),
+            "date": input.date,
+            "timezone": source["timezone"],
+            "status": "planned",
+            "title": source["title"],
+            "segments": segments,
+            "lineage": lineage,
+            "created_at": current["created_at"] if current else timestamp,
+            "updated_at": timestamp,
+        }
+        if current:
+            replaced = await self.db.workouts.replace_one(
+                {"account_id": account_id, "workout_id": document["workout_id"], "revision": current["revision"]}, document,
+            )
+            if not replaced.modified_count:
+                raise WorkoutDomainError("stale_revision", "Workout changed. Pull the current revision before copying.")
+        else:
+            try:
+                await self.db.workouts.insert_one(document)
+            except DuplicateKeyError:
+                raise WorkoutDomainError("stale_revision", "A workout was created concurrently. Pull it before copying.") from None
+        response = self.receipt("workout", document["workout_id"], document["revision"], input.request_id, "copied")
+        response["workout"] = self._public(document, ("account_id", "_id"))
+        return await self._save_receipt(account_id, input.request_id, fingerprint, response)
+
+    @transactional_mutation
+    async def clear_workout(self, account_id: str, workout_id: str, input: ClearWorkoutInput) -> dict[str, Any]:
+        """Remove every unlogged set and exercise, never a logged one.
+
+        Logged sets stay verbatim under their original exercise snapshots. When
+        nothing logged remains, the workout record itself is removed and the
+        receipt carries ``workout: null``.
+        """
+        fingerprint = _fingerprint({"workout_id": workout_id, **input.model_dump(mode="json")})
+        prior = await self._receipt(account_id, input.request_id, fingerprint)
+        if prior:
+            return prior
+        workout = await self.db.workouts.find_one({"account_id": account_id, "workout_id": workout_id, "deleted_at": {"$exists": False}})
+        if not workout:
+            raise WorkoutDomainError("workout_not_found", "Workout was not found.", 404)
+        if workout["revision"] != input.expected_revision:
+            raise WorkoutDomainError("stale_revision", "Workout changed. Pull the current revision before clearing.")
+        preserved_segments: list[dict[str, Any]] = []
+        for segment in workout["segments"]:
+            preserved_items = [
+                {**item, "sets": [set_row for set_row in item["sets"] if set_row.get("actual") is not None]}
+                for item in segment["items"]
+            ]
+            preserved_items = [item for item in preserved_items if item["sets"]]
+            if preserved_items:
+                preserved_segments.append({**segment, "items": preserved_items})
+        timestamp = utc_now()
+        if not preserved_segments:
+            deleted = await self.db.workouts.delete_one(
+                {"account_id": account_id, "workout_id": workout_id, "revision": input.expected_revision},
+            )
+            if not deleted.deleted_count:
+                raise WorkoutDomainError("stale_revision", "Workout changed. Pull the current revision before clearing.")
+            response = self.receipt("workout", workout_id, input.expected_revision, input.request_id, "cleared")
+            response["workout"] = None
+            return await self._save_receipt(account_id, input.request_id, fingerprint, response)
+        workout["segments"] = preserved_segments
+        workout["status"] = self._workout_status(workout)
+        workout["revision"], workout["updated_at"] = new_revision(), timestamp
+        replaced = await self.db.workouts.replace_one(
+            {"account_id": account_id, "workout_id": workout_id, "revision": input.expected_revision}, workout,
+        )
+        if not replaced.modified_count:
+            raise WorkoutDomainError("stale_revision", "Workout changed. Pull the current revision before clearing.")
+        response = self.receipt("workout", workout_id, workout["revision"], input.request_id, "cleared")
+        response["workout"] = self._public(workout, ("account_id", "_id"))
         return await self._save_receipt(account_id, input.request_id, fingerprint, response)
 
     async def history(self, account_id: str, exercise_id: str, before: str | None = None, limit: int = 10) -> list[dict[str, Any]]:

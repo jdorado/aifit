@@ -80,7 +80,7 @@ export type BackendWorkout = {
   title: string
   segments: BackendSegment[]
   lineage?: {
-    source?: 'default' | 'jev' | 'agent_override'
+    source?: 'default' | 'jev' | 'agent_override' | 'copy_last_week'
     blueprint_id?: string
     blueprint_revision?: string
     day_id?: string

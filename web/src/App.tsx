@@ -1119,6 +1119,26 @@ const App = () => {
     return Boolean(workoutIdByOwnerDateRef.current[key] && workoutRevisionByOwnerDateRef.current[key])
   }, [canQuerySavedWorkoutSessions, coachActAsOwnerId, currentUserId, selectedDay?.date, todayId, dataVersion])
 
+  // Clear day acts on a canonical workout and is offered while something
+  // unlogged remains to remove; fully logged history has nothing to clear.
+  const canClearSelectedDay = useMemo(() => {
+    if (!canQuerySavedWorkoutSessions) return false
+    const targetDate = selectedDay?.date ?? todayId
+    const ownerId = coachActAsOwnerId ?? currentUserId
+    if (!workoutIdByOwnerDateRef.current[`${ownerId}:${targetDate}`]) return false
+    const day = selectedDay
+    if (!day) return false
+    const logsForDay = weekSetLogsRef.current[targetDate] ?? {}
+    const hasLogged = day.exercises.some((exercise) => (
+      (logsForDay[exercise.id] ?? []).some((set) => set.done)
+    ))
+    const hasUnlogged = day.exercises.some((exercise) => {
+      const states = logsForDay[exercise.id] ?? []
+      return exercise.sets.some((_, index) => !states[index]?.done)
+    }) || day.extras.length > 0
+    return hasLogged ? hasUnlogged : (day.exercises.length > 0 || day.extras.length > 0)
+  }, [canQuerySavedWorkoutSessions, coachActAsOwnerId, currentUserId, dataVersion, selectedDay, todayId])
+
   const hasWeekWorkouts = useMemo(() => (
     weekPlan.days.some((day) => day.exercises.length > 0 || day.extras.length > 0)
   ), [weekPlan.days])
@@ -2832,6 +2852,164 @@ const App = () => {
     void handleFastGenerateDayWorkout('jev')
   }, [handleFastGenerateDayWorkout])
 
+  const handleCopyLastWeek = useCallback(async () => {
+    if (!canGenerateWorkoutSelectedDay || !canQuerySavedWorkoutSessions || !isBackendHealthy) return
+    const targetDate = selectedDay?.date ?? todayId
+    if (pendingWorkoutDatesRef.current.has(targetDate)) return
+    pendingWorkoutDatesRef.current.add(targetDate)
+    try {
+      const headers = { 'Content-Type': 'application/json', ...await getPrivyAuthHeaders() }
+      const ownerKey = `${coachActAsOwnerId ?? currentUserId}:${targetDate}`
+      const response = await apiFetch(`${API_BASE_URL}/v1/workouts/copy-last-week`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          date: targetDate,
+          expected_revision: workoutRevisionByOwnerDateRef.current[ownerKey] ?? null,
+          request_id: crypto.randomUUID(),
+        }),
+      })
+      if (!response.ok) {
+        const body = await response.json().catch(() => null) as { detail?: string | { code?: string, message?: string } } | null
+        const detail = body?.detail
+        const code = detail && typeof detail === 'object' ? detail.code : undefined
+        const detailMessage = typeof detail === 'string' ? detail : detail?.message
+        const message = code === 'workout_has_logged_sets'
+          ? t('workout.copyLastWeekLogged')
+          : code === 'copy_source_missing'
+            ? t('workout.copyLastWeekMissing', { date: shiftDateId(targetDate, -7) })
+            : detailMessage
+        throw new Error(message || t('workout.copyLastWeekFailed'))
+      }
+      const receipt = await response.json() as BackendWorkoutReceipt
+      if (receipt.workout) {
+        // The response is authoritative for this request; release the in-flight
+        // guard before hydration so the copied day is not dropped.
+        pendingWorkoutDatesRef.current.delete(targetDate)
+        applySavedWorkoutSessionToWeek(backendWorkoutToSession(receipt.workout, currentUserId))
+      }
+      try {
+        await refreshVisibleWorkoutSessions()
+      } catch {
+        // The next supported workout refresh reconciles this view.
+      }
+    } catch (error) {
+      console.warn('Copy last week failed:', error)
+      window.alert(error instanceof Error ? error.message : t('workout.copyLastWeekFailed'))
+    } finally {
+      pendingWorkoutDatesRef.current.delete(targetDate)
+    }
+  }, [
+    applySavedWorkoutSessionToWeek,
+    canGenerateWorkoutSelectedDay,
+    canQuerySavedWorkoutSessions,
+    coachActAsOwnerId,
+    currentUserId,
+    getPrivyAuthHeaders,
+    isBackendHealthy,
+    refreshVisibleWorkoutSessions,
+    selectedDay?.date,
+    t,
+    todayId,
+  ])
+
+  const handleClearWorkoutDay = useCallback(async () => {
+    if (!canQuerySavedWorkoutSessions || !isBackendHealthy) return
+    const targetDate = selectedDay?.date ?? todayId
+    const ownerKey = `${coachActAsOwnerId ?? currentUserId}:${targetDate}`
+    const workoutId = workoutIdByOwnerDateRef.current[ownerKey]
+    const expectedRevision = workoutRevisionByOwnerDateRef.current[ownerKey]
+    if (!workoutId || !expectedRevision) return
+    if (pendingWorkoutDatesRef.current.has(targetDate)) return
+    const logsForDay = weekSetLogsRef.current[targetDate] ?? {}
+    const hasLoggedSets = (selectedDay?.exercises ?? []).some((exercise) => (
+      (logsForDay[exercise.id] ?? []).some((set) => set.done)
+    ))
+    const confirmLabel = hasLoggedSets
+      ? t('workout.clearUnloggedConfirm', { label: selectedDayLabel })
+      : t('workout.clearConfirm', { label: selectedDayLabel })
+    if (!window.confirm(confirmLabel)) return
+    pendingWorkoutDatesRef.current.add(targetDate)
+    try {
+      const headers = { 'Content-Type': 'application/json', ...await getPrivyAuthHeaders() }
+      const response = await apiFetch(`${API_BASE_URL}/v1/workouts/${workoutId}/clear`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ expected_revision: expectedRevision, request_id: crypto.randomUUID() }),
+      })
+      if (!response.ok) {
+        const body = await response.json().catch(() => null) as { detail?: string | { message?: string } } | null
+        const detail = body?.detail
+        const detailMessage = typeof detail === 'string' ? detail : detail?.message
+        throw new Error(detailMessage || t('workout.clearFailed'))
+      }
+      const receipt = await response.json() as BackendWorkoutReceipt
+      pendingWorkoutDatesRef.current.delete(targetDate)
+      if (receipt.workout) {
+        applySavedWorkoutSessionToWeek(backendWorkoutToSession(receipt.workout, currentUserId))
+      } else {
+        // The canonical record is gone: render the selected day as empty.
+        delete workoutIdByOwnerDateRef.current[ownerKey]
+        delete workoutRevisionByOwnerDateRef.current[ownerKey]
+        const clearedDay: WeekPlanDay = {
+          ...(selectedDay ?? { date: targetDate, label: selectedDayLabel, exercises: [], extras: [], isRest: true, planNotes: '', notes: '' }),
+          date: targetDate,
+          exercises: [],
+          extras: [],
+          isRest: true,
+          planNotes: '',
+          notes: '',
+        }
+        applyWeekPlan(
+          { weekStart: weekPlan.weekStart, days: weekPlan.days.map((day) => (day.date === targetDate ? clearedDay : day)) },
+          { selectedDate: targetDate, logsByDay: { ...weekSetLogsRef.current, [targetDate]: {} } },
+        )
+      }
+      try {
+        await refreshVisibleWorkoutSessions()
+      } catch {
+        // The local reduction above already reflects the canonical clear.
+      }
+    } catch (error) {
+      console.warn('Clear workout day failed:', error)
+      window.alert(error instanceof Error ? error.message : t('workout.clearFailed'))
+    } finally {
+      pendingWorkoutDatesRef.current.delete(targetDate)
+    }
+  }, [
+    applySavedWorkoutSessionToWeek,
+    applyWeekPlan,
+    canQuerySavedWorkoutSessions,
+    coachActAsOwnerId,
+    currentUserId,
+    getPrivyAuthHeaders,
+    isBackendHealthy,
+    refreshVisibleWorkoutSessions,
+    selectedDay,
+    selectedDayLabel,
+    t,
+    todayId,
+    weekPlan.days,
+    weekPlan.weekStart,
+  ])
+
+  const handleGenerateDayWorkoutWithCoach = useCallback(() => {
+    if (!canGenerateWorkoutSelectedDay || !coachChatEnabled) return
+    const targetDate = selectedDay?.date ?? todayId
+    const prompt = t('workout.generateChatPrompt', { date: targetDate, label: selectedDayLabel })
+    handleActiveViewChange('home')
+    void handleSend(prompt)
+  }, [
+    canGenerateWorkoutSelectedDay,
+    coachChatEnabled,
+    handleActiveViewChange,
+    handleSend,
+    selectedDay?.date,
+    selectedDayLabel,
+    t,
+    todayId,
+  ])
+
   const handleCoachSend = useCallback(async (exerciseId: string, message: string) => {
     const trimmed = message.trim()
     if (!trimmed || !coachChatEnabled) return
@@ -3606,8 +3784,14 @@ const App = () => {
           ) : (
             <WorkoutOverflowMenu
               canGeneratePlan={canGenerateWorkoutSelectedDay && canQuerySavedWorkoutSessions && isBackendHealthy}
+              canGenerateWithCoach={canGenerateWorkoutSelectedDay && canQuerySavedWorkoutSessions && isBackendHealthy && coachChatEnabled}
+              canCopyLastWeek={canGenerateWorkoutSelectedDay && canQuerySavedWorkoutSessions && isBackendHealthy}
+              canClearWorkout={canClearSelectedDay && isBackendHealthy}
               onGenerateWorkout={handleGenerateDayWorkout}
               onVaryWorkout={handleVaryDayWorkout}
+              onGenerateWithCoach={handleGenerateDayWorkoutWithCoach}
+              onCopyLastWeek={handleCopyLastWeek}
+              onClearWorkout={handleClearWorkoutDay}
               onRefresh={handleRefreshSession}
             />
           )}
