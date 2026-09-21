@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 from pathlib import Path
@@ -14,6 +15,13 @@ def _private_text(path_value: str) -> str:
     if path.stat().st_mode & 0o077:
         raise ValueError("Secret file must be owner-only")
     return path.read_text().strip()
+
+
+def _absolute_regular_file(path_value: str) -> Path:
+    path = Path(path_value)
+    if not path.is_absolute() or path.is_symlink() or not path.is_file():
+        raise ValueError("Path must be an absolute regular file")
+    return path
 
 
 def binding_for(principal_id: str) -> dict:
@@ -71,3 +79,40 @@ async def verified_binding(principal_id: str) -> dict:
     if registration.get("ownerId") != principal_id or not isinstance(binding_id, str) or not binding_id:
         raise HTTPException(503, "Chat binding does not match this account.")
     return {**binding, "bindingId": binding_id}
+
+
+def telegram_provisioning_configured(binding: dict) -> bool:
+    try:
+        setup = binding["telegramProvisioning"]
+        if not isinstance(setup, dict) or set(setup) != {"command", "configFile"}:
+            return False
+        command = _absolute_regular_file(setup["command"])
+        config = _absolute_regular_file(setup["configFile"])
+        return bool(os.access(command, os.X_OK) and not (config.stat().st_mode & 0o077))
+    except (KeyError, OSError, TypeError, ValueError):
+        return False
+
+
+async def provision_telegram(binding: dict, bot_token: str) -> None:
+    if not telegram_provisioning_configured(binding):
+        raise HTTPException(503, "Telegram setup is not available for this agent.")
+    setup = binding["telegramProvisioning"]
+    try:
+        process = await asyncio.create_subprocess_exec(
+            setup["command"], "--config", setup["configFile"],
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        try:
+            await asyncio.wait_for(process.communicate(bot_token.encode()), timeout=90)
+        except TimeoutError:
+            process.kill()
+            await process.wait()
+            raise HTTPException(503, "Telegram setup timed out.")
+        if process.returncode != 0:
+            raise HTTPException(422, "Telegram could not verify that bot. Check its token and try again.")
+    except HTTPException:
+        raise
+    except (OSError, TypeError) as error:
+        raise HTTPException(503, "Telegram setup is unavailable for this agent.") from error

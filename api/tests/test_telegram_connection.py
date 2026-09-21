@@ -52,9 +52,23 @@ def test_telegram_connection_rejects_a_non_ez_launch_url():
 
 
 @pytest.mark.asyncio
-async def test_degraded_telegram_receipt_is_reported_as_a_bad_gateway(monkeypatch):
+async def test_degraded_telegram_offers_bot_repair_when_provisioning_exists(monkeypatch):
     monkeypatch.setattr(main, "account_for", lambda _identity: value({"account_id": "acc_1"}))
     monkeypatch.setattr(main, "verified_binding", lambda _account_id: value({"bindingId": "binding_1"}))
+    monkeypatch.setattr(main, "telegram_provisioning_configured", lambda _binding: True)
+
+    async def degraded(*_args):
+        return {"connected": True, "ready": False}
+
+    monkeypatch.setattr(main, "ez_call", degraded)
+    assert await main.get_telegram_connection(IDENTITY) == {"state": "needs_bot"}
+
+
+@pytest.mark.asyncio
+async def test_degraded_telegram_stays_unavailable_without_provisioning(monkeypatch):
+    monkeypatch.setattr(main, "account_for", lambda _identity: value({"account_id": "acc_1"}))
+    monkeypatch.setattr(main, "verified_binding", lambda _account_id: value({"bindingId": "binding_1"}))
+    monkeypatch.setattr(main, "telegram_provisioning_configured", lambda _binding: False)
 
     async def degraded(*_args):
         return {"connected": True, "ready": False}
@@ -77,3 +91,33 @@ async def test_unavailable_telegram_is_not_reported_as_a_disconnected_account(mo
     with pytest.raises(HTTPException) as error:
         await main.create_telegram_connection(IDENTITY)
     assert error.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_bot_token_is_provisioned_only_to_the_bound_ez_agent(monkeypatch):
+    binding = {"bindingId": "binding_1", "telegramProvisioning": {"command": "/private/provision", "configFile": "/private/config"}}
+    monkeypatch.setattr(main, "account_for", lambda _identity: value({"account_id": "acc_1"}))
+    monkeypatch.setattr(main, "verified_binding", lambda _account_id: value(binding))
+    provisioned = []
+
+    async def provision(bound, bot_token):
+        provisioned.append((bound, bot_token))
+
+    async def ez_call(bound, method, path):
+        assert bound is binding
+        assert (method, path) == ("POST", "/v1/telegram/link")
+        return {
+            "connected": False,
+            "url": "https://t.me/aifit_agent?start=" + "a" * 43,
+            "expiresAt": "2026-09-18T12:00:00Z",
+        }
+
+    monkeypatch.setattr(main, "provision_telegram", provision)
+    monkeypatch.setattr(main, "ez_call", ez_call)
+    body = main.TelegramBotInput(bot_token="123456:" + "a" * 20)
+    assert await main.configure_telegram_bot(body, IDENTITY) == {
+        "state": "link",
+        "connect_url": "https://t.me/aifit_agent?start=" + "a" * 43,
+        "expires_at": "2026-09-18T12:00:00Z",
+    }
+    assert provisioned == [(binding, body.bot_token)]

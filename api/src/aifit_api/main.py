@@ -21,7 +21,7 @@ from .auth import (
     require_agent_request,
     require_identity,
 )
-from .ez import call as ez_call, verified_binding
+from .ez import call as ez_call, provision_telegram, telegram_provisioning_configured, verified_binding
 from .model_policy import filter_control, require_allowed
 from .workouts import (
     BlueprintInput,
@@ -145,6 +145,11 @@ class ModelSelectionInput(BaseModel):
     provider: str | None = Field(default=None, min_length=1, max_length=80)
     model: str | None = Field(default=None, min_length=1, max_length=160)
     effort: str | None = Field(default=None, min_length=1, max_length=40)
+
+
+class TelegramBotInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    bot_token: str = Field(min_length=26, max_length=512, pattern=r"^\d{5,}:[A-Za-z0-9_-]{20,}$")
 
 
 class NewChatInput(BaseModel):
@@ -394,8 +399,20 @@ async def get_account(identity: Identity = Depends(require_identity)) -> dict:
 async def get_telegram_connection(identity: Identity = Depends(require_identity)) -> dict:
     account = await account_for(identity)
     binding = await verified_binding(account["account_id"])
-    receipt = await ez_call(binding, "GET", "/v1/telegram")
-    return public_telegram_connection(receipt)
+    try:
+        receipt = await ez_call(binding, "GET", "/v1/telegram")
+    except HTTPException as error:
+        if error.status_code in {400, 404, 503} and telegram_provisioning_configured(binding):
+            return {"state": "needs_bot"}
+        raise
+    try:
+        return public_telegram_connection(receipt)
+    except HTTPException as error:
+        if (error.status_code == 502 and telegram_provisioning_configured(binding)
+                and isinstance(receipt, dict) and receipt.get("connected") is True
+                and receipt.get("ready") is not True):
+            return {"state": "needs_bot"}
+        raise
 
 
 @app.post("/account/telegram/link")
@@ -407,6 +424,20 @@ async def create_telegram_connection(identity: Identity = Depends(require_identi
     except HTTPException as error:
         if error.status_code in {400, 403}:
             raise HTTPException(409, "Telegram is not available for this agent yet.") from error
+        raise
+    return public_telegram_connection(connection, needs_link=True)
+
+
+@app.post("/account/telegram/bot")
+async def configure_telegram_bot(body: TelegramBotInput, identity: Identity = Depends(require_identity)) -> dict:
+    account = await account_for(identity)
+    binding = await verified_binding(account["account_id"])
+    await provision_telegram(binding, body.bot_token)
+    try:
+        connection = await ez_call(binding, "POST", "/v1/telegram/link")
+    except HTTPException as error:
+        if error.status_code in {400, 403}:
+            raise HTTPException(503, "Telegram started but is not ready to issue a connection link yet.") from error
         raise
     return public_telegram_connection(connection, needs_link=True)
 
