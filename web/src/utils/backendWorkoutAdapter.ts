@@ -111,16 +111,22 @@ const loadInKg = (load: BackendLoad | undefined) => {
   return load.unit === 'lb' ? load.value * 0.45359237 : load.value
 }
 
-const actualToSetState = (actual: BackendWorkoutSet['actual']): SetState => ({
-  weight: actual?.load ? formatLoad(actual.load) ?? '' : '',
-  metric: actual?.reps !== undefined
-    ? String(actual.reps)
-    : actual?.duration_seconds !== undefined
-      ? String(actual.duration_seconds)
-      : '',
-  done: Boolean(actual),
-  ...(actual ? { value_source: 'user_entered' as const } : {}),
-})
+const actualToSetState = (actual: BackendWorkoutSet['actual']): SetState => {
+  if (!actual) return { weight: '', metric: '', done: false }
+  if (actual.status === 'skipped') {
+    return { weight: '', metric: '', done: true, skipped: true }
+  }
+  return {
+    weight: actual.load ? formatLoad(actual.load) ?? '' : '',
+    metric: actual.reps !== undefined
+      ? String(actual.reps)
+      : actual.duration_seconds !== undefined
+        ? String(actual.duration_seconds)
+        : '',
+    done: true,
+    value_source: 'user_entered',
+  }
+}
 
 const sectionLabel = (kind: BackendSegment['kind']) => {
   switch (kind) {
