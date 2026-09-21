@@ -54,7 +54,29 @@ test('help exposes only the three bounded artifact writes', async () => {
   assert.match(result.stdout, /aifit blueprint solidify/);
   assert.match(result.stdout, /aifit workout override/);
   assert.match(result.stdout, /aifit workout swap/);
-  assert.doesNotMatch(result.stdout, /profile|history|generate|list/i);
+  const commandLines = result.stdout.split('\n').filter((line) => /^\s+aifit \w/.test(line));
+  assert.equal(commandLines.length, 3, result.stdout);
+  assert.doesNotMatch(result.stdout, /^\s+aifit (profile|history|generate|list)/im);
+});
+
+test('help and skill carry the artifact schema the agent must author', async () => {
+  const result = await runCli(['--help']);
+
+  assert.equal(result.code, 0, result.stderr);
+  assert.match(result.stdout, /schema_version=1/);
+  assert.match(result.stdout, /exercise_revision/);
+
+  const skill = await readFile(join(pluginRoot, 'SKILL.md'), 'utf8');
+  for (const marker of [
+    '"schema_version": 1',
+    '"exercise_revision"',
+    '"selection_count"',
+    '"progression"',
+    '"expected_blueprint_revision"',
+    'Receipts and errors',
+  ]) {
+    assert.ok(skill.includes(marker), `skill is missing ${marker}`);
+  }
 });
 
 test('a command without Ez-scoped context fails before any API call', async () => {

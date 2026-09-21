@@ -7,6 +7,7 @@ from urllib.parse import parse_qsl, quote, urlparse
 from uuid import UUID
 
 from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field
@@ -21,7 +22,7 @@ from .auth import (
     require_identity,
 )
 from .ez import call as ez_call, verified_binding
-from .model_policy import filter_control, require_allowed, routing_provider
+from .model_policy import filter_control, require_allowed
 from .workouts import (
     BlueprintInput,
     ExerciseDefinitionInput,
@@ -57,6 +58,18 @@ app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True
 @app.exception_handler(WorkoutDomainError)
 async def workout_domain_error(_request: Request, error: WorkoutDomainError) -> JSONResponse:
     return JSONResponse(status_code=error.status_code, content={"detail": {"code": error.code, "message": error.message}})
+
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_error(_request: Request, error: RequestValidationError) -> JSONResponse:
+    """Keep the documented {code, message} error contract for typed failures."""
+    errors = [
+        {"loc": [str(part) for part in item.get("loc", [])], "msg": str(item.get("msg", "invalid value")),
+         "type": str(item.get("type", "value_error"))}
+        for item in error.errors()
+    ]
+    summary = "; ".join(f"{'.'.join(item['loc'])}: {item['msg']}" for item in errors) or "Invalid request."
+    return JSONResponse(status_code=422, content={"detail": {"code": "validation_error", "message": summary, "errors": errors}})
 
 MAX_INBOX_PAGES = 10
 MAX_INBOX_RUNS = 500
@@ -292,7 +305,6 @@ def validated_preset(value: Any) -> dict | None:
     provider = value.get("provider")
     if provider is not None and (not isinstance(provider, str) or not provider or len(provider) > 80):
         raise HTTPException(502, "Ez returned an invalid model receipt.")
-    provider = provider or routing_provider(projected["cli"], projected.get("model"))
     if provider:
         projected["provider"] = provider
     return projected
@@ -320,7 +332,6 @@ def public_model_control(value: Any) -> dict:
         provider = item.get("provider")
         if provider is not None and (not isinstance(provider, str) or not provider or len(provider) > 80):
             raise HTTPException(502, "Ez returned invalid model controls.")
-        provider = provider or routing_provider(model["cli"], model.get("model"))
         if provider:
             model["provider"] = provider
         models.append(model)
@@ -413,9 +424,8 @@ async def select_chat_model(body: ModelSelectionInput, identity: Identity = Depe
     binding = await verified_binding(account["account_id"])
     require_allowed(identity.subject, body.cli, body.model, body.effort)
     selection: dict[str, Any] = {"action": "model", "expectedSession": body.expected_session, "cli": body.cli}
-    provider = body.provider or routing_provider(body.cli, body.model)
-    if provider:
-        selection["provider"] = provider
+    if body.provider is not None:
+        selection["provider"] = body.provider
     if body.model is not None:
         selection["model"] = body.model
     if body.effort is not None:

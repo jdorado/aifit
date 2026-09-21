@@ -156,7 +156,9 @@ and `effect: "swapped"`.
 
 ## 4. Blueprint artifact
 
-The input is the documented `BlueprintInput` object. It is a closed-world
+The input is the documented `BlueprintInput` object. The agent-facing copy of
+the typed schema and its rules is `plugins/aifit/SKILL.md`, shipped with the
+plugin; this section is the architecture reference. It is a closed-world
 artifact: all workout choices needed for materialization are inside it, while
 identity and authority stay outside it.
 
@@ -330,7 +332,14 @@ use a stable error code and message, for example:
 {
   "detail": {
     "code": "validation_error",
-    "message": "load value must be a number with unit kg or lb."
+    "message": "body.days.0.segments.0.slots.0.candidates.0.exercise_revision: String should match pattern '^rev_[a-f0-9]{32}$'",
+    "errors": [
+      {
+        "loc": ["body", "days", 0, "segments", 0, "slots", 0, "candidates", 0, "exercise_revision"],
+        "msg": "String should match pattern '^rev_[a-f0-9]{32}$'",
+        "type": "string_pattern_mismatch"
+      }
+    ]
   }
 }
 ```

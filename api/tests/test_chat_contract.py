@@ -156,16 +156,26 @@ async def test_clear_chat_is_a_single_thin_new_session(monkeypatch, identity):
     assert result["active_session_id"] == "22222222-2222-2222-2222-222222222222"
 
 
-def test_openrouter_route_is_projected_without_changing_ez_cli():
+def test_provider_is_projected_only_when_ez_supplies_it():
     projected = main.public_model_control({
-        "ai": {"selectedId": "deepseek", "presets": [DEEPSEEK_PRESET]},
-        "models": [{"cli": "codex", "model": DEEPSEEK["model"], "name": "DeepSeek", "efforts": ["max"]}],
+        "ai": {"selectedId": "deepseek", "presets": [{**DEEPSEEK_PRESET, "provider": "openrouter"}]},
+        "models": [{"cli": "codex", "provider": "openrouter", "model": DEEPSEEK["model"],
+                    "name": "DeepSeek", "efforts": ["max"]}],
         "activeSessionId": "session_1",
     })
 
     assert projected["presets"][0]["cli"] == "codex"
     assert projected["presets"][0]["provider"] == "openrouter"
     assert projected["models"][0]["provider"] == "openrouter"
+
+    without_provider = main.public_model_control({
+        "ai": {"selectedId": "deepseek", "presets": [DEEPSEEK_PRESET]},
+        "models": [{"cli": "codex", "model": DEEPSEEK["model"], "name": "DeepSeek", "efforts": ["max"]}],
+        "activeSessionId": "session_1",
+    })
+
+    assert "provider" not in without_provider["presets"][0]
+    assert "provider" not in without_provider["models"][0]
 
 
 def ez_control(selected_id, presets, models, session="session_1"):
@@ -205,7 +215,7 @@ async def test_chat_models_filters_without_auto_select(tmp_path, monkeypatch, id
 
 
 @pytest.mark.asyncio
-async def test_model_selection_forwards_the_ez_provider_binding(tmp_path, monkeypatch, identity):
+async def test_model_selection_forwards_only_the_engine_declared_provider(tmp_path, monkeypatch, identity):
     configure_policy(tmp_path, monkeypatch)
     calls = []
 
@@ -218,12 +228,21 @@ async def test_model_selection_forwards_the_ez_provider_binding(tmp_path, monkey
     monkeypatch.setattr(main, "ez_call", ez_call)
 
     await main.select_chat_model(main.ModelSelectionInput(
-        expected_session="session_old", cli=DEEPSEEK["cli"], model=DEEPSEEK["model"], effort=DEEPSEEK["effort"],
+        expected_session="session_old", cli=DEEPSEEK["cli"], provider="openrouter",
+        model=DEEPSEEK["model"], effort=DEEPSEEK["effort"],
     ), identity)
-
     assert calls == [("POST", "/v1/control", {
         "action": "model", "expectedSession": "session_old", "cli": "codex",
         "provider": "openrouter", "model": DEEPSEEK["model"], "effort": "max",
+    })]
+
+    calls.clear()
+    await main.select_chat_model(main.ModelSelectionInput(
+        expected_session="session_old", cli=DEEPSEEK["cli"], model=DEEPSEEK["model"], effort=DEEPSEEK["effort"],
+    ), identity)
+    assert calls == [("POST", "/v1/control", {
+        "action": "model", "expectedSession": "session_old", "cli": "codex",
+        "model": DEEPSEEK["model"], "effort": "max",
     })]
 
 
@@ -305,6 +324,27 @@ async def test_chat_job_proxies_ez_run_by_id(monkeypatch, identity):
     result = await main.chat_job("run_1", identity.subject, identity)
     assert result["job_id"] == "run_1"
     assert result["messages"][0]["text"] == "hi"
+
+
+def test_validation_failures_keep_the_documented_error_contract(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from aifit_api import auth
+
+    monkeypatch.setattr(auth, "AIFIT_AGENT_CAPABILITY_SECRET", "test-secret-with-at-least-thirty-two-bytes")
+    capability = auth.mint_agent_capability(
+        account_id="acc_1", tenant_id="ten_1", job_id="job_1", permissions={"blueprints:write"},
+    )
+    response = TestClient(main.app).post(
+        "/v1/agent/blueprints/solidify",
+        headers={"Authorization": f"Bearer {capability}"},
+        json={"schema_version": 1, "request_id": "validation-1"},
+    )
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail["code"] == "validation_error"
+    assert isinstance(detail["message"], str) and detail["message"]
+    assert detail["errors"] and detail["errors"][0]["loc"]
 
 
 @pytest.mark.asyncio

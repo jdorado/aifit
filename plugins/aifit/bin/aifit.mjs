@@ -34,11 +34,18 @@ Write:
 
   aifit workout swap --input FILE|- --request-id KEY --expected-revision REV
 
-The blueprint input is the complete documented blueprint JSON object. The
-workout swap input identifies the current workout exercise, expected blueprint
-revision, and JEV reason; the workout override input is a complete resolved
-target-day object. Do not include
-owner, tenant, API URL, capability, request_id, or conversation content.`;
+Artifacts (full typed schema and rules are in the installed aifit skill):
+  blueprint: schema_version=1, timezone, start_date, end_date, hard_constraints,
+    days[{day_id,date,kind,title,intent_md,segments[{segment_id,order,kind,rounds,
+    rest_after_round_seconds,slots[{slot_id,order,role,selection_count,candidates[
+    {candidate_id,exercise_id,exercise_revision,priority,rationale_md,
+    equipment_profile_id,prescription{metric,target{reps|duration_seconds,load,rpe},
+    rest_seconds,tempo},progression}]}]}]}]
+  override: date, title, reason_md, segments (every slot exactly one candidate)
+  swap: workout_id, exercise_instance_id, expected_blueprint_revision, reason
+
+Do not include owner, tenant, API URL, capability, request_id, or conversation
+content in an artifact.`;
 }
 
 function parseOptions(args) {
