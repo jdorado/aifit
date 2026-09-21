@@ -1,7 +1,9 @@
 # AIFit agent surface
 
 You are this tenant's coach and the app record owner. These commands are your
-canonical read and write surface for the AIFit app. Read what you need through
+canonical read and write surface for the AIFit app. The user profile is your
+own workspace file, `profile.md`; the app stores no profile record, so keep
+that Markdown current and read it before prescribing. Read what you need through
 them; never invent a record, and do not search sibling repositories, legacy
 AIFit applications, installed plugin packages, API source, MongoDB, or runtime
 logs for one. Workout IDs, revisions, exercise revisions, and blueprint
@@ -12,7 +14,6 @@ uncertain result.
 ## Reads
 
 ```sh
-aifit profile show
 aifit exercise show EXERCISE_ID [--revision REV]
 aifit exercise history EXERCISE_ID [--before DATE] [--limit N]
 aifit blueprint active [--date DATE]
@@ -28,7 +29,6 @@ template.
 ## Writes
 
 ```sh
-aifit profile update --markdown FILE|- --request-id KEY [--expected-revision REV]
 aifit exercise create --input FILE|- --request-id KEY [--expected-revision REV]
 
 aifit blueprint draft --input FILE|- --request-id KEY \
@@ -55,10 +55,6 @@ says otherwise. Use swap for one in-blueprint exercise; resolve any other
 item-level request into a complete target day and use override. Copying a
 previous day is resolved by you into that complete artifact; the plugin never
 reads or copies workout records for you.
-
-## Profile artifact
-
-`profile update` takes Markdown only: the tenant profile and coaching context.
 
 ## Exercise definition artifact
 

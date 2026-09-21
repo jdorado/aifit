@@ -28,7 +28,6 @@ import type { WorkoutSession } from './types/workoutSession'
 const restDefaultSec = 90
 const sideTransitionPrepSec = 5
 const LEGACY_SESSION_CACHE_STORAGE_PREFIX = 'aifit_session_cache_v1:'
-const PROFILE_SAVE_DEBOUNCE_MS = 1500
 const MAIN_CHAT_HISTORY_LIMIT = 40
 const BACKEND_HEALTH_STALE_MS = 4 * 60 * 1000
 const BACKEND_HEALTH_PING_TIMEOUT_MS = 12 * 1000
@@ -130,7 +129,6 @@ type WakeLockSentinelLike = {
 }
 
 type ProfileState = {
-  text: string
   language: Language
   fontScale: number
 }
@@ -830,7 +828,6 @@ const App = () => {
     holdEndTs: null,
   })
   const [profile, setProfile] = useState<ProfileState>(() => ({
-    text: '',
     language: initialLanguage,
     fontScale: getInitialFontScale(),
   }))
@@ -897,15 +894,12 @@ const App = () => {
   const chatBottomFrameRef = useRef<number | null>(null)
   const chatBottomTimeoutRef = useRef<number | null>(null)
   const layoutViewportHeightRef = useRef(0)
-  const prevPrivyAuthenticatedRef = useRef(privyAuthenticated)
   const workoutRevisionByOwnerDateRef = useRef<Record<string, string>>({})
   const workoutIdByOwnerDateRef = useRef<Record<string, string>>({})
   const syncedSetKeysRef = useRef(new Set<string>())
   const pendingSetSyncsByDateRef = useRef<Record<string, number>>({})
   const syncLoggedSetRef = useRef<((exerciseId: string, index: number) => void) | null>(null)
   const pendingWorkoutDatesRef = useRef(new Set<string>())
-  const profileRevisionRef = useRef<string | null>(null)
-  const profileSaveTimeoutRef = useRef<number | null>(null)
   const sessionLoadKeyRef = useRef<string | null>(null)
   const sessionReadyRef = useRef(false)
   const sessionHydrationInProgressRef = useRef(false)
@@ -2930,14 +2924,6 @@ const App = () => {
     setCurrentUserId(userIdOverride ?? normalized ?? '')
   }, [])
 
-  const resetProfileForSignOut = useCallback(() => {
-    profileRevisionRef.current = null
-    setProfile((prev) => ({
-      ...prev,
-      text: '',
-    }))
-  }, [])
-
   const extractEmailFromUser = useCallback((user: unknown): string | null => {
     if (!user || typeof user !== 'object') return null
 
@@ -3001,12 +2987,6 @@ const App = () => {
   useEffect(() => {
     if (!privyReady) return
 
-    const wasAuthenticated = prevPrivyAuthenticatedRef.current
-    prevPrivyAuthenticatedRef.current = privyAuthenticated
-    if (wasAuthenticated && !privyAuthenticated) {
-      resetProfileForSignOut()
-    }
-
     if (!privyAuthenticated) {
       privyAccessTokenRef.current = null
       setUserEmail(null)
@@ -3031,7 +3011,6 @@ const App = () => {
     privyAuthError,
     privyReady,
     privyUser,
-    resetProfileForSignOut,
     setUserEmail,
     privySubjectId,
     privyUserId,
@@ -3483,43 +3462,7 @@ const App = () => {
     showWorkoutDetail(id, type)
   }, [showWorkoutDetail])
 
-  const loadCanonicalProfile = useCallback(async () => {
-    const headers = await getPrivyAuthHeaders()
-    if (!headers.Authorization) return
-    const response = await apiFetch(`${API_BASE_URL}/v1/profile`, { headers })
-    if (!response.ok) throw new Error(`Profile load failed (${response.status})`)
-    const body = await response.json() as { content_md?: unknown; revision?: unknown }
-    profileRevisionRef.current = typeof body.revision === 'string' ? body.revision : null
-    setProfile((prev) => ({
-      ...prev,
-      text: typeof body.content_md === 'string' ? body.content_md : '',
-    }))
-  }, [getPrivyAuthHeaders])
-
-  const saveCanonicalProfile = useCallback(async (contentMd: string) => {
-    const headers = { 'Content-Type': 'application/json', ...await getPrivyAuthHeaders() }
-    const response = await apiFetch(`${API_BASE_URL}/v1/profile`, {
-      method: 'PUT',
-      headers,
-      body: JSON.stringify({
-        content_md: contentMd,
-        expected_revision: profileRevisionRef.current,
-        request_id: crypto.randomUUID(),
-      }),
-    })
-    if (response.status === 409) {
-      console.warn('Profile save conflicted with a newer revision; reloading canonical profile.')
-      await loadCanonicalProfile()
-      return
-    }
-    if (!response.ok) throw new Error(`Profile save failed (${response.status})`)
-    const body = await response.json() as { revision?: unknown }
-    if (typeof body.revision === 'string') {
-      profileRevisionRef.current = body.revision
-    }
-  }, [getPrivyAuthHeaders, loadCanonicalProfile])
-
-  const handleProfileChange = useCallback((field: 'text' | 'language' | 'fontScale', value: string) => {
+  const handleProfileChange = useCallback((field: 'language' | 'fontScale', value: string) => {
     if (field === 'language') {
       const normalized = normalizeLanguage(value) ?? 'en'
       setProfile((prev) => ({
@@ -3535,33 +3478,6 @@ const App = () => {
         fontScale: normalized,
       }))
       return
-    }
-    setProfile((prev) => ({
-      ...prev,
-      text: value,
-    }))
-    if (!value.trim()) return
-    if (profileSaveTimeoutRef.current) {
-      window.clearTimeout(profileSaveTimeoutRef.current)
-    }
-    profileSaveTimeoutRef.current = window.setTimeout(() => {
-      profileSaveTimeoutRef.current = null
-      void saveCanonicalProfile(value).catch((error) => {
-        console.warn('Profile save failed:', error)
-      })
-    }, PROFILE_SAVE_DEBOUNCE_MS)
-  }, [saveCanonicalProfile])
-
-  useEffect(() => {
-    if (!privyReady || !privyAuthenticated || !isBackendHealthy) return
-    void loadCanonicalProfile().catch((error) => {
-      console.warn('Profile load failed:', error)
-    })
-  }, [isBackendHealthy, loadCanonicalProfile, privyAuthenticated, privyReady])
-
-  useEffect(() => () => {
-    if (profileSaveTimeoutRef.current) {
-      window.clearTimeout(profileSaveTimeoutRef.current)
     }
   }, [])
 
@@ -3670,7 +3586,6 @@ const App = () => {
           <ProfileView
             telegramControl={privyAuthenticated ? <TelegramLink apiBase={API_BASE_URL} getHeaders={getPrivyAuthHeaders} /> : undefined}
             active={activeView === 'profile'}
-            text={profile.text}
             language={profile.language}
             fontScale={profile.fontScale}
             onChange={handleProfileChange}

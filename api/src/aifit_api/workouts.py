@@ -498,7 +498,6 @@ class WorkoutService:
             return await session.with_transaction(callback)
 
     async def ensure_indexes(self) -> None:
-        await self.db.profiles.create_index([("account_id", ASCENDING)], unique=True)
         await self.db.exercises.create_index([("account_id", ASCENDING), ("exercise_id", ASCENDING), ("revision", ASCENDING)], unique=True)
         await self.db.exercise_heads.create_index([("account_id", ASCENDING), ("exercise_id", ASCENDING)], unique=True)
         await self.db.plans.create_index([("account_id", ASCENDING), ("plan_id", ASCENDING), ("revision", ASCENDING)], unique=True)
@@ -537,29 +536,6 @@ class WorkoutService:
     def receipt(resource: str, resource_id: str, revision: str, request_id: str, effect: str = "saved") -> dict[str, Any]:
         return {"status": "saved", "resource": resource, "resource_id": resource_id, "revision": revision,
                 "request_id": request_id, "effect": effect, "updated_at": utc_now()}
-
-    async def profile(self, account_id: str) -> dict[str, Any]:
-        existing = await self.db.profiles.find_one({"account_id": account_id})
-        if existing:
-            return self._public(existing, ("account_id",))
-        return {"profile_id": new_id("prof"), "schema_version": SCHEMA_VERSION, "revision": None, "content_md": "", "updated_at": None}
-
-    @transactional_mutation
-    async def put_profile(self, account_id: str, content_md: str, expected_revision: str | None, request_id: str, actor: dict[str, Any]) -> dict[str, Any]:
-        fingerprint = _fingerprint({"profile": content_md, "expected_revision": expected_revision, "actor": actor})
-        prior = await self._receipt(account_id, request_id, fingerprint)
-        if prior:
-            return prior
-        current = await self.db.profiles.find_one({"account_id": account_id})
-        current_revision = current.get("revision") if current else None
-        if current_revision != expected_revision:
-            raise WorkoutDomainError("stale_revision", "The profile changed. Pull its current revision before editing.")
-        timestamp, revision = utc_now(), new_revision()
-        document = {"account_id": account_id, "profile_id": current.get("profile_id") if current else new_id("prof"),
-                    "schema_version": SCHEMA_VERSION, "revision": revision, "content_md": content_md,
-                    "updated_at": timestamp, "updated_by": actor, "created_at": current.get("created_at", timestamp) if current else timestamp}
-        await self.db.profiles.replace_one({"account_id": account_id}, document, upsert=True)
-        return await self._save_receipt(account_id, request_id, fingerprint, self.receipt("profile", document["profile_id"], revision, request_id))
 
     @transactional_mutation
     async def create_exercise(self, account_id: str, definition: ExerciseDefinitionInput, request_id: str, actor: dict[str, Any], expected_revision: str | None = None) -> dict[str, Any]:

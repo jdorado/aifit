@@ -2,9 +2,10 @@
 
 This is the AIFit domain plugin for Ez: the coach's canonical read and write
 surface for the AIFit app. Reads return the same records the frontend renders
-(profile, exercises and history, active blueprint, workouts). Writes are
-deterministic domain operations (profile, exercises, blueprints, workout
-generation, set logging, swaps, and resolved exception days). It contains no model loop, conversation history,
+(exercises and history, active blueprint, workouts). Writes are deterministic
+domain operations (exercises, blueprints, workout generation, set logging,
+swaps, and resolved exception days). The user profile is the agent's own
+`profile.md` in its workspace, not an app record. It contains no model loop, conversation history,
 context builder, workout generator, or workout store.
 
 Install the reviewed local package through the bound tenant launcher:

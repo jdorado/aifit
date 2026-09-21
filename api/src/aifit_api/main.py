@@ -164,13 +164,6 @@ class NewChatInput(BaseModel):
     expected_session: str | None = None
 
 
-class ProfileUpdateInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    content_md: str = Field(min_length=1, max_length=64_000)
-    expected_revision: str | None = Field(default=None, pattern=r"^rev_[a-f0-9]{32}$")
-    request_id: str = Field(min_length=1, max_length=160, pattern=r"^[A-Za-z0-9_.:-]+$")
-
-
 class PlanDraftInput(PlanInput):
     expected_revision: str | None = Field(default=None, pattern=r"^rev_[a-f0-9]{32}$")
     request_id: str = Field(min_length=1, max_length=160, pattern=r"^[A-Za-z0-9_.:-]+$")
@@ -624,19 +617,6 @@ async def browser_account(identity: Identity) -> dict[str, Any]:
     return await account_for(identity)
 
 
-@app.get("/v1/profile")
-async def get_profile_v1(identity: Identity = Depends(require_identity)) -> dict:
-    account = await browser_account(identity)
-    return await workouts().profile(account["account_id"])
-
-
-@app.put("/v1/profile")
-async def put_profile_v1(body: ProfileUpdateInput, identity: Identity = Depends(require_identity)) -> dict:
-    account = await browser_account(identity)
-    return await workouts().put_profile(account["account_id"], body.content_md, body.expected_revision, body.request_id,
-                                        {"kind": "browser", "account_id": account["account_id"]})
-
-
 @app.post("/v1/exercises")
 async def create_exercise_v1(body: ExerciseMutationInput, identity: Identity = Depends(require_identity)) -> dict:
     account = await browser_account(identity)
@@ -749,24 +729,6 @@ async def agent_job_v1(job_id: UUID, identity: Identity = Depends(require_identi
 # the frontend uses. Scope is derived entirely from the signed capability
 # admitted into the current Ez run's opaque context: reads require aifit:read,
 # mutations require aifit:write.
-
-
-@app.get("/v1/agent/profile")
-async def agent_profile_v1(capability: AgentCapability = Depends(require_agent_capability)) -> dict:
-    require_agent_permission(capability, AGENT_READ)
-    return await workouts().profile(capability.account_id)
-
-
-@app.put("/v1/agent/profile")
-async def agent_put_profile_v1(
-    body: ProfileUpdateInput,
-    capability: AgentCapability = Depends(require_agent_capability),
-) -> dict:
-    require_agent_permission(capability, AGENT_WRITE)
-    require_agent_request(capability, body.request_id)
-    return await workouts().put_profile(
-        capability.account_id, body.content_md, body.expected_revision, body.request_id, agent_actor(capability),
-    )
 
 
 @app.post("/v1/agent/exercises")

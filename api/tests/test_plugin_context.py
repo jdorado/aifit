@@ -28,7 +28,6 @@ def test_plugin_agent_surface_covers_the_canonical_reads_and_writes():
     for path in ("/v1/agent/messages", "/v1/agent/jobs/{job_id}"):
         by_path.pop(path)
     assert set(by_path) == {
-        "/v1/agent/profile",
         "/v1/agent/exercises",
         "/v1/agent/exercises/{exercise_id}",
         "/v1/agent/exercises/{exercise_id}/history",
@@ -42,7 +41,6 @@ def test_plugin_agent_surface_covers_the_canonical_reads_and_writes():
         "/v1/agent/workouts/override",
         "/v1/agent/workouts/swap",
     }
-    assert by_path["/v1/agent/profile"] == {"GET", "PUT"}
     assert by_path["/v1/agent/workouts/{workout_id}/sets/{set_id}"] == {"PATCH"}
     assert by_path["/v1/agent/workouts"] == {"GET"}
 

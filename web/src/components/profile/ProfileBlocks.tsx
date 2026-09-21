@@ -54,38 +54,6 @@ export const ProfileMetric: FC<ProfileMetricProps> = ({
   </article>
 )
 
-type ProfileTextAreaFieldProps = {
-  id: string
-  label: string
-  value: string
-  placeholder: string
-  onChange: (value: string) => void
-  readOnly?: boolean
-  description?: string
-}
-
-export const ProfileTextAreaField: FC<ProfileTextAreaFieldProps> = ({
-  id,
-  label,
-  value,
-  placeholder,
-  onChange,
-  readOnly = false,
-  description,
-}) => (
-  <div className="profile-field">
-    <label htmlFor={id}>{label}</label>
-    <textarea
-      id={id}
-      placeholder={placeholder}
-      value={value}
-      readOnly={readOnly}
-      onChange={(event) => onChange(event.target.value)}
-    />
-    {description ? <small>{description}</small> : null}
-  </div>
-)
-
 type ProfileSelectFieldProps = {
   id: string
   label: string

@@ -26,7 +26,6 @@ function usage() {
   return `AIFit native agent tool
 
 Read:
-  aifit profile show
   aifit exercise show EXERCISE_ID [--revision REV]
   aifit exercise history EXERCISE_ID [--before DATE] [--limit N]
   aifit blueprint active [--date DATE]
@@ -34,7 +33,6 @@ Read:
   aifit workout list --start DATE --end DATE
 
 Write (all require --request-id):
-  aifit profile update --markdown FILE|- [--expected-revision REV]
   aifit exercise create --input FILE|- [--expected-revision REV]
   aifit blueprint draft --input FILE|- [--blueprint-id ID --expected-revision REV]
   aifit blueprint solidify --input FILE|- [--blueprint-id ID --expected-revision REV]
@@ -44,7 +42,6 @@ Write (all require --request-id):
   aifit workout swap --input FILE|- --expected-revision REV [--source default|jev]
 
 Artifacts (full typed schema and rules are in the installed aifit skill):
-  profile: Markdown
   exercise definition: exercise_id, name, movement_pattern, primary_muscles,
     secondary_muscles, equipment_kind, laterality, load_basis, metrics,
     instructions_md
@@ -59,7 +56,7 @@ Artifacts (full typed schema and rules are in the installed aifit skill):
   swap: workout_id, exercise_instance_id, expected_blueprint_revision, reason
 
 Reads print canonical JSON records. Writes print one receipt. Use stdin
-(--input - or --markdown -) because Ez runs the plugin in an isolated container.
+(--input -) because Ez runs the plugin in an isolated container.
 Do not include owner, tenant, API URL, capability, request_id, or conversation
 content in an artifact.`;
 }
@@ -161,15 +158,6 @@ async function readStdin() {
   return Buffer.concat(chunks).toString('utf8');
 }
 
-async function textFile(file) {
-  let content;
-  try {
-    content = file === '-' ? await readStdin() : await readFile(file, 'utf8');
-  } catch (error) { throw new Error(`Could not read input ${file}: ${error.message}`); }
-  if (!content.trim()) throw new Error(`${file} is empty`);
-  return content;
-}
-
 async function jsonFile(file, shape) {
   let parsed;
   try {
@@ -196,17 +184,7 @@ async function main() {
   const context = await runContext();
   const [area, action, ...rest] = args;
   let result;
-  if (area === 'profile' && action === 'show') {
-    parseArgs(rest, new Set());
-    result = await call(context, 'GET', '/profile');
-  } else if (area === 'profile' && action === 'update') {
-    const { values } = parseArgs(rest, new Set(['--markdown', '--expected-revision', '--request-id']));
-    result = await call(context, 'PUT', '/profile', {
-      content_md: await textFile(required(values, '--markdown')),
-      expected_revision: optional(values, '--expected-revision') || null,
-      request_id: required(values, '--request-id'),
-    });
-  } else if (area === 'exercise' && action === 'show') {
+  if (area === 'exercise' && action === 'show') {
     const { values, positional } = parseArgs(rest, new Set(['--revision']));
     const [exerciseId] = exactly(positional, 1, 'exercise show EXERCISE_ID');
     result = await call(context, 'GET', `/exercises/${exerciseId}`, undefined, { revision: optional(values, '--revision') });

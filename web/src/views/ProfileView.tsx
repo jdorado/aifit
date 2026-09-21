@@ -7,16 +7,14 @@ import {
   ProfilePanel,
   ProfileRangeField,
   ProfileSelectField,
-  ProfileTextAreaField,
 } from '../components/profile/ProfileBlocks'
 
 type ProfileViewProps = {
   telegramControl?: ReactNode
   active: boolean
-  text: string
   language: Language
   fontScale: number
-  onChange: (field: 'text' | 'language' | 'fontScale', value: string) => void
+  onChange: (field: 'language' | 'fontScale', value: string) => void
   onAuthClick: () => void
   authState: AuthUiState
 }
@@ -24,7 +22,6 @@ type ProfileViewProps = {
 const ProfileView: FC<ProfileViewProps> = ({
   telegramControl,
   active,
-  text,
   language,
   fontScale,
   onChange,
@@ -154,20 +151,12 @@ const ProfileView: FC<ProfileViewProps> = ({
       </ProfilePanel>
 
       <ProfilePanel
-        id="profile-details"
+        id="profile-preferences"
         className="profile-card"
-        title={t('profile.detailsLabel')}
-        subtitle={t('profile.detailsPlaceholder')}
+        title={t('profile.preferencesLabel')}
+        subtitle={t('profile.preferencesNote')}
       >
         <div className="profile-form-grid">
-          <ProfileTextAreaField
-            id="profile-text"
-            label={t('profile.detailsLabel')}
-            placeholder={t('profile.detailsPlaceholder')}
-            value={text}
-            onChange={(value) => onChange('text', value)}
-            description={t('profile.detailsSaved')}
-          />
           <div className="profile-controls-grid">
             <ProfileRangeField
               id="profile-font-scale"

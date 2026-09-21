@@ -11,14 +11,12 @@ The agent-facing CLI is the coach's full application surface: canonical reads
 plus the deterministic writes the frontend uses.
 
 ```sh
-aifit profile show
 aifit exercise show EXERCISE_ID [--revision REV]
 aifit exercise history EXERCISE_ID [--before DATE] [--limit N]
 aifit blueprint active [--date DATE]
 aifit workout show WORKOUT_ID
 aifit workout list --start DATE --end DATE
 
-aifit profile update --markdown FILE|- --request-id KEY [--expected-revision REV]
 aifit exercise create --input FILE|- --request-id KEY [--expected-revision REV]
 aifit blueprint draft --input FILE|- --request-id KEY [--blueprint-id ID --expected-revision REV]
 aifit blueprint solidify --input FILE|- --request-id KEY [--blueprint-id ID --expected-revision REV]
@@ -34,9 +32,10 @@ container. A direct file path is valid only when the runtime explicitly mounts
 that path.
 
 The native Ez agent owns the conversation, normal workspace and Markdown
-context, profile, goals, constraints, research, exercise knowledge, relevant
-history, complete blueprint/exception authoring, and the decision to retry or
-ask for clarification.
+context, its own `profile.md`, goals, constraints, research, exercise
+knowledge, relevant history, complete blueprint/exception authoring, and the
+decision to retry or ask for clarification. There is no API profile record:
+the agent's `profile.md` is the only user profile.
 
 The AIFit plugin owns only transport: typed artifacts, ids, and read requests
 to the authoritative AIFit API. It does not run a model, reconstruct a profile,
@@ -269,10 +268,11 @@ important rules are:
 - Hard-forbidden exercises cannot appear as candidates.
 - Progression fields are present only for their declared progression kind.
 
-The agent should author this object from its normal context. The plugin should
-not grow profile, exercise-catalog, history, or context commands to make
-authoring easier; that would recreate the second agent surface this boundary
-removes.
+The agent authors this object from its normal context. The plugin carries only
+canonical record reads and deterministic domain operations; it must not grow
+model, prompt, profile-inference, or context-rebuilding commands to make
+authoring easier, because that would recreate the second agent surface this
+boundary removes.
 
 ## 5. Backend consumption
 

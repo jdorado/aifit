@@ -63,8 +63,6 @@ test('help exposes the canonical reads and the full write surface', async () => 
 
   assert.equal(result.code, 0, result.stderr);
   for (const command of [
-    'aifit profile show',
-    'aifit profile update',
     'aifit exercise show',
     'aifit exercise history',
     'aifit exercise create',
@@ -98,7 +96,6 @@ test('help and skill carry the artifact schema the agent must author', async () 
     '"progression"',
     '"expected_blueprint_revision"',
     'aifit workout show',
-    'aifit profile update',
     'aifit exercise create',
     'aifit workout log-set',
     'Receipts and errors',
@@ -185,23 +182,6 @@ test('valid input is transported with only the Ez capability and typed options',
         request_id: 'blueprint-test',
       },
     });
-  });
-});
-
-test('profile streams Markdown, never a JSON wrapper', async () => {
-  await withFetchOutput(async (fetchOutput) => {
-    const profile = await runCli([
-      'profile', 'update', '--markdown', '-', '--request-id', 'profile-test',
-      '--expected-revision', 'rev_test',
-    ], { context: scopedContext, fetchOutput, input: '# Profile\n\nReturns from injury.\n' });
-    assert.equal(profile.code, 0, profile.stderr);
-    assert.deepEqual(await fetchRequest(fetchOutput), {
-      url: 'https://aifit.test/v1/agent/profile',
-      method: 'PUT',
-      headers: { authorization: 'Bearer capability-test', 'content-type': 'application/json' },
-      body: { content_md: '# Profile\n\nReturns from injury.\n', expected_revision: 'rev_test', request_id: 'profile-test' },
-    });
-
   });
 });
 
