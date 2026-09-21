@@ -8,14 +8,15 @@ event loop never blocks on it.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import math
 import re
 import time
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from typing import Any
 
-from youtubesearchpython import VideosSearch
+import httpx
 
 from .workouts import StrictModel, WorkoutDomainError
 
@@ -402,15 +403,102 @@ def _format_video(item: dict[str, Any]) -> VideoResult | None:
     )
 
 
+_PROVIDER_TIMEOUT_SECONDS = 15.0
+_PROVIDER_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+)
+_INITIAL_DATA_PATTERN = re.compile(r"ytInitialData\s*=\s*(\{.*?\})\s*;\s*</script>", re.S)
+
+
+def _initial_data(html: str) -> dict[str, Any] | None:
+    match = _INITIAL_DATA_PATTERN.search(html)
+    if match is None:
+        return None
+    try:
+        data = json.loads(match.group(1))
+    except json.JSONDecodeError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _iter_video_renderers(value: Any) -> Iterator[dict[str, Any]]:
+    stack = [value]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            renderer = node.get("videoRenderer")
+            if isinstance(renderer, dict):
+                yield renderer
+            stack.extend(node.values())
+        elif isinstance(node, list):
+            stack.extend(node)
+        if len(stack) > 10_000:
+            return
+
+
+def _renderer_text(value: Any) -> str:
+    if not isinstance(value, dict):
+        return ""
+    simple = value.get("simpleText")
+    if isinstance(simple, str):
+        return simple
+    runs = value.get("runs")
+    if isinstance(runs, list):
+        return "".join(run.get("text", "") for run in runs if isinstance(run, dict) and isinstance(run.get("text"), str))
+    return ""
+
+
+def _video_renderer_item(renderer: dict[str, Any]) -> dict[str, Any] | None:
+    video_id = renderer.get("videoId")
+    title = _renderer_text(renderer.get("title"))
+    if not isinstance(video_id, str) or not video_id or not title:
+        return None
+    thumbnail = renderer.get("thumbnail")
+    thumbnails = thumbnail.get("thumbnails") if isinstance(thumbnail, dict) else None
+    thumbnail_url = ""
+    if isinstance(thumbnails, list):
+        for candidate in reversed(thumbnails):
+            if isinstance(candidate, dict) and isinstance(candidate.get("url"), str) and candidate["url"]:
+                thumbnail_url = candidate["url"]
+                break
+    channel_title = _renderer_text(renderer.get("ownerText"))
+    return {
+        "id": video_id,
+        "title": title,
+        "duration": _renderer_text(renderer.get("lengthText")),
+        "thumbnails": [{"url": thumbnail_url}] if thumbnail_url else [],
+        "channel": {"name": channel_title} if channel_title else None,
+        "link": f"https://www.youtube.com/watch?v={video_id}",
+    }
+
+
 def _provider_search(query: str, limit: int) -> list[VideoResult]:
-    results = VideosSearch(query, limit=limit).result()
-    if not isinstance(results, dict):
-        return []
-    raw_items = results.get("result", [])
-    if not isinstance(raw_items, list):
-        return []
-    formatted = [_format_video(item) for item in raw_items if isinstance(item, dict)]
-    return [video for video in formatted if video is not None]
+    response = httpx.get(
+        "https://www.youtube.com/results",
+        params={"search_query": query, "hl": "en"},
+        headers={
+            "User-Agent": _PROVIDER_USER_AGENT,
+            "Accept-Language": "en-US,en;q=0.9",
+        },
+        timeout=_PROVIDER_TIMEOUT_SECONDS,
+        follow_redirects=True,
+    )
+    response.raise_for_status()
+    data = _initial_data(response.text)
+    if data is None:
+        raise VideoSearchError("video_search_failed", "The video provider returned an unexpected page.")
+    formatted: list[VideoResult] = []
+    for renderer in _iter_video_renderers(data):
+        item = _video_renderer_item(renderer)
+        if item is None:
+            continue
+        video = _format_video(item)
+        if video is not None:
+            formatted.append(video)
+        if len(formatted) >= limit:
+            break
+    return formatted
 
 
 async def _raw_search(query: str, limit: int) -> list[VideoResult]:

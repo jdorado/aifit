@@ -8254,6 +8254,9 @@ body:has(.view[data-view="workout"] .workout-detail.active) {
   right: 0;
   top: max(var(--safe-top), 10px);
   bottom: 0;
+  margin: 0 auto;
+  width: 100%;
+  max-width: 540px;
   z-index: 290;
   display: flex;
   min-height: 0;

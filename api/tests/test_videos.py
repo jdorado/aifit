@@ -9,6 +9,7 @@ from aifit_api.videos import (
     _duration_seconds,
     _format_video,
     _movement_tokens,
+    _video_renderer_item,
     build_video_search_queries,
     rank_and_filter_videos,
     score_video_title,
@@ -42,32 +43,52 @@ SEARCH_ITEMS: list[dict[str, Any]] = [
 ]
 
 
-class FakeVideosSearch:
+class FakeProvider:
     queries: list[str] = []
     last_limit: int | None = None
     fail: bool = False
 
-    def __init__(self, query: str, limit: int | None = None):
-        self.query = query
-        self.limit = limit
-
-    def result(self) -> dict[str, Any]:
-        type(self).queries.append(self.query)
-        type(self).last_limit = self.limit
+    def __call__(self, query: str, limit: int) -> list[videos.VideoResult]:
+        type(self).queries.append(query)
+        type(self).last_limit = limit
         if type(self).fail:
             raise RuntimeError("provider offline")
-        return {"result": [dict(item) for item in SEARCH_ITEMS]}
+        formatted = [_format_video(dict(item)) for item in SEARCH_ITEMS]
+        return [video for video in formatted if video is not None]
 
 
 @pytest.fixture(autouse=True)
 def clear_video_cache():
     videos._VIDEO_CACHE.clear()
-    FakeVideosSearch.queries = []
-    FakeVideosSearch.fail = False
+    FakeProvider.queries = []
+    FakeProvider.fail = False
     yield
     videos._VIDEO_CACHE.clear()
-    FakeVideosSearch.queries = []
-    FakeVideosSearch.fail = False
+    FakeProvider.queries = []
+    FakeProvider.fail = False
+
+
+def test_video_renderer_item_maps_provider_payload():
+    renderer = {
+        "videoId": "abc123",
+        "title": {"runs": [{"text": "How to Bench Press"}, {"text": " | Technique"}]},
+        "lengthText": {"simpleText": "8:05"},
+        "thumbnail": {"thumbnails": [
+            {"url": "https://i.ytimg.com/vi/abc123/default.jpg"},
+            {"url": "https://i.ytimg.com/vi/abc123/hqdefault.jpg"},
+        ]},
+        "ownerText": {"runs": [{"text": "Technique Lab"}]},
+    }
+    item = _video_renderer_item(renderer)
+    assert item is not None
+    assert item["id"] == "abc123"
+    assert item["title"] == "How to Bench Press | Technique"
+    assert item["duration"] == "8:05"
+    assert item["thumbnails"][0]["url"] == "https://i.ytimg.com/vi/abc123/hqdefault.jpg"
+    assert item["channel"]["name"] == "Technique Lab"
+    assert item["link"] == "https://www.youtube.com/watch?v=abc123"
+    assert _video_renderer_item({"title": {"simpleText": "No id"}}) is None
+    assert _video_renderer_item({"videoId": "no-title"}) is None
 
 
 def test_movement_tokens_strip_plan_fluff_and_scaffolding():
@@ -135,7 +156,7 @@ def test_duration_seconds_parses_clock_text():
 
 @pytest.mark.asyncio
 async def test_search_videos_ranks_provider_results_and_caches_hits(monkeypatch):
-    monkeypatch.setattr(videos, "VideosSearch", FakeVideosSearch)
+    monkeypatch.setattr(videos, "_provider_search", FakeProvider())
 
     first = await videos.search_videos("machine row", limit=5)
     assert first["query"] == "machine row"
@@ -144,18 +165,18 @@ async def test_search_videos_ranks_provider_results_and_caches_hits(monkeypatch)
     assert video_ids[0] == "video_row_machine"
     assert "video_unrelated" not in video_ids
     assert first["videos"][0]["duration_seconds"] == 372
-    assert FakeVideosSearch.last_limit == 20
+    assert FakeProvider.last_limit == 20
 
-    calls_after_first = list(FakeVideosSearch.queries)
+    calls_after_first = list(FakeProvider.queries)
     second = await videos.search_videos("machine row", limit=5)
     assert second == first
-    assert FakeVideosSearch.queries == calls_after_first
+    assert FakeProvider.queries == calls_after_first
 
 
 @pytest.mark.asyncio
 async def test_search_videos_surfaces_a_typed_provider_failure(monkeypatch):
-    monkeypatch.setattr(videos, "VideosSearch", FakeVideosSearch)
-    FakeVideosSearch.fail = True
+    monkeypatch.setattr(videos, "_provider_search", FakeProvider())
+    FakeProvider.fail = True
 
     with pytest.raises(VideoSearchError) as error:
         await videos.search_videos("machine row", limit=5)
@@ -174,7 +195,7 @@ async def test_search_videos_requires_a_query():
 
 @pytest.mark.asyncio
 async def test_v1_video_route_uses_browser_identity_and_returns_the_typed_payload(monkeypatch):
-    monkeypatch.setattr(videos, "VideosSearch", FakeVideosSearch)
+    monkeypatch.setattr(videos, "_provider_search", FakeProvider())
     monkeypatch.setattr(main, "browser_account", lambda _identity: async_value({"account_id": "acc_one"}))
 
     payload = await main.search_videos_v1("machine row", 5, Identity(subject="did:privy:test", email="test@example.com"))
