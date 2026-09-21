@@ -51,7 +51,7 @@ def test_unconfigured_public_install_preserves_ez_catalog():
     model_policy.require_allowed(OTHER, "anything", "anything", "anything")
 
 
-def test_default_account_sees_only_openrouter_choice(tmp_path, monkeypatch):
+def test_default_account_sees_only_curated_choice(tmp_path, monkeypatch):
     configure(tmp_path, monkeypatch)
     filtered = model_policy.filter_control(control(), OTHER)
     assert filtered["presets"] == [{"id": "deepseek", "name": "DeepSeek", **DEEPSEEK}]

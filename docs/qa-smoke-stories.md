@@ -53,16 +53,16 @@ I finish a set and mark it logged with my actual reps and load.
 Pass when the set carries its actual values and the workout reads back as
 `in_progress`, or `completed` when every set has actuals. The receipt effect
 is `set_logged` with the new workout revision. Set logging is a UI action;
-the agent reads the canonical record, it has no log command.
+the agent has no log command and works from the scoped canonical context
+supplied with the run.
 
 ### LOAD-01 — Change the weights
 
 I ask for heavier (or lighter) weights than prescribed.
 
-Pass when the agent first reads the canonical record including any logged
-actuals, then applies the change to unstarted work only: a new complete day
-through `workout override` when the request means different loads, or correct
-`actuals` on the logged sets when I lifted differently than prescribed. The
+Pass when the agent resolves the request into a new complete day through
+`workout override` with the new loads on unstarted work. A day with logged
+sets is locked, and the agent explains that instead of replacing it. The
 receipt and readback show the new loads without silently changing the
 published blueprint.
 

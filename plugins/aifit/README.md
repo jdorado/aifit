@@ -37,7 +37,9 @@ cat /absolute/path/swap.json | ez aifit workout swap \
   --input - --request-id swap-<unique-key> --expected-revision REV
 ```
 
-The override input is a complete resolved target-day artifact. Every override
+The full typed artifact schema and its rules live in `SKILL.md`, which is
+installed with the plugin and is the agent-facing format contract. The
+override input is a complete resolved target-day artifact. Every override
 slot contains exactly one resolved candidate. The agent resolves item changes
 and copied days from its native context; a swap input contains the current
 `workout_id`, `exercise_instance_id`, `expected_blueprint_revision`, and a
