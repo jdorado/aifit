@@ -27,6 +27,8 @@ from .ez import call as ez_call, provision_telegram, telegram_provisioning_confi
 from .model_policy import filter_control, require_allowed
 from .workouts import (
     BlueprintInput,
+    ClearWorkoutInput,
+    CopyLastWeekInput,
     ExerciseDefinitionInput,
     GenerateInput,
     PlanInput,
@@ -675,6 +677,18 @@ async def active_blueprint_v1(date: str | None = None, identity: Identity = Depe
 async def generate_workout_v1(body: GenerateInput, identity: Identity = Depends(require_identity)) -> dict:
     account = await browser_account(identity)
     return await workouts().generate(account["account_id"], body)
+
+
+@app.post("/v1/workouts/copy-last-week")
+async def copy_last_week_v1(body: CopyLastWeekInput, identity: Identity = Depends(require_identity)) -> dict:
+    account = await browser_account(identity)
+    return await workouts().copy_last_week(account["account_id"], body)
+
+
+@app.post("/v1/workouts/{workout_id}/clear")
+async def clear_workout_v1(workout_id: str, body: ClearWorkoutInput, identity: Identity = Depends(require_identity)) -> dict:
+    account = await browser_account(identity)
+    return await workouts().clear_workout(account["account_id"], workout_id, body)
 
 
 @app.get("/v1/workouts")
