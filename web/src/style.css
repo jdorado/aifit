@@ -3204,7 +3204,6 @@ button.ghost {
   color: #16784f;
 }
 
-.profile-telegram-open,
 .profile-telegram-retry,
 .profile-telegram-message {
   grid-column: 1 / -1;
