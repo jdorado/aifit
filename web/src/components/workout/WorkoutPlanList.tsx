@@ -40,6 +40,9 @@ type WorkoutPlanListProps = {
   extras: WorkoutExtra[]
   setLogs: Record<string, SetState[]>
   planNotes: string
+  canEditPlanNotes: boolean
+  savingPlanNotes: boolean
+  onSavePlanNotes: (notes: string) => Promise<boolean>
   circuitGroups: Map<string, CircuitGroup>
   getNextCircuitExercise: (items: WorkoutExercise[]) => WorkoutExercise | null
   onSelectEntry: (id: string, type: ActiveEntryType) => void
@@ -55,6 +58,9 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
   extras,
   setLogs,
   planNotes,
+  canEditPlanNotes,
+  savingPlanNotes,
+  onSavePlanNotes,
   circuitGroups,
   getNextCircuitExercise,
   onSelectEntry,
@@ -175,10 +181,6 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
   const hideEmptyState = loading && isEmptyDay
   const showEmptyState = !hideEmptyState && !hasWeekWorkouts && isEmptyDay
   const showNoWorkoutCard = !hideEmptyState && hasWeekWorkouts && isEmptyDay
-  const planNoteLines = planNotes
-    .split(/\r?\n/)
-    .map((line) => line.replace(/^[-•]\s*/, '').trim())
-    .filter(Boolean)
   const extraCards: JSX.Element[] = []
   const priorityExtraCards: JSX.Element[] = []
   let lastExtraStageKey: string | null = null
@@ -379,9 +381,12 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
     <section className={`workout-list ${activeEntryId ? 'hidden' : ''}`}>
       <div className="list-section">
         <PlanNotes
-          lines={planNoteLines}
+          notes={planNotes}
           open={planNotesOpen}
+          canEdit={canEditPlanNotes}
+          saving={savingPlanNotes}
           onToggle={() => setPlanNotesOpen((open) => !open)}
+          onSave={onSavePlanNotes}
         />
         {showEmptyState ? (
           <div className="workout-card rest-day" role="status">

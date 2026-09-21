@@ -10084,3 +10084,124 @@ body:has(.landing) {
   width: 19px;
   height: 19px;
 }
+
+/* Day notes and exercise feedback editing */
+
+.plan-notes-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.plan-notes-subtitle {
+  color: var(--ink-tertiary);
+  font-size: calc(11px * var(--font-scale));
+}
+
+.plan-notes-panel {
+  padding: 0 14px 14px;
+  border-top: 1px solid rgba(99, 102, 241, 0.16);
+}
+
+.plan-notes-input {
+  margin-top: 12px;
+  min-height: 72px;
+}
+
+.plan-notes-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.plan-notes-actions--start {
+  justify-content: space-between;
+}
+
+.plan-notes-empty {
+  margin: 0;
+  color: var(--ink-tertiary);
+  font-size: calc(13px * var(--font-scale));
+}
+
+.plan-notes-btn {
+  border: 1px solid rgba(99, 102, 241, 0.28);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--ink-primary);
+  font-size: calc(12px * var(--font-scale));
+  font-weight: 600;
+  padding: 8px 14px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.plan-notes-btn.primary {
+  background: var(--brand-primary);
+  border-color: transparent;
+  color: #ffffff;
+}
+
+.plan-notes-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.exercise-feedback {
+  border: 1px solid var(--glass-border);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.exercise-feedback-header {
+  cursor: default;
+}
+
+.exercise-feedback-saved {
+  color: var(--ink-tertiary);
+  font-size: calc(12px * var(--font-scale));
+  font-weight: 600;
+}
+
+.exercise-feedback-panel {
+  display: block;
+}
+
+.exercise-feedback-input {
+  margin-top: 10px;
+  min-height: 56px;
+}
+
+.exercise-feedback-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
+.exercise-feedback-save {
+  border: 0;
+  border-radius: 999px;
+  background: var(--brand-primary);
+  color: #ffffff;
+  font-size: calc(12px * var(--font-scale));
+  font-weight: 700;
+  padding: 8px 16px;
+  cursor: pointer;
+}
+
+.exercise-feedback-save:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.note-chip.is-active {
+  background: rgba(37, 99, 235, 0.14);
+  border-color: rgba(37, 99, 235, 0.55);
+}
+
+.view[data-view="workout"] .plan-notes-btn.primary,
+.view[data-view="workout"] .exercise-feedback-save {
+  background: var(--aifit-purple);
+  color: #ffffff;
+  border: 0;
+}

@@ -57,6 +57,8 @@ export type WorkoutTimer = {
     prepSec?: number
 }
 
+export type WorkoutFeedbackPreset = 'pain' | 'hard' | 'easy' | 'form'
+
 export type WorkoutExercise = {
     id: string
     name: string
@@ -67,6 +69,7 @@ export type WorkoutExercise = {
     section: string
     summary: string
     notes?: string
+    feedbackPreset?: WorkoutFeedbackPreset | null
     restSec?: number
     metric: 'reps' | 'time'
     sets: WorkoutSet[]

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { usePrivy } from '@privy-io/react-auth'
 import { marked } from 'marked'
 import { formatDurationForDisplay, normalizeWorkoutTargetText } from './utils/workoutDisplay'
-import type { WorkoutExercise, WorkoutExtra } from './data/testWorkout'
+import type { WorkoutExercise, WorkoutExtra, WorkoutFeedbackPreset } from './data/testWorkout'
 import { backendWorkoutToSession, type BackendWorkoutReceipt } from './utils/backendWorkoutAdapter'
 import { I18nProvider, createI18n } from './i18n'
 import { normalizeLanguage, type Language } from './i18n/strings'
@@ -797,6 +797,8 @@ const App = () => {
   const [activeEntryType, setActiveEntryType] = useState<ActiveEntryType>(null)
   const activeEntryRef = useRef<{ id: string | null, type: ActiveEntryType }>({ id: null, type: null })
   const [editingSet, setEditingSet] = useState<{ exerciseId: string, index: number } | null>(null)
+  const [dayNoteSaving, setDayNoteSaving] = useState(false)
+  const [exerciseFeedbackSaving, setExerciseFeedbackSaving] = useState(false)
   const [editingSetSnapshot, setEditingSetSnapshot] = useState<{
     weight: string
     metric: string
@@ -2785,6 +2787,118 @@ const App = () => {
     void unlogLoggedSet(exerciseId, index, previous)
   }, [bumpData, canLogSelectedDay, getExercise, unlogLoggedSet])
 
+  const handleSaveDayNote = useCallback(async (notes: string): Promise<boolean> => {
+    if (!canQuerySavedWorkoutSessions || dayNoteSaving) return false
+    const ownerId = coachActAsOwnerId ?? currentUserId
+    const targetDate = selectedDay?.date ?? todayId
+    const ownerKey = `${ownerId}:${targetDate}`
+    const workoutId = workoutIdByOwnerDateRef.current[ownerKey]
+    const revision = workoutRevisionByOwnerDateRef.current[ownerKey]
+    if (!workoutId || !revision) return false
+
+    setDayNoteSaving(true)
+    try {
+      const headers = { 'Content-Type': 'application/json', ...(await getPrivyAuthHeaders()) }
+      const response = await apiFetch(`${API_BASE_URL}/v1/workouts/${encodeURIComponent(workoutId)}/notes`, {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify({ notes, expected_revision: revision, request_id: crypto.randomUUID() }),
+      })
+      if (response.status === 409) {
+        // Canonical state moved on (agent edit or another tab). Pull it back in
+        // instead of retrying; the refreshed note is the canonical value.
+        delete workoutRevisionByOwnerDateRef.current[ownerKey]
+        await refreshVisibleWorkoutSessions().catch(() => false)
+        return false
+      }
+      if (!response.ok) throw new Error(`Day note save failed (${response.status})`)
+      const receipt = await response.json() as BackendWorkoutReceipt
+      const nextRevision = receipt.revision ?? receipt.workout?.revision
+      if (nextRevision) workoutRevisionByOwnerDateRef.current[ownerKey] = nextRevision
+      const savedNotes = typeof receipt.workout?.notes === 'string' ? receipt.workout.notes : notes
+      setWeekPlan((previous) => ({
+        ...previous,
+        days: previous.days.map((day) => (day.date === targetDate ? { ...day, planNotes: savedNotes } : day)),
+      }))
+      return true
+    } catch (error) {
+      console.warn('Day note save failed:', error)
+      return false
+    } finally {
+      setDayNoteSaving(false)
+    }
+  }, [
+    canQuerySavedWorkoutSessions,
+    coachActAsOwnerId,
+    currentUserId,
+    dayNoteSaving,
+    getPrivyAuthHeaders,
+    refreshVisibleWorkoutSessions,
+    selectedDay?.date,
+    todayId,
+  ])
+
+  const handleSaveExerciseFeedback = useCallback(async (
+    exerciseId: string,
+    note: string,
+    preset: WorkoutFeedbackPreset | null,
+  ): Promise<boolean> => {
+    if (!canQuerySavedWorkoutSessions || exerciseFeedbackSaving) return false
+    const ownerId = coachActAsOwnerId ?? currentUserId
+    const targetDate = selectedDay?.date ?? todayId
+    const ownerKey = `${ownerId}:${targetDate}`
+    const workoutId = workoutIdByOwnerDateRef.current[ownerKey]
+    const revision = workoutRevisionByOwnerDateRef.current[ownerKey]
+    if (!workoutId || !revision) return false
+
+    setExerciseFeedbackSaving(true)
+    try {
+      const headers = { 'Content-Type': 'application/json', ...(await getPrivyAuthHeaders()) }
+      const response = await apiFetch(
+        `${API_BASE_URL}/v1/workouts/${encodeURIComponent(workoutId)}/exercises/${encodeURIComponent(exerciseId)}/notes`,
+        {
+          method: 'PATCH',
+          headers,
+          body: JSON.stringify({ note, preset, expected_revision: revision, request_id: crypto.randomUUID() }),
+        },
+      )
+      if (response.status === 409) {
+        delete workoutRevisionByOwnerDateRef.current[ownerKey]
+        await refreshVisibleWorkoutSessions().catch(() => false)
+        return false
+      }
+      if (!response.ok) throw new Error(`Exercise feedback save failed (${response.status})`)
+      const receipt = await response.json() as BackendWorkoutReceipt
+      const nextRevision = receipt.revision ?? receipt.workout?.revision
+      if (nextRevision) workoutRevisionByOwnerDateRef.current[ownerKey] = nextRevision
+      const savedItem = receipt.workout?.segments
+        .flatMap((segment) => segment.items)
+        .find((item) => item.exercise_instance_id === exerciseId)
+      const exercise = workoutExercisesRef.current.find((item) => item.id === exerciseId)
+      if (exercise) {
+        exercise.notes = savedItem?.notes?.note ?? note
+        exercise.feedbackPreset = savedItem ? (savedItem.notes?.preset ?? null) : preset
+        bumpData()
+      }
+      return true
+    } catch (error) {
+      console.warn('Exercise feedback save failed:', error)
+      return false
+    } finally {
+      setExerciseFeedbackSaving(false)
+    }
+  }, [
+    bumpData,
+    canQuerySavedWorkoutSessions,
+    coachActAsOwnerId,
+    currentUserId,
+    exerciseFeedbackSaving,
+    getPrivyAuthHeaders,
+    refreshVisibleWorkoutSessions,
+    selectedDay?.date,
+    todayId,
+  ])
+
   const handleRefreshSession = useCallback(async () => {
     if (!currentUserId || !canQuerySavedWorkoutSessions) return false
     try {
@@ -3833,6 +3947,8 @@ const App = () => {
             extras={displayedWorkoutExtras}
             setLogs={setLogsRef.current}
             planNotes={selectedDay?.planNotes ?? ''}
+            savingDayNote={dayNoteSaving}
+            savingExerciseFeedback={exerciseFeedbackSaving}
             activeEntryId={activeEntryId}
             activeEntryType={activeEntryType}
             editingSet={editingSet}
@@ -3900,6 +4016,8 @@ const App = () => {
             onUpdateSetField={updateSetField}
             onStartHoldTimer={startHoldTimer}
             onLogHoldTimerSet={logHoldTimerSet}
+            onSaveDayNote={handleSaveDayNote}
+            onSaveExerciseFeedback={handleSaveExerciseFeedback}
             onCoachSend={handleCoachSend}
           />
           <ProfileView

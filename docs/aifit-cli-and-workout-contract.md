@@ -289,10 +289,19 @@ GET  /v1/blueprints/active?date=YYYY-MM-DD
 POST /v1/workouts/generate
 GET  /v1/workouts?start=YYYY-MM-DD&end=YYYY-MM-DD
 GET  /v1/workouts/{workout_id}
+PATCH /v1/workouts/{workout_id}/notes
+PATCH /v1/workouts/{workout_id}/exercises/{exercise_instance_id}/notes
 ```
 
 The frontend calls these authenticated backend routes. It never invokes the
 plugin, reads `EZ_PLUGIN_CONTEXT`, or treats a working JSON file as canonical.
+
+The workout record carries an optional day note (`notes`, empty by default) and
+each workout exercise instance can carry one feedback note
+(`notes: {note, preset, updated_at}` with `preset` one of `pain`, `hard`,
+`easy`, `form`, or null). Both are typed, revision-guarded writes with the same
+receipt and request-id idempotency as the other backend mutations; logged sets,
+swaps, and agent overrides keep them consistent with the canonical record.
 
 Generation input is deliberately small:
 

@@ -2,13 +2,14 @@ import type { FC } from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useI18n } from '../i18n'
 import CoachChat from '../components/workout/CoachChat'
+import ExerciseFeedback from '../components/workout/ExerciseFeedback'
 import ExerciseHistorySheet from '../components/workout/ExerciseHistorySheet'
 import ExerciseSetList from '../components/workout/ExerciseSetList'
 import VideoGallery from '../components/workout/VideoGallery'
 import WeekStrip from '../components/workout/WeekStrip'
 import WorkoutMiniBar from '../components/workout/WorkoutMiniBar'
 import WorkoutPlanList from '../components/workout/WorkoutPlanList'
-import type { WorkoutExercise, WorkoutExtra } from '../data/testWorkout'
+import type { WorkoutExercise, WorkoutExtra, WorkoutFeedbackPreset } from '../data/testWorkout'
 import type { ActiveEntryType, ChatMessage, HoldTimerState, SetState } from '../types/app'
 import {
   fetchExerciseHistory,
@@ -61,6 +62,8 @@ type WorkoutViewProps = {
   extras: WorkoutExtra[]
   setLogs: Record<string, SetState[]>
   planNotes: string
+  savingDayNote: boolean
+  savingExerciseFeedback: boolean
   activeEntryId: string | null
   activeEntryType: ActiveEntryType
   editingSet: { exerciseId: string, index: number } | null
@@ -85,6 +88,8 @@ type WorkoutViewProps = {
     options?: { sideIndex?: number, sideCount?: number },
   ) => void
   onLogHoldTimerSet: () => void
+  onSaveDayNote: (notes: string) => Promise<boolean>
+  onSaveExerciseFeedback: (exerciseId: string, note: string, preset: WorkoutFeedbackPreset | null) => Promise<boolean>
   onCoachSend: (exerciseId: string, message: string) => void
 }
 
@@ -115,6 +120,8 @@ const WorkoutView: FC<WorkoutViewProps> = ({
   extras,
   setLogs,
   planNotes,
+  savingDayNote,
+  savingExerciseFeedback,
   activeEntryId,
   activeEntryType,
   editingSet,
@@ -133,6 +140,8 @@ const WorkoutView: FC<WorkoutViewProps> = ({
   onUpdateSetField,
   onStartHoldTimer,
   onLogHoldTimerSet,
+  onSaveDayNote,
+  onSaveExerciseFeedback,
   onCoachSend,
 }) => {
   const { t } = useI18n()
@@ -436,6 +445,14 @@ const WorkoutView: FC<WorkoutViewProps> = ({
           onStartHoldTimer={onStartHoldTimer}
           onLogHoldTimerSet={onLogHoldTimerSet}
         />
+        <ExerciseFeedback
+          key={activeExercise.id}
+          note={activeExercise.notes ?? ''}
+          preset={activeExercise.feedbackPreset ?? null}
+          canEdit={canLogDay}
+          saving={savingExerciseFeedback}
+          onSave={(note, preset) => onSaveExerciseFeedback(activeExercise.id, note, preset)}
+        />
         {activeCircuit ? (
           <div className="circuit-card">
             <div className="circuit-header">
@@ -509,6 +526,9 @@ const WorkoutView: FC<WorkoutViewProps> = ({
         extras={extras}
         setLogs={setLogs}
         planNotes={planNotes}
+        canEditPlanNotes={canLogDay}
+        savingPlanNotes={savingDayNote}
+        onSavePlanNotes={onSaveDayNote}
         circuitGroups={circuitGroups}
         getNextCircuitExercise={getNextCircuitExercise}
         onSelectEntry={onSelectEntry}
