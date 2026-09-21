@@ -82,6 +82,19 @@ export default function TelegramLink({ apiBase, getHeaders }: {
     return () => window.clearInterval(interval)
   }, [loadConnection, t, waitingUntil])
 
+  useEffect(() => {
+    if (connection?.state !== 'link') return undefined
+    const check = () => {
+      if (document.visibilityState === 'visible') {
+        void loadConnection().catch(() => {
+          // A transient read failure must not interrupt the handoff.
+        })
+      }
+    }
+    document.addEventListener('visibilitychange', check)
+    return () => document.removeEventListener('visibilitychange', check)
+  }, [connection?.state, loadConnection])
+
   const acceptLink = (body: unknown) => {
     if (!isTelegramConnection(body)) throw new Error(t('profile.telegramUnavailable'))
     if (body.state === 'connected') {
@@ -155,6 +168,10 @@ export default function TelegramLink({ apiBase, getHeaders }: {
 
   const connected = connection?.state === 'connected'
   const needsBot = connection?.state === 'needs_bot'
+  const liveLink = connection?.state === 'link' && connection.connect_url && connection.expires_at
+    && Date.parse(connection.expires_at) > Date.now()
+    ? connection.connect_url
+    : null
 
   return (
     <section className="profile-telegram" aria-label={t('profile.telegramLabel')}>
@@ -167,6 +184,7 @@ export default function TelegramLink({ apiBase, getHeaders }: {
               ? t('profile.telegramBotDescription')
               : t('profile.telegramDescription')}
         </p>
+        {message ? <p className="profile-telegram-message" role="status">{message}</p> : null}
       </div>
       <div className="profile-telegram-actions">
         {loading ? <span className="profile-telegram-status">{t('common.loading')}</span> : null}
@@ -175,6 +193,26 @@ export default function TelegramLink({ apiBase, getHeaders }: {
           <button className="profile-telegram-connect" type="button" disabled={busy} onClick={() => void connect()}>
             {busy ? t('profile.telegramConnecting') : t('profile.telegramConnect')}
           </button>
+        ) : null}
+        {!loading && !connected && connection?.state === 'link' && connection.connect_url ? (
+          <a
+            className="profile-telegram-open"
+            href={connection.connect_url}
+            target="_blank"
+            rel="noreferrer"
+            onClick={(event) => {
+              if (!liveLink) {
+                event.preventDefault()
+                void connect()
+                return
+              }
+              void loadConnection().catch(() => {
+                // The poll retries; a read failure here must not block the handoff.
+              })
+            }}
+          >
+            {t('profile.telegramOpen')}
+          </a>
         ) : null}
       </div>
       {!loading && needsBot ? (
@@ -203,12 +241,6 @@ export default function TelegramLink({ apiBase, getHeaders }: {
           </div>
           <p className="profile-telegram-token-note">{t('profile.telegramBotTokenNote')}</p>
         </div>
-      ) : null}
-      {message ? <p className="profile-telegram-message" role="status">{message}</p> : null}
-      {connection?.state === 'link' && connection.connect_url && !connected ? (
-        <a className="profile-telegram-open" href={connection.connect_url} target="_blank" rel="noreferrer">
-          {t('profile.telegramOpen')}
-        </a>
       ) : null}
       {!loading && !connected && message && !connection?.connect_url && !needsBot ? (
         <button className="profile-telegram-retry" type="button" onClick={retry}>{t('common.retry')}</button>
