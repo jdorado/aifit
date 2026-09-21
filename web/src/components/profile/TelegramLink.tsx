@@ -9,16 +9,11 @@ type TelegramConnection = {
   expires_at?: string
 }
 
-const knownTelegramErrors = new Set([
-  'Telegram is not available for this agent yet.',
-  'Telegram could not verify that bot. Check its token and try again.',
-])
-
 const errorMessage = (value: unknown, fallback: string) => {
   const detail = value && typeof value === 'object' && typeof (value as { detail?: unknown }).detail === 'string'
     ? (value as { detail: string }).detail
     : null
-  return detail && knownTelegramErrors.has(detail) ? detail : fallback
+  return detail && detail === 'Telegram is not available for this agent yet.' ? detail : fallback
 }
 
 const isTelegramConnection = (value: unknown): value is TelegramConnection => (
@@ -33,10 +28,9 @@ export default function TelegramLink({ apiBase, getHeaders }: {
 }) {
   const { t } = useI18n()
   const [connection, setConnection] = useState<TelegramConnection | null>(null)
-  const [botToken, setBotToken] = useState('')
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
-  const [waitingUntil, setWaitingUntil] = useState<number | null>(null)
+  const [expiresAt, setExpiresAt] = useState<number | null>(null)
   const [message, setMessage] = useState<string | null>(null)
 
   const loadConnection = useCallback(async () => {
@@ -49,7 +43,9 @@ export default function TelegramLink({ apiBase, getHeaders }: {
       if (body.state === 'ready' && current?.state === 'link') return current
       return { state: body.state }
     })
-    if (body.state === 'connected') setWaitingUntil(null)
+    if (body.state === 'connected') {
+      setExpiresAt(null)
+    }
     return body
   }, [apiBase, getHeaders, t])
 
@@ -67,35 +63,36 @@ export default function TelegramLink({ apiBase, getHeaders }: {
   }, [loadConnection, t])
 
   useEffect(() => {
-    if (!waitingUntil) return
-    const interval = window.setInterval(() => {
-      if (Date.now() >= waitingUntil) {
-        setWaitingUntil(null)
-        setConnection((current) => current?.state === 'connected' ? current : { state: 'ready' })
-        setMessage(t('profile.telegramExpired'))
-        return
-      }
-      void loadConnection().catch(() => {
-        // The next short poll retries a transient read failure without disrupting the handoff.
-      })
-    }, 4_000)
-    return () => window.clearInterval(interval)
-  }, [loadConnection, t, waitingUntil])
+    if (!expiresAt) return undefined
+    const remaining = expiresAt - Date.now()
+    if (remaining <= 0) {
+      setExpiresAt(null)
+      setConnection((current) => (current?.state === 'connected' ? current : { state: 'ready' }))
+      setMessage(t('profile.telegramExpired'))
+      return undefined
+    }
+    const timer = window.setTimeout(() => {
+      setExpiresAt(null)
+      setConnection((current) => (current?.state === 'connected' ? current : { state: 'ready' }))
+      setMessage(t('profile.telegramExpired'))
+    }, remaining)
+    return () => window.clearTimeout(timer)
+  }, [expiresAt, t])
 
   const acceptLink = (body: unknown) => {
     if (!isTelegramConnection(body)) throw new Error(t('profile.telegramUnavailable'))
     if (body.state === 'connected') {
       setConnection({ state: 'connected' })
-      setWaitingUntil(null)
+      setExpiresAt(null)
       return
     }
     if (body.state !== 'link' || typeof body.connect_url !== 'string' || typeof body.expires_at !== 'string') {
       throw new Error(t('profile.telegramUnavailable'))
     }
-    const expiresAt = Date.parse(body.expires_at)
-    if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) throw new Error(t('profile.telegramExpired'))
+    const expiresAtMs = Date.parse(body.expires_at)
+    if (!Number.isFinite(expiresAtMs) || expiresAtMs <= Date.now()) throw new Error(t('profile.telegramExpired'))
     setConnection({ state: 'link', connect_url: body.connect_url, expires_at: body.expires_at })
-    setWaitingUntil(expiresAt)
+    setExpiresAt(expiresAtMs)
     setMessage(t('profile.telegramOpenHint'))
     window.open(body.connect_url, '_blank', 'noopener,noreferrer')
   }
@@ -113,33 +110,6 @@ export default function TelegramLink({ apiBase, getHeaders }: {
       acceptLink(body)
     } catch (error) {
       setMessage(error instanceof Error ? error.message : t('profile.telegramUnavailable'))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const addBot = async () => {
-    const value = botToken.trim()
-    if (!value) {
-      setMessage(t('profile.telegramBotRequired'))
-      return
-    }
-    setBusy(true)
-    setMessage(null)
-    try {
-      const response = await fetch(`${apiBase}/account/telegram/bot`, {
-        method: 'POST',
-        headers: { ...(await getHeaders()), 'content-type': 'application/json' },
-        body: JSON.stringify({ bot_token: value }),
-      })
-      const body = await response.json().catch(() => null)
-      setBotToken('')
-      if (!response.ok) {
-        throw new Error(errorMessage(body, t('profile.telegramBotInvalid')))
-      }
-      acceptLink(body)
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : t('profile.telegramBotInvalid'))
     } finally {
       setBusy(false)
     }
@@ -164,7 +134,7 @@ export default function TelegramLink({ apiBase, getHeaders }: {
           {connected
             ? t('profile.telegramConnected')
             : needsBot
-              ? t('profile.telegramBotDescription')
+              ? t('profile.telegramUnavailable')
               : t('profile.telegramDescription')}
         </p>
       </div>
@@ -177,33 +147,6 @@ export default function TelegramLink({ apiBase, getHeaders }: {
           </button>
         ) : null}
       </div>
-      {!loading && needsBot ? (
-        <div className="profile-telegram-bot">
-          <a className="profile-telegram-botfather" href="https://t.me/BotFather" target="_blank" rel="noreferrer">
-            {t('profile.telegramGetBot')}
-          </a>
-          <label className="profile-telegram-token-label" htmlFor="telegram-bot-token">
-            {t('profile.telegramBotToken')}
-          </label>
-          <div className="profile-telegram-token-row">
-            <input
-              id="telegram-bot-token"
-              className="profile-telegram-token"
-              type="password"
-              autoComplete="off"
-              spellCheck="false"
-              value={botToken}
-              placeholder={t('profile.telegramBotTokenPlaceholder')}
-              disabled={busy}
-              onChange={(event) => setBotToken(event.target.value)}
-            />
-            <button className="profile-telegram-connect" type="button" disabled={busy} onClick={() => void addBot()}>
-              {busy ? t('profile.telegramAddingBot') : t('profile.telegramAddBot')}
-            </button>
-          </div>
-          <p className="profile-telegram-token-note">{t('profile.telegramBotTokenNote')}</p>
-        </div>
-      ) : null}
       {message ? <p className="profile-telegram-message" role="status">{message}</p> : null}
       {connection?.state === 'link' && connection.connect_url && !connected ? (
         <a className="profile-telegram-open" href={connection.connect_url} target="_blank" rel="noreferrer">

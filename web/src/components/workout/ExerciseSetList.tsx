@@ -30,13 +30,10 @@ type ExerciseSetListProps = {
   holdTargetSec: number
   holdPrepSec: number
   canLogDay: boolean
-  canEditPlan: boolean
-  onAddSet: () => void
-  onDeleteSet: (exerciseId: string, index: number) => void
   onStartEditingSet: (exerciseId: string, index: number) => void
   onSaveEditingSet: () => void
   onCancelEditingSet: () => void
-  onUpdateSetField: (exerciseId: string, index: number, field: 'weight' | 'metric', value: string, propagate: boolean) => void
+  onUpdateSetField: (exerciseId: string, index: number, field: 'weight' | 'metric', value: string) => void
   onStartHoldTimer: (
     exerciseId: string,
     setIndex: number,
@@ -58,9 +55,6 @@ const ExerciseSetList: FC<ExerciseSetListProps> = ({
   holdTargetSec,
   holdPrepSec,
   canLogDay,
-  canEditPlan,
-  onAddSet,
-  onDeleteSet,
   onStartEditingSet,
   onSaveEditingSet,
   onCancelEditingSet,
@@ -265,7 +259,7 @@ const ExerciseSetList: FC<ExerciseSetListProps> = ({
                         value={currentState.metric}
                         inputMode="numeric"
                         onFocus={handleSetInputFocus}
-                        onChange={(event) => onUpdateSetField(exercise.id, index, 'metric', event.target.value, true)}
+                        onChange={(event) => onUpdateSetField(exercise.id, index, 'metric', event.target.value)}
                       />
                     </label>
                     {showWeightInput ? (
@@ -278,7 +272,7 @@ const ExerciseSetList: FC<ExerciseSetListProps> = ({
                           value={currentState.weight}
                           inputMode="decimal"
                           onFocus={handleSetInputFocus}
-                          onChange={(event) => onUpdateSetField(exercise.id, index, 'weight', event.target.value, true)}
+                          onChange={(event) => onUpdateSetField(exercise.id, index, 'weight', event.target.value)}
                         />
                       </label>
                     ) : null}
@@ -330,7 +324,7 @@ const ExerciseSetList: FC<ExerciseSetListProps> = ({
                         value={currentState.metric}
                         inputMode="numeric"
                         onFocus={handleSetInputFocus}
-                        onChange={(event) => onUpdateSetField(exercise.id, index, 'metric', event.target.value, false)}
+                        onChange={(event) => onUpdateSetField(exercise.id, index, 'metric', event.target.value)}
                       />
                     </label>
                     {showWeightInput ? (
@@ -343,7 +337,7 @@ const ExerciseSetList: FC<ExerciseSetListProps> = ({
                           value={currentState.weight}
                           inputMode="decimal"
                           onFocus={handleSetInputFocus}
-                          onChange={(event) => onUpdateSetField(exercise.id, index, 'weight', event.target.value, false)}
+                          onChange={(event) => onUpdateSetField(exercise.id, index, 'weight', event.target.value)}
                         />
                       </label>
                     ) : null}
@@ -363,7 +357,7 @@ const ExerciseSetList: FC<ExerciseSetListProps> = ({
               resultText = t('workout.pending')
             }
 
-            const actionsCount = currentState.done ? 2 : 1
+            const actionsCount = currentState.done ? 1 : 0
 
             return (
               <div
@@ -402,34 +396,11 @@ const ExerciseSetList: FC<ExerciseSetListProps> = ({
                       </svg>
                     </button>
                   ) : null}
-                  <button
-                    className="set-row-action danger"
-                    type="button"
-                    data-set-action="delete"
-                    title={currentState.done ? t('workout.deleteSet') : t('workout.removeSet')}
-                    aria-label={currentState.done ? t('workout.deleteSet') : t('workout.removeSet')}
-                    disabled={currentState.done ? !canLogDay : !canEditPlan}
-                    onClick={(currentState.done ? canLogDay : canEditPlan) ? () => onDeleteSet(exercise.id, index) : undefined}
-                  >
-                    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <polyline points="3 6 5 6 21 6" />
-                      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
-                      <path d="M10 11v6" />
-                      <path d="M14 11v6" />
-                      <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
-                    </svg>
-                  </button>
                 </div>
               </div>
             )
           })
         )}
-      </div>
-      <div className="set-list-actions">
-        <button className="add-set-btn" type="button" onClick={onAddSet} disabled={!canEditPlan}>
-          <span className="add-set-icon">+</span>
-          {t('workout.addSet')}
-        </button>
       </div>
     </>
   )

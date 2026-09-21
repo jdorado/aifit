@@ -102,28 +102,6 @@ def require_allowed(subject: str, cli: str, model: str | None, effort: str | Non
         raise HTTPException(403, "This model is not enabled for this AIFit account.")
 
 
-def fallback_choice(subject: str) -> ModelChoice | None:
-    policy = configured_model_policy()
-    return policy.fallback_for(subject) if policy else None
-
-
-def fallback_available(control: dict, choice: ModelChoice) -> bool:
-    in_catalog = any(
-        item["cli"] == choice.cli and item.get("model") == choice.model and choice.effort in item["efforts"]
-        for item in control["models"]
-    )
-    # Some Ez engines expose an OpenRouter/native choice as a preset without
-    # duplicating it in the generic model catalog. It is still a valid fallback
-    # when the preset carries the exact policy choice.
-    in_presets = any(
-        item.get("cli") == choice.cli
-        and item.get("model") == choice.model
-        and item.get("effort") == choice.effort
-        for item in control.get("presets", [])
-    )
-    return in_catalog or in_presets
-
-
 def filter_control(value: dict, subject: str) -> dict:
     allowed = allowed_choices(subject)
     if allowed is None:

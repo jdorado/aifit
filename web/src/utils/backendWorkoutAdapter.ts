@@ -146,6 +146,7 @@ const exerciseCategory = (kind: BackendSegment['kind']): WorkoutExercise['catego
 }
 
 const targetToSet = (row: BackendWorkoutSet) => ({
+  setId: row.set_id,
   targetReps: formatRange(row.target.reps),
   targetTime: row.target.duration_seconds ? formatRange(row.target.duration_seconds) : undefined,
   targetWeight: formatLoad(row.target.load),

@@ -7603,6 +7603,25 @@ body:has(.view[data-view="workout"] .workout-detail.active) {
   stroke-width: 1.8;
 }
 
+.view[data-view="home"] .chat-model-single {
+  display: inline-flex;
+  align-items: center;
+  width: 100%;
+  min-height: 40px;
+  padding: 0 15px;
+  border: 1px solid rgba(7, 26, 53, 0.08);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 5px 16px rgba(7, 26, 53, 0.07);
+  color: #050506;
+  font: inherit;
+  font-size: calc(13px * var(--font-scale));
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .view[data-view="home"] .chat-new-session {
   display: grid;
   flex: 0 0 40px;

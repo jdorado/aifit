@@ -18,6 +18,9 @@ const ChatHeader: FC<ChatHeaderProps> = ({
   onStartNewChat,
 }) => {
   const { t } = useI18n()
+  const singleModelOption = modelOptions.length === 1 ? modelOptions[0] : undefined
+  const activeModelOption = modelOptions.find((option) => option.value === selectedModel)
+    ?? singleModelOption
 
   return (
     <div className="chat-header">
@@ -43,6 +46,14 @@ const ChatHeader: FC<ChatHeaderProps> = ({
             </select>
             <svg viewBox="0 0 12 8" aria-hidden="true"><path d="m1 1 5 5 5-5" /></svg>
           </label>
+        ) : singleModelOption && activeModelOption ? (
+          <span
+            className="chat-model-single"
+            title={activeModelOption.label}
+            aria-label="AI model"
+          >
+            {activeModelOption.label}
+          </span>
         ) : null}
         <button
           className="chat-new-session"

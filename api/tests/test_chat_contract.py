@@ -59,7 +59,8 @@ async def test_enqueue_sends_untouched_text_and_slim_scope_only(monkeypatch, ide
     monkeypatch.setattr(main, "ez_call", ez_call)
     request_id = uuid4()
     body = main.ChatInput(user_id=identity.subject, request_id=request_id, message="echo test",
-                          reference_date="2026-09-20", exercise_id="wex_1")
+                          reference_date="2026-09-20", exercise_id="wex_1",
+                          expected_revision="rev_0123456789abcdef0123456789abcdef")
     result = await main.enqueue_chat(body, identity)
 
     assert len(submitted) == 1
@@ -69,6 +70,7 @@ async def test_enqueue_sends_untouched_text_and_slim_scope_only(monkeypatch, ide
     assert "[Selected day" not in admission["text"]
     assert admission["context"]["referenceDate"] == "2026-09-20"
     assert admission["context"]["exerciseId"] == "wex_1"
+    assert admission["context"]["expectedRevision"] == "rev_0123456789abcdef0123456789abcdef"
     assert "aifit" not in admission["context"]
     assert admission["context"]["plugins"] == {"aifit": {"cap": "c"}}
     assert result["job_id"] == "run_1"

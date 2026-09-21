@@ -45,5 +45,4 @@ assert.doesNotMatch(appSource, /workout-sessions|coach_links|exercise-history|ex
 assert.match(appSource, /handleVaryDayWorkout/, 'Jev day variation must remain available')
 assert.match(menuSource, /onVaryWorkout/, 'workout menu must keep the Jev variation action')
 
-assert.match(menuSource, /onCopyLastWeek/, 'manual same-weekday copy must remain available')
 console.log('workout timeline contract passed')

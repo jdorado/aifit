@@ -8,7 +8,6 @@
     "fe": "node scripts/dev.cjs",
     "build": "node scripts/workout_timeline_contract.cjs && node scripts/pwa_resume_contract.cjs && tsc && webpack --config webpack.config.cjs --mode production",
     "preview": "serve dist",
-    "smoke:workout-safety": "node scripts/workout_safety_smoke.cjs",
     "smoke:timeline-contract": "node scripts/workout_timeline_contract.cjs",
     "smoke:pwa-resume": "node scripts/pwa_resume_contract.cjs"
   },

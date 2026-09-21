@@ -1,8 +1,7 @@
-import { useCallback, useEffect, useRef, useState, type FC, type MouseEvent as ReactMouseEvent, type TouchEvent } from 'react'
+import { useCallback, useState, type FC } from 'react'
 import { useI18n } from '../../i18n'
 import type { WorkoutExercise, WorkoutExtra } from '../../data/testWorkout'
 import type { ActiveEntryType, SetState } from '../../types/app'
-import NotesBlock from './NotesBlock'
 import PlanNotes from './PlanNotes'
 
 type SectionTone = 'default' | 'warmup' | 'main' | 'conditioning' | 'circuit' | 'rehab' | 'cooldown' | 'recovery' | 'night'
@@ -25,18 +24,6 @@ const SECTION_TONE_COLOR_SLOTS: Partial<Record<SectionTone, number>> = {
   rehab: 6,
 }
 
-type PlanSwipeState = {
-  startX: number
-  startY: number
-  exerciseId: string
-}
-
-type ExtraSwipeState = {
-  startX: number
-  startY: number
-  extraId: string
-}
-
 type CircuitGroup = {
   items: Array<{ exercise: WorkoutExercise, index: number }>
   rounds?: number
@@ -46,7 +33,6 @@ type CircuitGroup = {
 
 type WorkoutPlanListProps = {
   activeEntryId: string | null
-  canEditPlan: boolean
   hasWeekWorkouts: boolean
   loading: boolean
   selectedDayLabel: string
@@ -54,177 +40,28 @@ type WorkoutPlanListProps = {
   extras: WorkoutExtra[]
   setLogs: Record<string, SetState[]>
   planNotes: string
-  dayNotes: string
   circuitGroups: Map<string, CircuitGroup>
   getNextCircuitExercise: (items: WorkoutExercise[]) => WorkoutExercise | null
   onSelectEntry: (id: string, type: ActiveEntryType) => void
-  onRemoveExercise: (exerciseId: string) => void
-  onRemoveExtra: (extraId: string) => void
-  onRemoveCircuit: (circuitName: string) => void
-  onRemoveSection: (sectionLabel: string) => void
-  onUpdateDayNotes: (value: string) => void
 }
 
 const DEFAULT_COLLAPSED_SECTIONS: Record<string, boolean> = {}
 
-const TrashIcon = () => (
-  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
-    <polyline points="3 6 5 6 21 6" />
-    <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
-    <path d="M10 11v6" />
-    <path d="M14 11v6" />
-    <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
-  </svg>
-)
-
 const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
   activeEntryId,
-  canEditPlan,
   hasWeekWorkouts,
   loading,
-  selectedDayLabel,
   exercises,
   extras,
   setLogs,
   planNotes,
-  dayNotes,
   circuitGroups,
   getNextCircuitExercise,
   onSelectEntry,
-  onRemoveExercise,
-  onRemoveExtra,
-  onRemoveCircuit,
-  onRemoveSection,
-  onUpdateDayNotes,
 }) => {
   const { t } = useI18n()
-  const [planSwipeActiveId, setPlanSwipeActiveId] = useState<string | null>(null)
-  const planSwipeRef = useRef<PlanSwipeState | null>(null)
-  const planSwipeIgnoreClickRef = useRef(false)
-  const [extraSwipeActiveId, setExtraSwipeActiveId] = useState<string | null>(null)
-  const extraSwipeRef = useRef<ExtraSwipeState | null>(null)
-  const extraSwipeIgnoreClickRef = useRef(false)
   const [planNotesOpen, setPlanNotesOpen] = useState(false)
-  const [dayNotesOpen, setDayNotesOpen] = useState(false)
   const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>(() => ({ ...DEFAULT_COLLAPSED_SECTIONS }))
-
-  useEffect(() => {
-    setDayNotesOpen(false)
-  }, [selectedDayLabel])
-
-  useEffect(() => {
-    setPlanSwipeActiveId(null)
-  }, [canEditPlan, exercises])
-
-  useEffect(() => {
-    setExtraSwipeActiveId(null)
-  }, [canEditPlan, extras])
-
-  const handlePlanTouchStart = (exerciseId: string) => (event: TouchEvent<HTMLElement>) => {
-    if (!canEditPlan) return
-    const touch = event.touches[0]
-    planSwipeRef.current = { startX: touch.clientX, startY: touch.clientY, exerciseId }
-  }
-
-  const handlePlanTouchEnd = (exerciseId: string) => (event: TouchEvent<HTMLElement>) => {
-    if (!canEditPlan) return
-    if (!planSwipeRef.current) return
-    const touch = event.changedTouches[0]
-    const deltaX = touch.clientX - planSwipeRef.current.startX
-    const deltaY = touch.clientY - planSwipeRef.current.startY
-    const isHorizontal = Math.abs(deltaX) > Math.abs(deltaY)
-
-    if (isHorizontal && Math.abs(deltaX) > 50) {
-      planSwipeIgnoreClickRef.current = true
-      if (deltaX < 0) {
-        setPlanSwipeActiveId(exerciseId)
-      } else if (deltaX > 0) {
-        setPlanSwipeActiveId((current) => (current === exerciseId ? null : current))
-      }
-      window.setTimeout(() => {
-        planSwipeIgnoreClickRef.current = false
-      }, 250)
-    }
-
-    planSwipeRef.current = null
-  }
-
-  const handlePlanCardClick = (exerciseId: string) => (event: ReactMouseEvent<HTMLButtonElement>) => {
-    const target = event.target as HTMLElement
-    if (target.closest('[data-plan-action]')) return
-    if (planSwipeIgnoreClickRef.current) return
-
-    if (planSwipeActiveId !== null) {
-      setPlanSwipeActiveId(null)
-      return
-    }
-
-    onSelectEntry(exerciseId, 'exercise')
-  }
-
-  const handleRemoveExercise = useCallback((exercise: WorkoutExercise) => {
-    const confirmed = window.confirm(t('workout.removeExerciseConfirm', { name: exercise.name }))
-    if (!confirmed) return
-    setPlanSwipeActiveId(null)
-    onRemoveExercise(exercise.id)
-  }, [onRemoveExercise, t])
-
-  const handleRemoveCircuit = useCallback((circuitName: string) => {
-    const confirmed = window.confirm(t('workout.removeCircuitConfirm', { name: circuitName }))
-    if (!confirmed) return
-    setPlanSwipeActiveId(null)
-    onRemoveCircuit(circuitName)
-  }, [onRemoveCircuit, t])
-
-  const handleRemoveSection = useCallback((sectionLabel: string) => {
-    const confirmed = window.confirm(t('workout.removeSectionConfirm', { name: sectionLabel }))
-    if (!confirmed) return
-    setPlanSwipeActiveId(null)
-    setExtraSwipeActiveId(null)
-    onRemoveSection(sectionLabel)
-  }, [onRemoveSection, t])
-
-  const handleExtraTouchStart = (extraId: string) => (event: TouchEvent<HTMLDivElement>) => {
-    if (!canEditPlan) return
-    const touch = event.touches[0]
-    extraSwipeRef.current = { startX: touch.clientX, startY: touch.clientY, extraId }
-  }
-
-  const handleExtraTouchEnd = (extraId: string) => (event: TouchEvent<HTMLDivElement>) => {
-    if (!canEditPlan) return
-    if (!extraSwipeRef.current) return
-    const touch = event.changedTouches[0]
-    const deltaX = touch.clientX - extraSwipeRef.current.startX
-    const deltaY = touch.clientY - extraSwipeRef.current.startY
-    const isHorizontal = Math.abs(deltaX) > Math.abs(deltaY)
-
-    if (isHorizontal && Math.abs(deltaX) > 50) {
-      extraSwipeIgnoreClickRef.current = true
-      if (deltaX < 0) {
-        setExtraSwipeActiveId(extraId)
-      } else if (deltaX > 0) {
-        setExtraSwipeActiveId((current) => (current === extraId ? null : current))
-      }
-      window.setTimeout(() => {
-        extraSwipeIgnoreClickRef.current = false
-      }, 250)
-    }
-
-    extraSwipeRef.current = null
-  }
-
-  const handleExtraCardClick = (extraId: string) => (event: ReactMouseEvent<HTMLButtonElement>) => {
-    const target = event.target as HTMLElement
-    if (target.closest('[data-extra-action]')) return
-    if (extraSwipeIgnoreClickRef.current) return
-
-    if (extraSwipeActiveId !== null) {
-      setExtraSwipeActiveId(null)
-      return
-    }
-
-    onSelectEntry(extraId, 'extra')
-  }
 
   const toggleSection = useCallback((sectionKey: string) => {
     setCollapsedSections((current) => ({
@@ -309,15 +146,12 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
 
   const renderStageHeader = (stage: SectionInfo, key: string, colorSlot: number) => {
     const collapsed = Boolean(collapsedSections[stage.key])
-    const stageSwipeId = `section:${stage.key}`
     return (
       <div
         key={key}
         data-stage={stage.tone}
         data-section-color={colorSlot}
-        className={`workout-stage-row ${canEditPlan && planSwipeActiveId === stageSwipeId ? 'show-actions' : ''}`}
-        onTouchStart={canEditPlan ? handlePlanTouchStart(stageSwipeId) : undefined}
-        onTouchEnd={canEditPlan ? handlePlanTouchEnd(stageSwipeId) : undefined}
+        className="workout-stage-row"
       >
         <button
           className={`workout-stage ${collapsed ? 'is-collapsed' : ''}`}
@@ -325,34 +159,11 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
           data-stage={stage.tone}
           data-section-color={colorSlot}
           aria-expanded={!collapsed}
-          onClick={() => {
-            if (planSwipeIgnoreClickRef.current) return
-            if (planSwipeActiveId !== null) {
-              setPlanSwipeActiveId(null)
-              return
-            }
-            toggleSection(stage.key)
-          }}
+          onClick={() => toggleSection(stage.key)}
         >
           <span className="workout-stage-label">{stage.label}</span>
           <span className="workout-stage-chevron" aria-hidden="true">&gt;</span>
         </button>
-        {canEditPlan ? (
-          <div className="workout-stage-actions">
-            <button
-              className="plan-row-action danger"
-              type="button"
-              title={t('workout.removeSection')}
-              aria-label={t('workout.removeSection')}
-              onClick={() => handleRemoveSection(stage.label)}
-            >
-              <span className="plan-row-action-icon" aria-hidden="true">
-                <TrashIcon />
-              </span>
-              <span className="plan-row-action-label">{t('workout.deleteAction')}</span>
-            </button>
-          </div>
-        ) : null}
       </div>
     )
   }
@@ -429,14 +240,11 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
         typeof restAfterSec === 'number' ? t('workout.restSeconds', { count: restAfterSec }) : null,
       ].filter(Boolean).join(' · ')
       const nextExercise = getNextCircuitExercise(exercisesInCircuit)
-      const circuitSwipeId = `circuit:${circuitName}`
 
       cards.push(
         <div
           key={`circuit-row-${circuitName}`}
-          className={`plan-row ${canEditPlan && planSwipeActiveId === circuitSwipeId ? 'show-actions' : ''}`}
-          onTouchStart={canEditPlan ? handlePlanTouchStart(circuitSwipeId) : undefined}
-          onTouchEnd={canEditPlan ? handlePlanTouchEnd(circuitSwipeId) : undefined}
+          className="plan-row"
         >
           <div
             className={`workout-card circuit-group ${isCompleted ? 'is-completed' : ''}`}
@@ -448,7 +256,7 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
             <button
               className="circuit-group-start"
               type="button"
-              onClick={handlePlanCardClick((nextExercise || exercisesInCircuit[0]).id)}
+              onClick={() => onSelectEntry((nextExercise || exercisesInCircuit[0]).id, 'exercise')}
             >
               <div>
                 <p className="card-label">{t('workout.circuit')}</p>
@@ -466,66 +274,21 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
                 return (
                   <li
                     key={`${item.id}-preview`}
-                    className={`circuit-preview-item ${canEditPlan && planSwipeActiveId === item.id ? 'show-actions' : ''}`}
-                    onTouchStart={canEditPlan
-                      ? (event) => {
-                        event.stopPropagation()
-                        handlePlanTouchStart(item.id)(event)
-                      }
-                      : undefined}
-                    onTouchEnd={canEditPlan
-                      ? (event) => {
-                        event.stopPropagation()
-                        handlePlanTouchEnd(item.id)(event)
-                      }
-                      : undefined}
+                    className="circuit-preview-item"
                   >
                     <button
                       className="circuit-preview-btn"
                       type="button"
-                      onClick={handlePlanCardClick(item.id)}
+                      onClick={() => onSelectEntry(item.id, 'exercise')}
                     >
                       <span className="circuit-preview-index">{order}</span>
                       <span className="circuit-preview-name">{item.name}</span>
                     </button>
-                    {canEditPlan ? (
-                      <div className="circuit-preview-actions">
-                        <button
-                          className="plan-row-action danger"
-                          type="button"
-                          data-plan-action="remove"
-                          title={t('workout.removeExercise')}
-                          aria-label={t('workout.removeExercise')}
-                          onClick={() => handleRemoveExercise(item)}
-                        >
-                          <span className="plan-row-action-icon" aria-hidden="true">
-                            <TrashIcon />
-                          </span>
-                          <span className="plan-row-action-label">{t('workout.deleteAction')}</span>
-                        </button>
-                      </div>
-                    ) : null}
                   </li>
                 )
               })}
             </ol>
           </div>
-          {canEditPlan ? (
-            <div className="plan-row-actions">
-              <button
-                className="plan-row-action danger"
-                type="button"
-                title={t('workout.removeCircuit')}
-                aria-label={t('workout.removeCircuit')}
-                onClick={() => handleRemoveCircuit(circuitName)}
-              >
-                <span className="plan-row-action-icon" aria-hidden="true">
-                  <TrashIcon />
-                </span>
-                <span className="plan-row-action-label">{t('workout.deleteAction')}</span>
-              </button>
-            </div>
-          ) : null}
         </div>
       )
       return
@@ -549,14 +312,12 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
     cards.push(
       <div
         key={exercise.id}
-        className={`plan-row ${canEditPlan && planSwipeActiveId === exercise.id ? 'show-actions' : ''}`}
-        onTouchStart={canEditPlan ? handlePlanTouchStart(exercise.id) : undefined}
-        onTouchEnd={canEditPlan ? handlePlanTouchEnd(exercise.id) : undefined}
+        className="plan-row"
       >
         <button
           className={`workout-card ${exercise.status === 'skip' ? 'is-skip' : ''} ${isCompleted ? 'is-completed' : ''}`}
           type="button"
-          onClick={handlePlanCardClick(exercise.id)}
+          onClick={() => onSelectEntry(exercise.id, 'exercise')}
           data-stage={stage.tone}
           data-section-color={colorSlot}
         >
@@ -572,23 +333,6 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
             <span className="chevron">&gt;</span>
           </div>
         </button>
-        {canEditPlan ? (
-          <div className="plan-row-actions">
-            <button
-              className="plan-row-action danger"
-              type="button"
-              data-plan-action="remove"
-              title={t('workout.removeExercise')}
-              aria-label={t('workout.removeExercise')}
-              onClick={() => handleRemoveExercise(exercise)}
-            >
-              <span className="plan-row-action-icon" aria-hidden="true">
-                <TrashIcon />
-              </span>
-              <span className="plan-row-action-label">{t('workout.deleteAction')}</span>
-            </button>
-          </div>
-        ) : null}
       </div>
     )
   })
@@ -608,14 +352,12 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
     targetCards.push(
       <div
         key={extra.id}
-        className={`plan-row ${canEditPlan && extraSwipeActiveId === extra.id ? 'show-actions' : ''}`}
-        onTouchStart={canEditPlan ? handleExtraTouchStart(extra.id) : undefined}
-        onTouchEnd={canEditPlan ? handleExtraTouchEnd(extra.id) : undefined}
+        className="plan-row"
       >
         <button
           className="workout-card extra"
           type="button"
-          onClick={handleExtraCardClick(extra.id)}
+          onClick={() => onSelectEntry(extra.id, 'extra')}
           data-stage={stage.tone}
           data-section-color={colorSlot}
         >
@@ -629,34 +371,6 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
             <span className="chevron">&gt;</span>
           </div>
         </button>
-        {canEditPlan && !extra.isReadOnly ? (
-          <div className="plan-row-actions">
-            <button
-              className="plan-row-action danger"
-              type="button"
-              data-extra-action="remove"
-              title={t('workout.removeExtra')}
-              aria-label={t('workout.removeExtra')}
-              onClick={() => {
-                const confirmed = window.confirm(t('workout.removeExtraConfirm', { name: extra.name }))
-                if (!confirmed) return
-                setExtraSwipeActiveId(null)
-                onRemoveExtra(extra.id)
-              }}
-            >
-              <span className="plan-row-action-icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="3 6 5 6 21 6" />
-                  <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
-                  <path d="M10 11v6" />
-                  <path d="M14 11v6" />
-                  <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
-                </svg>
-              </span>
-              <span className="plan-row-action-label">{t('workout.deleteAction')}</span>
-            </button>
-          </div>
-        ) : null}
       </div>
     )
   })
@@ -686,19 +400,6 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
             </div>
           </div>
         ) : [...priorityExtraCards, ...cards, ...extraCards]}
-        {!hideEmptyState ? (
-          <NotesBlock
-            open={dayNotesOpen}
-            canEdit={canEditPlan}
-            title={t('workout.dayNotesLabel')}
-            subtitle={t('workout.dayNotesHint')}
-            value={dayNotes}
-            placeholder={t('workout.dayNotesPlaceholder')}
-            ariaLabel={t('workout.dayNotesLabel')}
-            onToggle={() => setDayNotesOpen((open) => !open)}
-            onChange={onUpdateDayNotes}
-          />
-        ) : null}
       </div>
     </section>
   )

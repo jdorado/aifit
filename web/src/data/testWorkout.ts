@@ -1,5 +1,6 @@
 
 export type WorkoutSet = {
+    setId?: string
     targetReps?: string
     targetTime?: string
     targetWeight?: string

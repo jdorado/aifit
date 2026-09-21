@@ -2,7 +2,7 @@ import { createPortal } from 'react-dom'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { FC, KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { useI18n } from '../../i18n'
-import type { ChatMessage, QuickActionOption } from '../../types/app'
+import type { ChatMessage } from '../../types/app'
 import ThinkingCounter, { ReplyElapsed } from '../chat/ThinkingCounter'
 
 type CoachChatProps = {
@@ -14,9 +14,6 @@ type CoachChatProps = {
   onToggle: () => void
   onDraftChange: (value: string) => void
   onSend: () => void
-  quickPrompts?: Array<{ label: string, message: string }>
-  onQuickPrompt?: (message: string) => void
-  onQuickAction?: (messageId: string, option: QuickActionOption) => void
 }
 
 const CoachChat: FC<CoachChatProps> = ({
@@ -28,9 +25,6 @@ const CoachChat: FC<CoachChatProps> = ({
   onToggle,
   onDraftChange,
   onSend,
-  quickPrompts = [],
-  onQuickPrompt,
-  onQuickAction,
 }) => {
   const { t } = useI18n()
   const hasDraft = !disabled && draft.trim().length > 0
@@ -207,11 +201,8 @@ const CoachChat: FC<CoachChatProps> = ({
               }
 
               return (
-                <div
-                  key={message.id}
-                  className={`coach-chat-msg ${message.variant}${message.quickActions?.length ? ' has-actions' : ''}`}
-                >
-                  <div className={message.quickActions?.length ? 'coach-chat-msg-copy' : undefined}>
+                <div key={message.id} className={`coach-chat-msg ${message.variant}`}>
+                  <div>
                     {message.variant === 'ai' && message.html ? (
                       <div dangerouslySetInnerHTML={{ __html: message.html }}></div>
                     ) : (
@@ -225,33 +216,10 @@ const CoachChat: FC<CoachChatProps> = ({
                       />
                     ) : null}
                   </div>
-                  {message.variant === 'ai' && message.quickActions?.length ? (
-                    <div className="coach-chat-action-options">
-                      {message.quickActions.map((option) => (
-                        <button
-                          type="button"
-                          key={option.id}
-                          disabled={option.applied || message.quickActions?.some((item) => item.applied)}
-                          onClick={() => onQuickAction?.(message.id, option)}
-                        >
-                          {option.applied ? `✓ ${option.label}` : option.label}
-                        </button>
-                      ))}
-                    </div>
-                  ) : null}
                 </div>
               )
             })}
           </div>
-          {quickPrompts.length ? (
-            <div className="coach-chat-prompts" aria-label="Quick actions">
-              {quickPrompts.map((prompt) => (
-                <button type="button" key={prompt.message} onClick={() => onQuickPrompt?.(prompt.message)}>
-                  {prompt.label}
-                </button>
-              ))}
-            </div>
-          ) : null}
           <div className="coach-chat-input">
             <textarea
               ref={inputRef}

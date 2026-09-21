@@ -1,18 +1,14 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { usePrivy } from '@privy-io/react-auth'
 import { marked } from 'marked'
-import { parseWorkout } from './utils/workoutParser'
 import { formatDurationForDisplay, normalizeWorkoutTargetText } from './utils/workoutDisplay'
 import type { WorkoutExercise, WorkoutExtra } from './data/testWorkout'
-import { isExerciseLockedFromLogs } from './utils/workoutSafety'
 import { backendWorkoutToSession, type BackendWorkoutReceipt } from './utils/backendWorkoutAdapter'
 import { I18nProvider, createI18n } from './i18n'
 import { normalizeLanguage, type Language } from './i18n/strings'
 import TabBar from './components/TabBar'
-import HealthTimelineView from './views/HealthTimelineView'
 import RestOverlay from './components/RestOverlay'
 import MiniTimer from './components/MiniTimer'
-import VideoModal from './components/VideoModal'
 import ChatView from './views/ChatView'
 import WorkoutView from './views/WorkoutView'
 import ProfileView from './views/ProfileView'
@@ -23,29 +19,21 @@ import type {
   ActiveEntryType,
   AuthUiState,
   ChatMessage,
-  CoachLink,
-  CoachPermissions,
   HoldTimerState,
-  QuickActionOption,
   RestState,
   SetState,
-  Video,
 } from './types/app'
 import type { WorkoutSession } from './types/workoutSession'
-import type { ExerciseHistoryResponse } from './types/exerciseHistory'
 
 const restDefaultSec = 90
 const sideTransitionPrepSec = 5
 const LEGACY_SESSION_CACHE_STORAGE_PREFIX = 'aifit_session_cache_v1:'
-const SESSION_SAVE_DEBOUNCE_MS = 1500
+const PROFILE_SAVE_DEBOUNCE_MS = 1500
 const MAIN_CHAT_HISTORY_LIMIT = 40
 const BACKEND_HEALTH_STALE_MS = 4 * 60 * 1000
 const BACKEND_HEALTH_PING_TIMEOUT_MS = 12 * 1000
-const BACKEND_KEEPALIVE_MS = 4 * 60 * 1000
-const CHAT_JOB_INITIAL_POLL_MS = 900
 const CHAT_JOB_POLL_MS = 2500
 const CHAT_JOB_MAX_WAIT_MS = 8 * 60 * 1000
-const CHAT_JOB_MAX_POLL_FAILURES = 4
 
 type EzPreset = {
   id: string
@@ -143,36 +131,8 @@ type WakeLockSentinelLike = {
 
 type ProfileState = {
   text: string
-  weeklyPlan: string
   language: Language
   fontScale: number
-  activeNotes: ActiveNote[]
-  dailyTasks: DailyTask[]
-}
-
-type DailyTask = {
-  id: string
-  title: string
-  summary: string
-  notes: string[]
-}
-
-type ActiveNote = {
-  key: string
-  text: string
-  updatedAt?: string
-}
-
-type ActiveNotesPatch = {
-  upsert: Array<{ key: string, text: string }>
-  deleteKeys: string[]
-  deleteTexts: string[]
-}
-
-type VideoCacheEntry = {
-  ts: number
-  videos: Video[]
-  exactMatch?: boolean | null
 }
 
 type PersistedMessage = {
@@ -189,15 +149,12 @@ type ChatRequestPayload = {
   scope_id?: string
   reference_date?: string
   exercise_id?: string
+  expected_revision?: string
 }
 
 type ChatResponsePayload = {
   reply?: unknown
   preset?: EzPreset
-  workout_update?: unknown
-  workout_updates?: unknown
-  active_notes_patch?: unknown
-  profile_update?: unknown
 }
 
 type ChatJobResponsePayload = ChatResponsePayload & {
@@ -235,11 +192,6 @@ type WeekPlan = {
 }
 
 type WeekSetLogs = Record<string, Record<string, SetState[]>>
-type WeekBaseCounts = Record<string, Record<string, number>>
-
-const videoCacheTtlMs = 6 * 60 * 60 * 1000
-const videoCacheMaxEntries = 40
-const videoCacheStorageKey = 'aifit_video_cache_v3'
 
 const purgeLegacySessionCaches = () => {
   try {
@@ -324,14 +276,6 @@ const buildWorkoutStripDates = (todayId: string, weekStartDayIndex = 1) => {
   return [...currentWeekDates, ...projectedDates]
 }
 
-const normalizeDayLabel = (value: string) => (
-  value
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .trim()
-    .toLowerCase()
-)
-
 // Canonical rows can outlive frontend schema additions. Keep optional display
 // collections safe at the hydration boundary so opening an older item cannot
 // take down the whole app with `.map`/`.length` errors.
@@ -372,81 +316,6 @@ const normalizeWorkoutExtras = (value: unknown): WorkoutExtra[] => (
     : []
 )
 
-const normalizeProfileText = (value: unknown) => {
-  if (typeof value === 'string') return value.trim()
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return ''
-  const record = value as Record<string, unknown>
-  const direct = typeof record.text === 'string' ? record.text.trim() : ''
-  if (direct) return direct
-
-  const bio = typeof record.bio === 'string' ? record.bio.trim() : ''
-  const goals = typeof record.goals === 'string' ? record.goals.trim() : ''
-  const medical = typeof record.medical === 'string' ? record.medical.trim() : ''
-  const experience = typeof record.experience === 'string' ? record.experience.trim() : ''
-
-  const parts: string[] = []
-  if (bio) parts.push(`Bio: ${bio}`)
-  if (goals) parts.push(`Goals: ${goals}`)
-  if (medical) parts.push(`Medical: ${medical}`)
-  if (experience) parts.push(`Experience: ${experience}`)
-  return parts.join('\n').trim()
-}
-
-const normalizeWeeklyPlanText = (value: unknown) => {
-  if (typeof value === 'string') return value.trim()
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return ''
-  const record = value as Record<string, unknown>
-  const direct = typeof record.text === 'string' ? record.text.trim() : ''
-  if (direct) return direct
-  const summary = typeof record.summary === 'string' ? record.summary.trim() : ''
-  if (summary) return summary
-  const overview = typeof record.overview === 'string' ? record.overview.trim() : ''
-  if (overview) return overview
-  const plan = typeof record.plan === 'string' ? record.plan.trim() : ''
-  if (plan) return plan
-  return ''
-}
-
-const normalizeActiveNoteText = (value: unknown) => (
-  typeof value === 'string' ? value.replace(/\s+/g, ' ').trim().slice(0, 240) : ''
-)
-
-const normalizeActiveNoteKey = (value: unknown, fallbackText?: string) => {
-  const raw = typeof value === 'string' && value.trim() ? value.trim() : (fallbackText ?? '')
-  const normalized = raw
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '_')
-    .replace(/^_+|_+$/g, '')
-    .slice(0, 48)
-  return normalized || 'note'
-}
-
-const normalizeActiveNotes = (value: unknown): ActiveNote[] => {
-  const rawItems = Array.isArray(value)
-    ? value
-    : (typeof value === 'string' ? value.split(/\n+/).filter(Boolean) : [])
-  const notes: ActiveNote[] = []
-  const seen = new Set<string>()
-
-  rawItems.forEach((item) => {
-    const record = item && typeof item === 'object' && !Array.isArray(item)
-      ? item as Record<string, unknown>
-      : null
-    const text = normalizeActiveNoteText(record ? (record.text ?? record.note ?? record.value) : item)
-    if (!text) return
-    const key = normalizeActiveNoteKey(record ? (record.key ?? record.id ?? record.topic) : undefined, text)
-    const dedupeKey = key || text.toLowerCase()
-    if (seen.has(dedupeKey)) return
-    seen.add(dedupeKey)
-    const updatedAt = typeof record?.updatedAt === 'string'
-      ? record.updatedAt
-      : (typeof record?.updated_at === 'string' ? record.updated_at : undefined)
-    notes.push({ key, text, updatedAt })
-  })
-
-  return notes.slice(-12)
-}
-
 const getWeekdayLabel = (date: Date, language: Language = 'en') => {
   const labels = language === 'es' ? WEEKDAY_LABELS_ES : WEEKDAY_LABELS
   return labels[date.getDay()] ?? ''
@@ -462,28 +331,11 @@ const getWorkoutSessionId = () => {
   return getDateId(now)
 }
 
-const buildSetState = (exercises: WorkoutExercise[]) => {
-  const logs: Record<string, SetState[]> = {}
-  const baseCounts: Record<string, number> = {}
-
-  exercises.forEach((exercise) => {
-    logs[exercise.id] = exercise.sets.map(() => ({
-      weight: '',
-      metric: '',
-      done: false,
-    }))
-    baseCounts[exercise.id] = exercise.sets.length
-  })
-
-  return { logs, baseCounts }
-}
-
 const buildSetLogsForExercises = (
   exercises: WorkoutExercise[],
   previousLogs?: Record<string, SetState[]>
 ) => {
   const logs: Record<string, SetState[]> = {}
-  const baseCounts: Record<string, number> = {}
 
   exercises.forEach((exercise) => {
     const existingStates = Array.isArray(previousLogs?.[exercise.id])
@@ -498,10 +350,9 @@ const buildSetLogsForExercises = (
         done: Boolean(existing.done),
       } : { weight: '', metric: '', done: false }
     })
-    baseCounts[exercise.id] = exercise.sets.length
   })
 
-  return { logs, baseCounts }
+  return logs
 }
 
 const hasWorkoutContent = (exercises?: WorkoutExercise[], extras?: WorkoutExtra[]) => (
@@ -591,22 +442,6 @@ const isDayMarkedComplete = (day: WeekPlanDay, logsForDay?: Record<string, SetSt
   isDayCompleted(day, logsForDay)
 )
 
-const getDoneSetIndexes = (exercise: WorkoutExercise, logsForDay?: Record<string, SetState[]>) => {
-  const states = logsForDay?.[exercise.id] ?? []
-  const indexes: number[] = []
-  exercise.sets.forEach((_, index) => {
-    if (states[index]?.done) indexes.push(index)
-  })
-  return indexes
-}
-
-const getUnloggedSetCount = (exercise: WorkoutExercise, logsForDay?: Record<string, SetState[]>) => {
-  const states = logsForDay?.[exercise.id] ?? []
-  return exercise.sets.reduce((count, _, index) => (
-    states[index]?.done ? count : count + 1
-  ), 0)
-}
-
 const findDayIndexByDate = (days: WeekPlanDay[], dateId: string) => (
   days.findIndex((day) => day.date === dateId)
 )
@@ -679,6 +514,28 @@ const normalizeWeightLabel = (value: string | undefined) => {
 }
 
 const normalizeWeightValue = (value: string | undefined) => normalizeWeightLabel(value)
+
+const parseActualLoad = (value: string | undefined): { value: number; unit: 'kg' | 'lb' } | null => {
+  const trimmed = (value ?? '').trim().toLowerCase()
+  const match = trimmed.match(/^(-?\d+(?:[.,]\d+)?)\s*(kg|lb)?$/)
+  if (!match) return null
+  const amount = Number(match[1].replace(',', '.'))
+  if (!Number.isFinite(amount) || amount < 0) return null
+  return { value: amount, unit: match[2] === 'lb' ? 'lb' : 'kg' }
+}
+
+const parseActualMetric = (exercise: WorkoutExercise, value: string | undefined) => {
+  const trimmed = (value ?? '').trim()
+  if (!trimmed) return null
+  if (exercise.metric === 'time') {
+    const seconds = parseDurationToSeconds(trimmed)
+    if (seconds === null || !Number.isFinite(seconds) || seconds < 0) return null
+    return { duration_seconds: Math.round(seconds) }
+  }
+  const reps = Number.parseInt(trimmed, 10)
+  if (!Number.isFinite(reps) || reps < 0) return null
+  return { reps }
+}
 
 const formatWeightValue = (value: number, precision: number) => {
   const rounded = Number(value.toFixed(precision))
@@ -831,47 +688,6 @@ const updateExerciseSummary = (exercise: {
   exercise.summary = weightDisplay ? `${base} - ${weightDisplay}` : base
 }
 
-const normalizeCircuitsAfterExerciseRemoval = (exercises: WorkoutExercise[], removedExercises: WorkoutExercise[]) => {
-  const affectedCircuitNames = new Set(
-    removedExercises
-      .map((exercise) => exercise.circuit?.name)
-      .filter((name): name is string => Boolean(name))
-  )
-  if (affectedCircuitNames.size === 0) return exercises
-
-  const orderById = new Map<string, { order: number; totalExercises: number }>()
-
-  affectedCircuitNames.forEach((circuitName) => {
-    const circuitItems = exercises
-      .filter((exercise) => exercise.circuit?.name === circuitName)
-      .sort((a, b) => {
-        const orderA = a.circuit?.order ?? exercises.indexOf(a)
-        const orderB = b.circuit?.order ?? exercises.indexOf(b)
-        return orderA - orderB
-      })
-
-    circuitItems.forEach((exercise, index) => {
-      orderById.set(exercise.id, {
-        order: index + 1,
-        totalExercises: circuitItems.length,
-      })
-    })
-  })
-
-  return exercises.map((exercise) => {
-    const nextCircuitMeta = orderById.get(exercise.id)
-    if (!nextCircuitMeta || !exercise.circuit) return exercise
-    return {
-      ...exercise,
-      circuit: {
-        ...exercise.circuit,
-        order: nextCircuitMeta.order,
-        totalExercises: nextCircuitMeta.totalExercises,
-      },
-    }
-  })
-}
-
 const decodePrivyJwt = (token: string) => {
   const parts = token.split('.')
   if (parts.length < 2) return { sub: null, exp: null }
@@ -937,10 +753,10 @@ const App = () => {
   const initialLanguage = useMemo(() => getInitialLanguage(), [])
   const weekStartDayIndex = WORKOUT_WEEK_START_DAY_INDEX
   const initialWorkout = useMemo(() => {
-    return parseWorkout([])
+    return { exercises: [], extras: [] }
   }, [])
-  const initialSetState = useMemo(
-    () => buildSetState(initialWorkout.exercises),
+  const initialSetLogs = useMemo(
+    () => buildSetLogsForExercises(initialWorkout.exercises),
     [initialWorkout.exercises]
   )
   const initialWeekPlan = useMemo(() => (
@@ -963,18 +779,14 @@ const App = () => {
   const selectedDayIndexRef = useRef(initialSelectedDayIndex)
 
   const weekSetLogsRef = useRef<WeekSetLogs>({
-    [(initialDay?.date ?? todayId)]: initialSetState.logs,
-  })
-  const weekBaseCountsRef = useRef<WeekBaseCounts>({
-    [(initialDay?.date ?? todayId)]: initialSetState.baseCounts,
+    [(initialDay?.date ?? todayId)]: initialSetLogs,
   })
 
   const workoutExercisesRef = useRef<WorkoutExercise[]>(initialDay?.exercises ?? [])
   const workoutExtrasRef = useRef<WorkoutExtra[]>(initialDay?.extras ?? [])
-  const setLogsRef = useRef<Record<string, SetState[]>>(initialSetState.logs)
-  const baseSetCountsRef = useRef<Record<string, number>>(initialSetState.baseCounts)
+  const setLogsRef = useRef<Record<string, SetState[]>>(initialSetLogs)
   const [dataVersion, setDataVersion] = useState(0)
-  const [activeView, setActiveView] = useState<'home' | 'workout' | 'diet' | 'health' | 'profile'>('workout')
+  const [activeView, setActiveView] = useState<'home' | 'workout' | 'profile'>('workout')
   const [activeEntryId, setActiveEntryId] = useState<string | null>(null)
   const [activeEntryType, setActiveEntryType] = useState<ActiveEntryType>(null)
   const activeEntryRef = useRef<{ id: string | null, type: ActiveEntryType }>({ id: null, type: null })
@@ -991,13 +803,7 @@ const App = () => {
   const [modelControl, setModelControl] = useState<ModelControl | null>(null)
   const [modelSelectionPending, setModelSelectionPending] = useState(false)
   const [coachMessagesByScope, setCoachMessagesByScope] = useState<Record<string, ChatMessage[]>>({})
-  const [exerciseHistory, setExerciseHistory] = useState<ExerciseHistoryResponse | null>(null)
-  const [exerciseHistoryLoading, setExerciseHistoryLoading] = useState(false)
-  const [exerciseHistoryError, setExerciseHistoryError] = useState<string | null>(null)
-  const exerciseHistoryCacheRef = useRef<Map<string, ExerciseHistoryResponse>>(new Map())
   const [chatInput, setChatInput] = useState('')
-  const [copyingLastWeek] = useState(false)
-  const copyingLastWeekRef = useRef(false)
   const [showChatScrollToBottom, setShowChatScrollToBottom] = useState(false)
   const [restState, setRestState] = useState<RestState>({
     active: false,
@@ -1023,28 +829,15 @@ const App = () => {
     prepEndTs: null,
     holdEndTs: null,
   })
-  const [videos, setVideos] = useState<Video[]>([])
-  const [videoLoading, setVideoLoading] = useState(false)
-  const [videoExactMatch, setVideoExactMatch] = useState<boolean | null>(null)
-  const [videoOwnerKey, setVideoOwnerKey] = useState<string | null>(null)
-  const [activeVideoId, setActiveVideoId] = useState<string | null>(null)
   const [profile, setProfile] = useState<ProfileState>(() => ({
     text: '',
-    weeklyPlan: '',
     language: initialLanguage,
     fontScale: getInitialFontScale(),
-    activeNotes: [],
-    dailyTasks: [],
   }))
   const [currentUserEmail, setCurrentUserEmail] = useState<string | null>(null)
   const [currentUserId, setCurrentUserId] = useState('')
   const [privyAuthError, setPrivyAuthError] = useState<string | null>(null)
-  const [coachLinks, setCoachLinks] = useState<CoachLink[]>([])
-  const [coachLinksLoading] = useState(false)
-  const [coachLinksError, setCoachLinksError] = useState<string | null>(null)
-  const [coachActionMessage, setCoachActionMessage] = useState<string | null>(null)
-  const [coachLatestInviteToken] = useState<string | null>(null)
-  const [coachActAsOwnerId, setCoachActAsOwnerId] = useState<string | null>(null)
+  const coachActAsOwnerId: string | null = null
   const [privySubjectId, setPrivySubjectId] = useState<string | null>(null)
   const privyAuth = usePrivy()
   const {
@@ -1068,29 +861,7 @@ const App = () => {
   )
   const i18n = useMemo(() => createI18n(profile.language), [profile.language])
   const { t } = i18n
-  const activeCoachLink = useMemo(() => {
-    if (!coachActAsOwnerId) return null
-    const normalizedActAs = coachActAsOwnerId.toLowerCase()
-    return coachLinks.find((link) => (
-      link.status === 'active'
-      && (
-        link.trainee_owner_id === coachActAsOwnerId
-        || (link.trainee_email || '').toLowerCase() === normalizedActAs
-      )
-    )) ?? null
-  }, [coachActAsOwnerId, coachLinks])
-  const activeCoachContextLabel = activeCoachLink?.trainee_email
-    || (coachActAsOwnerId?.includes('@') ? coachActAsOwnerId : t('coach.traineeLabel'))
-  const coachChatEnabled = (
-    !coachActAsOwnerId
-    || (
-      activeCoachLink?.permissions.view_progress === true
-      && (
-        activeCoachLink.permissions.chat_as_coach === true
-        || activeCoachLink.permissions.edit_programs === true
-      )
-    )
-  )
+  const coachChatEnabled = true
   const selectedModelPreset = modelControl?.presets.find((preset) => preset.id === modelControl.selected_id)
   const selectedModelLabel = presetLabel(selectedModelPreset, modelControl?.models)
   const modelOptions = (modelControl?.models ?? []).flatMap((model) => {
@@ -1127,11 +898,14 @@ const App = () => {
   const chatBottomTimeoutRef = useRef<number | null>(null)
   const layoutViewportHeightRef = useRef(0)
   const prevPrivyAuthenticatedRef = useRef(privyAuthenticated)
-  const workoutSaveTimeoutRef = useRef<number | null>(null)
   const workoutRevisionByOwnerDateRef = useRef<Record<string, string>>({})
+  const workoutIdByOwnerDateRef = useRef<Record<string, string>>({})
+  const syncedSetKeysRef = useRef(new Set<string>())
+  const pendingSetSyncsByDateRef = useRef<Record<string, number>>({})
+  const syncLoggedSetRef = useRef<((exerciseId: string, index: number) => void) | null>(null)
   const pendingWorkoutDatesRef = useRef(new Set<string>())
-  const pendingWorkoutPlanDatesRef = useRef(new Set<string>())
-  const workoutWriteVersionByDateRef = useRef<Record<string, number>>({})
+  const profileRevisionRef = useRef<string | null>(null)
+  const profileSaveTimeoutRef = useRef<number | null>(null)
   const sessionLoadKeyRef = useRef<string | null>(null)
   const sessionReadyRef = useRef(false)
   const sessionHydrationInProgressRef = useRef(false)
@@ -1147,8 +921,6 @@ const App = () => {
   const wakeLockWantedRef = useRef(false)
   const holdTimerIdRef = useRef<number | null>(null)
   const holdCompletionHandledRef = useRef(false)
-  const videoCacheRef = useRef(new Map<string, VideoCacheEntry>())
-  const videoRequestIdRef = useRef(0)
   const didAutoSelectTodayRef = useRef(false)
 
   const warmBackend = useCallback(async (options: { force?: boolean } = {}) => {
@@ -1307,7 +1079,7 @@ const App = () => {
     }
   }, [])
 
-  const handleActiveViewChange = useCallback((view: 'home' | 'workout' | 'diet' | 'health' | 'profile') => {
+  const handleActiveViewChange = useCallback((view: 'home' | 'workout' | 'profile') => {
     dismissKeyboard()
     setActiveView(view)
     resetAppViewportScroll()
@@ -1320,12 +1092,9 @@ const App = () => {
     return true
   }, [])
 
-  const markLocalEdit = useCallback(() => undefined, [])
-
   const bumpData = useCallback(() => {
-    markLocalEdit()
     setDataVersion((value) => value + 1)
-  }, [markLocalEdit])
+  }, [])
 
   const selectedDay = useMemo(() => (
     weekPlan.days[selectedDayIndex] ?? weekPlan.days[0]
@@ -1338,30 +1107,23 @@ const App = () => {
       : (selectedDay?.label ?? t('workout.sectionWorkout'))
   }, [profile.language, selectedDay?.date, selectedDay?.label, t])
 
-  const displayedWorkoutExtras = useMemo(() => ([
-    ...workoutExtrasRef.current,
-    ...profile.dailyTasks.map((task) => ({
-      id: `daily-task-${task.id}`,
-      name: task.title,
-      section: 'Rehab — Today outside gym',
-      summary: task.summary,
-      notes: task.notes,
-      category: 'rehab' as const,
-      isReadOnly: true,
-    })),
-  ]), [profile.dailyTasks, selectedDay?.date])
+  const displayedWorkoutExtras = useMemo(
+    () => workoutExtrasRef.current,
+    [dataVersion, selectedDay?.date]
+  )
 
-  // The public v1 API currently supports canonical reads and generation, but
-  // does not expose a browser contract for arbitrary plan/set rewrites. Keep
-  // those UI mutations disabled instead of routing them through the removed
-  // flat session adapter.
+  // The public v1 API supports canonical reads, generation, and per-set
+  // actual logging. Arbitrary plan/set rewrites have no browser contract.
   const canGenerateWorkoutSelectedDay = useMemo(() => (
     isPlanEditableDate(selectedDay?.date ?? todayId)
   ), [isPlanEditableDate, selectedDay?.date, todayId])
 
-  const canEditPlanSelectedDay = false
-  const canLlmEditPlanSelectedDay = false
-  const canLogSelectedDay = false
+  const canLogSelectedDay = useMemo(() => {
+    if (!canQuerySavedWorkoutSessions) return false
+    const ownerId = coachActAsOwnerId ?? currentUserId
+    const key = `${ownerId}:${selectedDay?.date ?? todayId}`
+    return Boolean(workoutIdByOwnerDateRef.current[key] && workoutRevisionByOwnerDateRef.current[key])
+  }, [canQuerySavedWorkoutSessions, coachActAsOwnerId, currentUserId, selectedDay?.date, todayId, dataVersion])
 
   const hasWeekWorkouts = useMemo(() => (
     weekPlan.days.some((day) => day.exercises.length > 0 || day.extras.length > 0)
@@ -1403,14 +1165,11 @@ const App = () => {
     workoutExercisesRef.current = day.exercises
     workoutExtrasRef.current = day.extras
 
-    if (!weekSetLogsRef.current[day.date] || !weekBaseCountsRef.current[day.date]) {
-      const { logs, baseCounts } = buildSetLogsForExercises(day.exercises, weekSetLogsRef.current[day.date])
-      weekSetLogsRef.current[day.date] = logs
-      weekBaseCountsRef.current[day.date] = baseCounts
+    if (!weekSetLogsRef.current[day.date]) {
+      weekSetLogsRef.current[day.date] = buildSetLogsForExercises(day.exercises, weekSetLogsRef.current[day.date])
     }
 
     setLogsRef.current = weekSetLogsRef.current[day.date]
-    baseSetCountsRef.current = weekBaseCountsRef.current[day.date] ?? {}
     currentWorkoutSessionIdRef.current = day.date
   }, [])
 
@@ -1755,11 +1514,9 @@ const App = () => {
   const initializeSetState = useCallback((dateId?: string, exercisesOverride?: WorkoutExercise[]) => {
     const targetDate = dateId ?? selectedDay?.date ?? todayId
     const exercises = exercisesOverride ?? workoutExercisesRef.current
-    const { logs, baseCounts } = buildSetLogsForExercises(exercises)
+    const logs = buildSetLogsForExercises(exercises)
     weekSetLogsRef.current[targetDate] = logs
-    weekBaseCountsRef.current[targetDate] = baseCounts
     setLogsRef.current = logs
-    baseSetCountsRef.current = baseCounts
     bumpData()
   }, [bumpData, selectedDay?.date, todayId])
 
@@ -1773,7 +1530,6 @@ const App = () => {
     }
 
     setLogsRef.current = weekSetLogsRef.current[targetDate]
-    baseSetCountsRef.current = weekBaseCountsRef.current[targetDate] ?? {}
     return false
   }, [initializeSetState, selectedDay?.date, todayId])
 
@@ -1797,15 +1553,11 @@ const App = () => {
     selectedDate?: string
     selectedIndex?: number
     logsByDay?: WeekSetLogs
-    baseCountsByDay?: WeekBaseCounts
     preferToday?: boolean
     preserveActiveEntry?: boolean
   }) => {
     let activePlan = plan
     let nextLogs = options?.logsByDay ? { ...options.logsByDay } : { ...weekSetLogsRef.current }
-    let nextBaseCounts = options?.baseCountsByDay
-      ? { ...options.baseCountsByDay }
-      : { ...weekBaseCountsRef.current }
 
     let todayIndex = findDayIndexByDate(activePlan.days, todayId)
     if (options?.preferToday && todayIndex < 0) {
@@ -1826,15 +1578,12 @@ const App = () => {
         days: rebasedDays,
       }
       nextLogs = {}
-      nextBaseCounts = {}
       todayIndex = findDayIndexByDate(activePlan.days, todayId)
     }
 
     activePlan.days.forEach((day) => {
       if (!nextLogs[day.date]) {
-        const { logs, baseCounts } = buildSetLogsForExercises(day.exercises)
-        nextLogs[day.date] = logs
-        nextBaseCounts[day.date] = baseCounts
+        nextLogs[day.date] = buildSetLogsForExercises(day.exercises)
       }
     })
 
@@ -1847,7 +1596,6 @@ const App = () => {
       : (preferredIndex >= 0 ? preferredIndex : (todayIndex >= 0 ? todayIndex : 0))
 
     weekSetLogsRef.current = nextLogs
-    weekBaseCountsRef.current = nextBaseCounts
     selectedDayIndexRef.current = safeIndex
     setSelectedDayIndex(safeIndex)
     setWeekPlan(activePlan)
@@ -1932,11 +1680,8 @@ const App = () => {
       if (missingDays.length === 0) return
 
       const nextLogs: WeekSetLogs = { ...weekSetLogsRef.current }
-      const nextBaseCounts: WeekBaseCounts = { ...weekBaseCountsRef.current }
       missingDays.forEach((day) => {
-        const { logs, baseCounts } = buildSetLogsForExercises(day.exercises)
-        nextLogs[day.date] = logs
-        nextBaseCounts[day.date] = baseCounts
+        nextLogs[day.date] = buildSetLogsForExercises(day.exercises)
       })
       const nextPlan: WeekPlan = {
         ...weekPlan,
@@ -1946,7 +1691,6 @@ const App = () => {
       applyWeekPlan(nextPlan, {
         selectedDate: normalizedDateId,
         logsByDay: nextLogs,
-        baseCountsByDay: nextBaseCounts,
       })
       return
     }
@@ -2005,39 +1749,6 @@ const App = () => {
     })
   }, [])
 
-  const persistWorkoutSessionForDay = async (_entry: {
-    dateId: string
-    sessionId?: string | null
-    label?: string | null
-    exercises: WorkoutExercise[]
-    extras: WorkoutExtra[]
-    setLogs: Record<string, SetState[]>
-    notes?: string
-    dayOverride?: WeekPlanDay
-    planMutation?: boolean
-  }) => {
-    // The public API deliberately exposes typed workout mutations only. The
-    // legacy flat session write had no canonical equivalent and is disabled
-    // until each UI mutation is mapped to a typed v1 operation.
-    return false
-  }
-
-  const persistWorkoutSession = async (_planMutation = false) => false
-
-  const scheduleWorkoutSave = useCallback((planMutation = false) => {
-    pendingWorkoutDatesRef.current.add(selectedDay?.date ?? todayId)
-    if (planMutation) {
-      pendingWorkoutPlanDatesRef.current.add(selectedDay?.date ?? todayId)
-    }
-    if (workoutSaveTimeoutRef.current) {
-      window.clearTimeout(workoutSaveTimeoutRef.current)
-    }
-    workoutSaveTimeoutRef.current = window.setTimeout(() => {
-      persistWorkoutSession()
-      workoutSaveTimeoutRef.current = null
-    }, SESSION_SAVE_DEBOUNCE_MS)
-  }, [persistWorkoutSession, selectedDay?.date, todayId])
-
   const logNextSet = useCallback((targetExerciseId?: string) => {
     if (!canLogSelectedDay) return
     const exerciseId = targetExerciseId ?? activeEntryId
@@ -2091,7 +1802,7 @@ const App = () => {
     }
     itemState.done = true
     bumpData()
-    void persistWorkoutSession()
+    void syncLoggedSetRef.current?.(exercise.id, nextIndex)
 
     const circuitName = exercise.circuit?.name
     const isWarmupSet = targetSet?.isWarmup === true
@@ -2186,7 +1897,6 @@ const App = () => {
     getExercise,
     getNextPendingCircuitExercise,
     hideWorkoutDetail,
-    persistWorkoutSession,
     resetHoldTimer,
     startRest,
     canLogSelectedDay,
@@ -2222,172 +1932,8 @@ const App = () => {
     logNextSet()
   }, [activeEntryId, activeEntryType, getExercise, holdTimer, logNextSet, startHoldTimer, stopHoldTimer])
 
-  const addNewSet = useCallback(() => {
-    if (!canEditPlanSelectedDay) return
-    if (activeEntryType !== 'exercise' || !activeEntryId) return
-    const exercise = getExercise(activeEntryId)
-    if (!exercise) return
-
-    const lastSet = [...exercise.sets].reverse().find((set) => !set.isWarmup) ?? exercise.sets[exercise.sets.length - 1]
-    const isTime = exercise.metric === 'time'
-    const newSet = {
-      targetReps: isTime ? undefined : (lastSet?.targetReps ?? '10'),
-      targetTime: isTime ? (lastSet?.targetTime ?? '60s') : undefined,
-      targetWeight: lastSet?.targetWeight ?? '',
-    }
-
-    exercise.sets.push(newSet)
-    if (!setLogsRef.current[exercise.id]) {
-      setLogsRef.current[exercise.id] = []
-    }
-    setLogsRef.current[exercise.id].push({ weight: '', metric: '', done: false })
-    updateExerciseSummary(exercise)
-    bumpData()
-    void persistWorkoutSession(true)
-  }, [activeEntryId, activeEntryType, bumpData, canEditPlanSelectedDay, getExercise, persistWorkoutSession])
-
-  const deleteSetAtIndex = useCallback((exerciseId: string, index: number) => {
-    const exercise = getExercise(exerciseId)
-    if (!exercise) return
-    const stateList = setLogsRef.current[exercise.id]
-    if (!stateList?.length) return
-    const baseSetCount = baseSetCountsRef.current[exercise.id] ?? exercise.sets.length
-    const setItem = stateList[index]
-    let planMutation = false
-
-    if (index >= baseSetCount) {
-      if (!canEditPlanSelectedDay) return
-      exercise.sets.splice(index, 1)
-      stateList.splice(index, 1)
-      planMutation = true
-    } else {
-      if (setItem?.done) {
-        if (!canLogSelectedDay && !canEditPlanSelectedDay) return
-        stateList[index].done = false
-        stateList[index].weight = ''
-        stateList[index].metric = ''
-        delete stateList[index].value_source
-      } else {
-        if (!canEditPlanSelectedDay) return
-        exercise.sets.splice(index, 1)
-        stateList.splice(index, 1)
-        baseSetCountsRef.current[exercise.id] = Math.max(0, baseSetCount - 1)
-        planMutation = true
-      }
-    }
-
-    setEditingSet(null)
-    setEditingSetSnapshot(null)
-    resetHoldTimer()
-    stopRest()
-    updateExerciseSummary(exercise)
-    bumpData()
-    void persistWorkoutSession(planMutation)
-  }, [bumpData, canEditPlanSelectedDay, canLogSelectedDay, getExercise, persistWorkoutSession, resetHoldTimer, stopRest])
-
-  const removePlanEntriesFromSelectedDay = useCallback((options: {
-    shouldRemoveExercise?: (exercise: WorkoutExercise) => boolean
-    shouldRemoveExtra?: (extra: WorkoutExtra) => boolean
-  }) => {
-    if (!canEditPlanSelectedDay) return
-    const dayIndex = selectedDayIndexRef.current
-    const day = weekPlan.days[dayIndex] ?? weekPlan.days[0]
-    if (!day) return
-
-    const removedExercises = day.exercises.filter((exercise) => (
-      options.shouldRemoveExercise?.(exercise) ?? false
-    ))
-    const removedExtras = day.extras.filter((extra) => (
-      options.shouldRemoveExtra?.(extra) ?? false
-    ))
-    if (removedExercises.length === 0 && removedExtras.length === 0) return
-
-    const removedExerciseIds = new Set(removedExercises.map((exercise) => exercise.id))
-    const removedExtraIds = new Set(removedExtras.map((extra) => extra.id))
-    const nextExercises = normalizeCircuitsAfterExerciseRemoval(
-      day.exercises.filter((exercise) => !removedExerciseIds.has(exercise.id)),
-      removedExercises,
-    )
-    const nextExtras = day.extras.filter((extra) => !removedExtraIds.has(extra.id))
-    const nextDay: WeekPlanDay = {
-      ...day,
-      exercises: nextExercises,
-      extras: nextExtras,
-      isRest: nextExercises.length === 0 && nextExtras.length === 0,
-      autoFillSuppressedAt: nextExercises.length === 0 && nextExtras.length === 0
-        ? new Date().toISOString()
-        : undefined,
-    }
-    const nextDays = weekPlan.days.map((item, index) => (index === dayIndex ? nextDay : item))
-    const nextPlan: WeekPlan = { ...weekPlan, days: nextDays }
-
-    const previousLogs = weekSetLogsRef.current[day.date]
-    const previousBaseCounts = weekBaseCountsRef.current[day.date]
-    const { logs } = buildSetLogsForExercises(nextExercises, previousLogs)
-    const baseCounts: Record<string, number> = {}
-    nextExercises.forEach((exercise) => {
-      baseCounts[exercise.id] = previousBaseCounts?.[exercise.id] ?? exercise.sets.length
-    })
-
-    weekSetLogsRef.current[day.date] = logs
-    weekBaseCountsRef.current[day.date] = baseCounts
-    setLogsRef.current = logs
-    baseSetCountsRef.current = baseCounts
-
-    workoutExercisesRef.current = nextExercises
-    workoutExtrasRef.current = nextExtras
-
-    const activeEntryWasRemoved = activeEntryType === 'exercise'
-      ? Boolean(activeEntryId && removedExerciseIds.has(activeEntryId))
-      : Boolean(activeEntryId && removedExtraIds.has(activeEntryId))
-
-    if (activeEntryWasRemoved) {
-      hideWorkoutDetail()
-    }
-
-    setWeekPlan(nextPlan)
-    syncDayRefs(nextPlan, dayIndex)
-    bumpData()
-    void persistWorkoutSessionForDay({
-      dateId: day.date,
-      sessionId: day.date,
-      label: nextDay.label,
-      exercises: nextExercises,
-      extras: nextExtras,
-      setLogs: logs,
-      dayOverride: nextDay,
-      planMutation: true,
-    })
-  }, [activeEntryId, activeEntryType, bumpData, canEditPlanSelectedDay, hideWorkoutDetail, persistWorkoutSessionForDay, syncDayRefs, weekPlan])
-
-  const removeExerciseFromPlan = useCallback((exerciseId: string) => {
-    removePlanEntriesFromSelectedDay({
-      shouldRemoveExercise: (exercise) => exercise.id === exerciseId,
-    })
-  }, [removePlanEntriesFromSelectedDay])
-
-  const removeExtraFromPlan = useCallback((extraId: string) => {
-    removePlanEntriesFromSelectedDay({
-      shouldRemoveExtra: (extra) => extra.id === extraId,
-    })
-  }, [removePlanEntriesFromSelectedDay])
-
-  const removeCircuitFromPlan = useCallback((circuitName: string) => {
-    removePlanEntriesFromSelectedDay({
-      shouldRemoveExercise: (exercise) => exercise.circuit?.name === circuitName,
-    })
-  }, [removePlanEntriesFromSelectedDay])
-
-  const removeSectionFromPlan = useCallback((sectionLabel: string) => {
-    const sectionKey = normalizeDayLabel(sectionLabel)
-    removePlanEntriesFromSelectedDay({
-      shouldRemoveExercise: (exercise) => normalizeDayLabel(exercise.section) === sectionKey,
-      shouldRemoveExtra: (extra) => normalizeDayLabel(extra.section) === sectionKey,
-    })
-  }, [removePlanEntriesFromSelectedDay])
-
   const updateSetField = useCallback(
-    (exerciseId: string, index: number, field: 'weight' | 'metric', value: string, propagate: boolean) => {
+    (exerciseId: string, index: number, field: 'weight' | 'metric', value: string) => {
       if (!canLogSelectedDay) return
       const exercise = getExercise(exerciseId)
       if (!exercise) return
@@ -2398,39 +1944,13 @@ const App = () => {
       if (field === 'weight') {
         setItem.weight = value
         setItem.value_source = value.trim() ? 'user_entered' : undefined
-        if (propagate) {
-          for (let i = index; i < stateList.length; i++) {
-            if (stateList[i]?.done) continue
-            stateList[i].weight = value
-            stateList[i].value_source = value.trim() ? 'user_entered' : undefined
-            const targetSet = exercise.sets[i]
-            if (canEditPlanSelectedDay && targetSet) targetSet.targetWeight = value
-          }
-        }
       } else {
         setItem.metric = value
-        if (propagate) {
-          for (let i = index; i < stateList.length; i++) {
-            if (stateList[i]?.done) continue
-            stateList[i].metric = value
-            const targetSet = exercise.sets[i]
-            if (!targetSet) continue
-            if (canEditPlanSelectedDay) {
-              if (exercise.metric === 'time') {
-                targetSet.targetTime = value
-              } else {
-                targetSet.targetReps = value
-              }
-            }
-          }
-        }
       }
 
-      if (propagate && canEditPlanSelectedDay) updateExerciseSummary(exercise)
       bumpData()
-      scheduleWorkoutSave(propagate && canEditPlanSelectedDay)
     },
-    [bumpData, canEditPlanSelectedDay, canLogSelectedDay, ensureExerciseStateList, getExercise, scheduleWorkoutSave]
+    [bumpData, canLogSelectedDay, ensureExerciseStateList, getExercise]
   )
 
 
@@ -2465,7 +1985,6 @@ const App = () => {
     scopeId: string,
     message: string,
     variant: 'user' | 'ai',
-    quickActions?: QuickActionOption[],
   ) => {
     const timestamp = Date.now()
     const html = variant === 'ai' ? await marked.parse(message) : undefined
@@ -2475,7 +1994,6 @@ const App = () => {
       text: message,
       html,
       timestamp,
-      quickActions,
     }
     updateCoachMessages(scopeId, (items) => ([
       ...items,
@@ -2522,92 +2040,6 @@ const App = () => {
   const getCoachScopeId = useCallback((exerciseId: string) => {
     const sessionId = currentWorkoutSessionIdRef.current || getWorkoutSessionId()
     return `coach:${sessionId}:${exerciseId}`
-  }, [])
-
-  const applyActiveNotesPatch = useCallback((patch: ActiveNotesPatch) => {
-    if (patch.upsert.length === 0 && patch.deleteKeys.length === 0 && patch.deleteTexts.length === 0) {
-      return false
-    }
-
-    markLocalEdit()
-    const updatedAt = new Date().toISOString()
-    setProfile((prev) => {
-      const nextByKey = new Map<string, ActiveNote>()
-      normalizeActiveNotes(prev.activeNotes).forEach((note) => {
-        nextByKey.set(note.key, note)
-      })
-
-      patch.deleteKeys.forEach((key) => {
-        nextByKey.delete(normalizeActiveNoteKey(key))
-      })
-      if (patch.deleteTexts.length > 0) {
-        const deleteTexts = new Set(patch.deleteTexts)
-        Array.from(nextByKey.entries()).forEach(([key, note]) => {
-          if (deleteTexts.has(note.text.toLowerCase())) {
-            nextByKey.delete(key)
-          }
-        })
-      }
-
-      patch.upsert.forEach((note) => {
-        const key = normalizeActiveNoteKey(note.key, note.text)
-        nextByKey.set(key, {
-          key,
-          text: note.text,
-          updatedAt,
-        })
-      })
-
-      return {
-        ...prev,
-        activeNotes: Array.from(nextByKey.values()).slice(-12),
-      }
-    })
-    return true
-  }, [markLocalEdit])
-
-  const applyActiveNotesPatchPayload = useCallback((value: unknown) => {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return false
-    const patchRecord = value as Record<string, unknown>
-    const rawUpsert = Array.isArray(patchRecord.upsert) ? patchRecord.upsert : []
-    const upsert = rawUpsert.flatMap((item) => {
-      const record = item && typeof item === 'object' && !Array.isArray(item)
-        ? item as Record<string, unknown>
-        : null
-      const text = normalizeActiveNoteText(record ? (record.text ?? record.note ?? record.value) : item)
-      if (!text) return []
-      return [{
-        key: normalizeActiveNoteKey(record ? (record.key ?? record.id ?? record.topic) : undefined, text),
-        text,
-      }]
-    })
-
-    const rawDelete = patchRecord.delete ?? patchRecord.delete_keys ?? patchRecord.deleteKeys ?? []
-    const deleteItems = Array.isArray(rawDelete) ? rawDelete : [rawDelete]
-    const deleteKeys: string[] = []
-    const deleteTexts: string[] = []
-    deleteItems.forEach((item) => {
-      if (typeof item !== 'string') return
-      const text = normalizeActiveNoteText(item)
-      if (!text) return
-      deleteKeys.push(normalizeActiveNoteKey(text))
-      deleteTexts.push(text.toLowerCase())
-    })
-
-    if (upsert.length === 0 && deleteKeys.length === 0 && deleteTexts.length === 0) return false
-    return applyActiveNotesPatch({ upsert, deleteKeys, deleteTexts })
-  }, [applyActiveNotesPatch])
-
-  const applyAgentProfileUpdatePayload = useCallback((value: unknown) => {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return false
-    const record = value as Record<string, unknown>
-    setProfile((prev) => ({
-      ...prev,
-      text: normalizeProfileText(record.text),
-      weeklyPlan: normalizeWeeklyPlanText(record.weekly_plan ?? record.weeklyPlan),
-      activeNotes: normalizeActiveNotes(record.active_notes ?? record.activeNotes),
-    }))
-    return true
   }, [])
 
   const handleCoachReply = useCallback(async (
@@ -2757,174 +2189,6 @@ const App = () => {
     }
   }, [getPrivyAuthHeaders, modelControl, modelOptions, modelSelectionPending, refreshModelControl])
 
-  const setCoachActAs = useCallback((ownerId: string | null) => {
-    void ownerId
-    setMessages([])
-    setCoachMessagesByScope({})
-    setChatInput('')
-    setCoachActAsOwnerId(null)
-    setCoachActionMessage('Coach collaboration is not available in the public release.')
-  }, [])
-
-  const handleCoachInvite = useCallback(async (permissions: CoachPermissions) => {
-    void permissions
-    setCoachActionMessage('Coach collaboration is not available in the public release.')
-  }, [])
-
-  const handleCoachAcceptInvite = useCallback(async (token: string) => {
-    void token
-    setCoachActionMessage('Coach collaboration is not available in the public release.')
-  }, [])
-
-  const handleCoachRevoke = useCallback(async (linkId: string) => {
-    void linkId
-    setCoachActionMessage('Coach collaboration is not available in the public release.')
-  }, [])
-
-  const handleCoachUpdatePermissions = useCallback(async (
-    linkId: string,
-    permissions: CoachPermissions,
-  ) => {
-    void linkId
-    void permissions
-    setCoachActionMessage('Coach collaboration is not available in the public release.')
-  }, [])
-
-  const updateExerciseNotes = useCallback((exerciseId: string, value: string) => {
-    if (!canEditPlanSelectedDay) return
-    const exercise = getExercise(exerciseId)
-    if (!exercise) return
-    exercise.notes = value
-    bumpData()
-    scheduleWorkoutSave(true)
-  }, [bumpData, canEditPlanSelectedDay, getExercise, scheduleWorkoutSave])
-
-  const updateDayNotes = useCallback((value: string) => {
-    if (!canEditPlanSelectedDay) return
-    const targetDate = selectedDay?.date ?? todayId
-    if (selectedDay) {
-      selectedDay.notes = value
-    }
-    setWeekPlan((prev) => ({
-      ...prev,
-      days: prev.days.map((day) => (
-        day.date === targetDate
-          ? { ...day, notes: value }
-          : day
-      )),
-    }))
-    bumpData()
-    scheduleWorkoutSave()
-  }, [bumpData, canEditPlanSelectedDay, scheduleWorkoutSave, selectedDay, selectedDay?.date, todayId])
-
-  const handleClearWorkoutDay = useCallback(() => {
-    if (!canEditPlanSelectedDay) return
-    const dayIndex = selectedDayIndexRef.current
-    const day = weekPlan.days[dayIndex] ?? selectedDay
-    const targetDate = day?.date ?? selectedDay?.date ?? todayId
-    const logsForDay = weekSetLogsRef.current[targetDate] ?? setLogsRef.current
-    const loggedExerciseEntries = (day?.exercises ?? [])
-      .map((exercise) => ({
-        exercise,
-        doneSetIndexes: getDoneSetIndexes(exercise, logsForDay),
-      }))
-      .filter((entry) => entry.doneSetIndexes.length > 0)
-    const hasLoggedExercises = loggedExerciseEntries.length > 0
-    const unloggedSetCount = loggedExerciseEntries.reduce((count, entry) => (
-      count + Math.max(0, entry.exercise.sets.length - entry.doneSetIndexes.length)
-    ), 0)
-    const unloggedItemCount = hasLoggedExercises
-      ? ((day?.exercises.length ?? 0) - loggedExerciseEntries.length) + unloggedSetCount + (day?.extras.length ?? 0)
-      : 0
-    if (hasLoggedExercises && unloggedItemCount <= 0) return
-
-    const confirmLabel = hasLoggedExercises
-      ? t('workout.clearUnloggedConfirm', { label: selectedDayLabel })
-      : t('workout.clearConfirm', { label: selectedDayLabel })
-    if (!window.confirm(confirmLabel)) return
-
-    const nextExtras: WorkoutExtra[] = []
-    const nextLogs: Record<string, SetState[]> = {}
-    const nextBaseCounts: Record<string, number> = {}
-    const nextExercises = hasLoggedExercises
-      ? loggedExerciseEntries.map(({ exercise, doneSetIndexes }) => {
-        const states = logsForDay[exercise.id] ?? []
-        const nextExercise: WorkoutExercise = {
-          ...exercise,
-          sets: doneSetIndexes.map((setIndex) => ({ ...exercise.sets[setIndex] })),
-        }
-        nextLogs[exercise.id] = doneSetIndexes.map((setIndex) => ({
-          weight: states[setIndex]?.weight ?? '',
-          metric: states[setIndex]?.metric ?? '',
-          done: true,
-        }))
-        nextBaseCounts[exercise.id] = nextExercise.sets.length
-        updateExerciseSummary(nextExercise)
-        return nextExercise
-      })
-      : []
-    const clearTimestamp = new Date().toISOString()
-    const nextDay: WeekPlanDay = {
-      ...(day ?? {
-        date: targetDate,
-        label: selectedDayLabel,
-        exercises: [],
-        extras: [],
-      }),
-      exercises: nextExercises,
-      extras: nextExtras,
-      isRest: nextExercises.length === 0,
-      autoFillSuppressedAt: hasLoggedExercises ? undefined : clearTimestamp,
-      planNotes: '',
-      notes: hasLoggedExercises ? (day?.notes ?? '') : '',
-    }
-    const nextPlan: WeekPlan = {
-      ...weekPlan,
-      days: weekPlan.days.map((item) => (
-        item.date === targetDate ? nextDay : item
-      )),
-    }
-
-    weekSetLogsRef.current[targetDate] = nextLogs
-    weekBaseCountsRef.current[targetDate] = nextBaseCounts
-    workoutExercisesRef.current = nextExercises
-    workoutExtrasRef.current = nextExtras
-    setLogsRef.current = nextLogs
-    baseSetCountsRef.current = nextBaseCounts
-    if (
-      !hasLoggedExercises
-      || activeEntryType === 'extra'
-      || (activeEntryType === 'exercise' && activeEntryId && !nextExercises.some((exercise) => exercise.id === activeEntryId))
-    ) {
-      hideWorkoutDetail()
-    }
-    setWeekPlan(nextPlan)
-    bumpData()
-    void persistWorkoutSessionForDay({
-      dateId: targetDate,
-      sessionId: targetDate,
-      label: nextDay.label,
-      exercises: nextExercises,
-      extras: nextExtras,
-      setLogs: nextLogs,
-      dayOverride: nextDay,
-      planMutation: true,
-    })
-  }, [
-    activeEntryId,
-    activeEntryType,
-    bumpData,
-    canEditPlanSelectedDay,
-    hideWorkoutDetail,
-    persistWorkoutSessionForDay,
-    selectedDay?.date,
-    selectedDay,
-    selectedDayLabel,
-    t,
-    todayId,
-    weekPlan,
-  ])
-
   const handleAiReply = useCallback(async (reply: string, messageId?: string | null, modelLabel?: string) => {
     const displayMessage = reply.trim()
 
@@ -2948,21 +2212,11 @@ const App = () => {
       ...(await getPrivyAuthHeaders()),
     }
 
-    let enqueueResponse: Response | null = null
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      try {
-        enqueueResponse = await apiFetch(`${API_BASE_URL}/chat/async`, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify(payload),
-        })
-      } catch (error) {
-        if (attempt === 0) continue
-        throw error
-      }
-      if (enqueueResponse.status < 500 || attempt > 0) break
-    }
-    if (!enqueueResponse) throw new Error('Chat submission outcome is unknown')
+    const enqueueResponse = await apiFetch(`${API_BASE_URL}/chat/async`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload),
+    })
 
     if (enqueueResponse.status === 404 || enqueueResponse.status === 405) {
       throw new Error('Async chat endpoint unavailable. Restart the backend so /chat/async is available.')
@@ -2982,35 +2236,22 @@ const App = () => {
     const params = new URLSearchParams({ user_id: payload.user_id })
 
     const startedAt = Date.now()
-    let delayMs = CHAT_JOB_INITIAL_POLL_MS
-    let pollFailures = 0
     while (Date.now() - startedAt < CHAT_JOB_MAX_WAIT_MS) {
-      await new Promise((resolve) => window.setTimeout(resolve, delayMs))
-      delayMs = CHAT_JOB_POLL_MS
+      await new Promise((resolve) => window.setTimeout(resolve, CHAT_JOB_POLL_MS))
 
-      let pollResponse: Response
-      try {
-        // Chat jobs can outlive the short-lived Privy token used to enqueue
-        // them. Do not reuse the initial headers or a completed reply becomes
-        // invisible to the user when its final poll is rejected with 401.
-        const pollHeaders = await getPrivyAuthHeaders()
-        pollResponse = await apiFetch(
-          `${API_BASE_URL}/chat/jobs/${encodeURIComponent(jobId)}?${params.toString()}`,
-          { headers: pollHeaders }
-        )
-      } catch (error) {
-        pollFailures += 1
-        if (pollFailures <= CHAT_JOB_MAX_POLL_FAILURES) continue
-        throw error
-      }
+      // Chat jobs can outlive the short-lived Privy token used to enqueue
+      // them. Do not reuse the initial headers or a completed reply becomes
+      // invisible to the user when its final poll is rejected with 401.
+      const pollHeaders = await getPrivyAuthHeaders()
+      const pollResponse = await apiFetch(
+        `${API_BASE_URL}/chat/jobs/${encodeURIComponent(jobId)}?${params.toString()}`,
+        { headers: pollHeaders }
+      )
 
       if (!pollResponse.ok) {
-        pollFailures += 1
-        if (pollFailures <= CHAT_JOB_MAX_POLL_FAILURES && pollResponse.status >= 500) continue
         throw new Error(`Chat job poll failed (${pollResponse.status})`)
       }
 
-      pollFailures = 0
       const statusData = (await pollResponse.json()) as ChatJobResponsePayload
       if (statusData.status === 'complete') return statusData
       if (statusData.status === 'failed') {
@@ -3041,9 +2282,10 @@ const App = () => {
       .filter((workout) => requestedDates.has(workout.date))
       .map((workout) => backendWorkoutToSession(workout, currentUserId))
     sessions.forEach((session) => {
+      const ownerKey = `${currentUserId}:${session.date}`
+      if (session.session_id) workoutIdByOwnerDateRef.current[ownerKey] = session.session_id
       if (!session.revision) return
-      const revisionKey = `${currentUserId}:${session.date}`
-      workoutRevisionByOwnerDateRef.current[revisionKey] = session.revision
+      workoutRevisionByOwnerDateRef.current[ownerKey] = session.revision
     })
     return sessions
   }, [
@@ -3054,14 +2296,6 @@ const App = () => {
     privyReady,
   ])
 
-  const handleRequestExerciseHistory = useCallback(async (exercise: WorkoutExercise) => {
-    void exercise
-    setExerciseHistory(null)
-    setExerciseHistoryLoading(false)
-    setExerciseHistoryError('Exercise history is not available until the canonical exercise projection is connected.')
-  }, [
-  ])
-
   const applySavedWorkoutSessionsToWeek = useCallback((
     sessions: WorkoutSession[],
     options: { preserveSelectedDate?: boolean, preserveActiveEntry?: boolean } = {},
@@ -3070,7 +2304,6 @@ const App = () => {
 
     let nextDays = weekPlan.days
     const nextLogs: WeekSetLogs = { ...weekSetLogsRef.current }
-    const nextBaseCounts: WeekBaseCounts = { ...weekBaseCountsRef.current }
     const appliedDates: string[] = []
     const ownerId = coachActAsOwnerId ?? currentUserId
 
@@ -3118,17 +2351,16 @@ const App = () => {
         : [...nextDays, nextDay].sort((a, b) => a.date.localeCompare(b.date))
 
       const storedLogs = session.workout?.set_logs ?? {}
-      const { logs, baseCounts } = buildSetLogsForExercises(exercises, storedLogs)
-      nextLogs[targetDate] = logs
-      nextBaseCounts[targetDate] = baseCounts
+      nextLogs[targetDate] = buildSetLogsForExercises(exercises, storedLogs)
+      const ownerKey = `${ownerId}:${targetDate}`
+      if (session.session_id) workoutIdByOwnerDateRef.current[ownerKey] = session.session_id
       if (session.revision) {
-        workoutRevisionByOwnerDateRef.current[`${ownerId}:${targetDate}`] = session.revision
+        workoutRevisionByOwnerDateRef.current[ownerKey] = session.revision
       }
       appliedDates.push(targetDate)
     })
 
     if (appliedDates.length === 0) return false
-    exerciseHistoryCacheRef.current.clear()
     const selectedDate = options.preserveSelectedDate
       ? (selectedDay?.date ?? todayId)
       : appliedDates[appliedDates.length - 1]
@@ -3143,7 +2375,6 @@ const App = () => {
         {
           selectedDate,
           logsByDay: nextLogs,
-          baseCountsByDay: nextBaseCounts,
           preferToday: selectedDate === todayId,
           preserveActiveEntry: options.preserveActiveEntry,
         }
@@ -3165,11 +2396,6 @@ const App = () => {
   const applySavedWorkoutSessionToWeek = useCallback((session: WorkoutSession) => (
     applySavedWorkoutSessionsToWeek([session])
   ), [applySavedWorkoutSessionsToWeek])
-
-  const handleCopyLastWeek = async () => {
-    if (!canEditPlanSelectedDay || copyingLastWeekRef.current) return
-    window.alert('Copying a workout is not available in the public canonical API yet.')
-  }
 
   useEffect(() => {
     if (!currentUserId) return
@@ -3199,7 +2425,6 @@ const App = () => {
 
         let nextDays = weekPlan.days
         const nextLogs: WeekSetLogs = { ...weekSetLogsRef.current }
-        const nextBaseCounts: WeekBaseCounts = { ...weekBaseCountsRef.current }
         let changed = false
 
         sessions.forEach((session) => {
@@ -3257,9 +2482,7 @@ const App = () => {
             ? nextDays.map((day, index) => (index === existingDayIndex ? nextDay : day))
             : [...nextDays, nextDay].sort((a, b) => a.date.localeCompare(b.date))
 
-          const { logs, baseCounts } = buildSetLogsForExercises(savedExercises, savedLogs)
-          nextLogs[targetDate] = logs
-          nextBaseCounts[targetDate] = baseCounts
+          nextLogs[targetDate] = buildSetLogsForExercises(savedExercises, savedLogs)
           changed = true
         })
 
@@ -3276,7 +2499,6 @@ const App = () => {
             {
               selectedDate: selectedDay?.date ?? todayId,
               logsByDay: nextLogs,
-              baseCountsByDay: nextBaseCounts,
               preserveActiveEntry: true,
             }
           )
@@ -3316,45 +2538,6 @@ const App = () => {
     weekStartDayIndex,
   ])
 
-  const applyChatWorkoutUpdates = useCallback(async (value: unknown) => {
-    const values = Array.isArray(value) ? value : [value]
-    const sessions: WorkoutSession[] = []
-    const fallbackDates: string[] = []
-
-    values.forEach((candidate) => {
-      if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return
-      const update = candidate as Record<string, unknown>
-      const saved = update.saved_session
-      if (
-        saved
-        && typeof saved === 'object'
-        && !Array.isArray(saved)
-        && typeof (saved as Record<string, unknown>).date === 'string'
-        && typeof (saved as Record<string, unknown>).updated_at === 'string'
-        && (saved as Record<string, unknown>).workout
-      ) {
-        sessions.push(saved as WorkoutSession)
-        return
-      }
-
-      const targetDate = typeof update.target_date === 'string'
-        ? normalizeDateId(update.target_date)
-        : null
-      if (targetDate) fallbackDates.push(targetDate)
-    })
-
-    if (fallbackDates.length > 0) {
-      sessions.push(...await fetchWorkoutSessionsByDates(fallbackDates))
-    }
-    return applySavedWorkoutSessionsToWeek(sessions, {
-      preserveSelectedDate: true,
-      preserveActiveEntry: true,
-    })
-  }, [
-    applySavedWorkoutSessionsToWeek,
-    fetchWorkoutSessionsByDates,
-  ])
-
   const refreshVisibleWorkoutSessions = useCallback(async () => {
     if (!canQuerySavedWorkoutSessions) return false
     const visibleDates = buildWorkoutStripDates(todayId, weekStartDayIndex)
@@ -3372,6 +2555,94 @@ const App = () => {
     todayId,
     weekStartDayIndex,
   ])
+
+  const syncLoggedSet = useCallback(async (exerciseId: string, index: number) => {
+    // A set is only rendered as logged when its canonical actual lands. Any
+    // local failure clears the optimistic done flag instead of diverging.
+    const revertLocal = () => {
+      const currentList = setLogsRef.current[exerciseId]
+      const currentItem = currentList?.[index]
+      if (!currentItem?.done) return
+      currentItem.done = false
+      bumpData()
+    }
+    if (!canQuerySavedWorkoutSessions) { revertLocal(); return }
+    const ownerId = coachActAsOwnerId ?? currentUserId
+    const targetDate = selectedDay?.date ?? todayId
+    const ownerKey = `${ownerId}:${targetDate}`
+    const workoutId = workoutIdByOwnerDateRef.current[ownerKey]
+    const revision = workoutRevisionByOwnerDateRef.current[ownerKey]
+    const exercise = getExercise(exerciseId)
+    const stateList = setLogsRef.current[exerciseId]
+    const setItem = stateList?.[index]
+    const setTarget = exercise?.sets[index]
+    if (!workoutId || !revision || !exercise || !setItem || !setTarget?.setId || !setItem.done) { revertLocal(); return }
+
+    const load = parseActualLoad(setItem.weight)
+    const metric = parseActualMetric(exercise, setItem.metric)
+    if (!metric) { revertLocal(); return }
+
+    const fingerprint = JSON.stringify([workoutId, setTarget.setId, load, metric])
+    if (syncedSetKeysRef.current.has(fingerprint)) return
+
+    const pending = pendingSetSyncsByDateRef.current
+    pending[targetDate] = (pending[targetDate] ?? 0) + 1
+    pendingWorkoutDatesRef.current.add(targetDate)
+    try {
+      const headers = { 'Content-Type': 'application/json', ...(await getPrivyAuthHeaders()) }
+      const response = await apiFetch(
+        `${API_BASE_URL}/v1/workouts/${encodeURIComponent(workoutId)}/sets/${encodeURIComponent(setTarget.setId)}`,
+        {
+          method: 'PATCH',
+          headers,
+          body: JSON.stringify({
+            actual: { status: 'completed', ...metric, ...(load ? { load } : {}) },
+            expected_revision: revision,
+            request_id: crypto.randomUUID(),
+          }),
+        },
+      )
+      if (response.status === 409) {
+        // Canonical state moved on (agent edit or another tab). Pull it back in
+        // instead of retrying this write; if the pull fails, drop the
+        // optimistic state so the UI never shows an unconfirmed actual.
+        delete workoutRevisionByOwnerDateRef.current[ownerKey]
+        const refreshed = await refreshVisibleWorkoutSessions().catch(() => false)
+        if (!refreshed) revertLocal()
+        return
+      }
+      if (!response.ok) throw new Error(`Set log failed (${response.status})`)
+      const receipt = await response.json() as BackendWorkoutReceipt
+      const nextRevision = receipt.revision ?? receipt.workout?.revision
+      if (nextRevision) workoutRevisionByOwnerDateRef.current[ownerKey] = nextRevision
+      syncedSetKeysRef.current.add(fingerprint)
+    } catch (error) {
+      console.warn('Canonical set log failed:', error)
+      revertLocal()
+    } finally {
+      const remaining = (pending[targetDate] ?? 1) - 1
+      if (remaining <= 0) {
+        delete pending[targetDate]
+        pendingWorkoutDatesRef.current.delete(targetDate)
+      } else {
+        pending[targetDate] = remaining
+      }
+    }
+  }, [
+    bumpData,
+    canQuerySavedWorkoutSessions,
+    coachActAsOwnerId,
+    currentUserId,
+    getExercise,
+    getPrivyAuthHeaders,
+    refreshVisibleWorkoutSessions,
+    selectedDay?.date,
+    todayId,
+  ])
+
+  useEffect(() => {
+    syncLoggedSetRef.current = syncLoggedSet
+  }, [syncLoggedSet])
 
   const handleRefreshSession = useCallback(async () => {
     if (!currentUserId || !canQuerySavedWorkoutSessions) return false
@@ -3420,31 +2691,14 @@ const App = () => {
       throw new Error('Empty chat response')
     }
 
-    applyAgentProfileUpdatePayload(data?.profile_update)
-    applyActiveNotesPatchPayload(data?.active_notes_patch)
     const reply = typeof data?.reply === 'string' ? data.reply : String(data?.reply ?? '')
     await handleAiReply(reply, messageId, presetLabel(data.preset, modelControl?.models))
-    const workoutUpdates = Array.isArray(data?.workout_updates)
-      ? data.workout_updates
-      : []
-    if (workoutUpdates.length > 0) {
-      await applyChatWorkoutUpdates(workoutUpdates)
-    } else if (data?.workout_update) {
-      await applyChatWorkoutUpdates(data.workout_update)
-    } else {
-      // A completed chat reply is authoritative. Workout APIs arrive in a later
-      // migration stage, so their absence must not replace a valid reply with a
-      // misleading "backend unreachable" message.
-      try {
-        await refreshVisibleWorkoutSessions()
-      } catch {
-        // The next supported workout refresh will reconcile this view.
-      }
+    try {
+      await refreshVisibleWorkoutSessions()
+    } catch {
+      // The next supported workout refresh will reconcile this view.
     }
   }, [
-    applyActiveNotesPatchPayload,
-    applyAgentProfileUpdatePayload,
-    applyChatWorkoutUpdates,
     fetchChatJobResult,
     handleAiReply,
     modelControl?.models,
@@ -3470,28 +2724,14 @@ const App = () => {
       throw new Error('Empty coach chat response')
     }
 
-    applyAgentProfileUpdatePayload(data?.profile_update)
-    applyActiveNotesPatchPayload(data?.active_notes_patch)
     const reply = typeof data?.reply === 'string' ? data.reply : String(data?.reply ?? '')
     await handleCoachReply(reply, scopeId, exerciseId, messageId, presetLabel(data.preset, modelControl?.models))
-    const workoutUpdates = Array.isArray(data?.workout_updates)
-      ? data.workout_updates
-      : []
-    if (workoutUpdates.length > 0) {
-      await applyChatWorkoutUpdates(workoutUpdates)
-    } else if (data?.workout_update) {
-      await applyChatWorkoutUpdates(data.workout_update)
-    } else {
-      try {
-        await refreshVisibleWorkoutSessions()
-      } catch {
-        // Chat remains usable while workout APIs are intentionally unsupported.
-      }
+    try {
+      await refreshVisibleWorkoutSessions()
+    } catch {
+      // Chat remains usable while workout APIs are intentionally unsupported.
     }
   }, [
-    applyActiveNotesPatchPayload,
-    applyAgentProfileUpdatePayload,
-    applyChatWorkoutUpdates,
     fetchChatJobResult,
     handleCoachReply,
     modelControl?.models,
@@ -3507,11 +2747,14 @@ const App = () => {
     const statusId = addThinkingMessage(selectedModelLabel)
 
     try {
+      const targetDate = selectedDay?.date ?? todayId
+      const expectedRevision = workoutRevisionByOwnerDateRef.current[`${currentUserId}:${targetDate}`]
       const payload = {
         user_id: currentUserId,
         request_id: crypto.randomUUID(),
         message: value,
-        reference_date: selectedDay?.date ?? todayId,
+        reference_date: targetDate,
+        ...(expectedRevision ? { expected_revision: expectedRevision } : {}),
       }
 
       await fetchChatReply(payload, statusId)
@@ -3568,7 +2811,6 @@ const App = () => {
       // treats the just-created record as a competing write and drops it.
       pendingWorkoutDatesRef.current.delete(targetDate)
       applySavedWorkoutSessionToWeek(saved)
-      exerciseHistoryCacheRef.current.clear()
     } catch (error) {
       console.warn('Fast workout generation failed:', error)
       window.alert(error instanceof Error ? error.message : t('workout.fastGenerateFailed'))
@@ -3596,27 +2838,6 @@ const App = () => {
     void handleFastGenerateDayWorkout('jev')
   }, [handleFastGenerateDayWorkout])
 
-  const handleGenerateDayWorkoutWithCoach = useCallback(() => {
-    if (!canLlmEditPlanSelectedDay || !coachChatEnabled) return
-
-    const targetDate = selectedDay?.date ?? todayId
-    const prompt = t('workout.generateChatPrompt', {
-      date: targetDate,
-      label: selectedDayLabel,
-    })
-    handleActiveViewChange('home')
-    void handleSend(prompt)
-  }, [
-    canLlmEditPlanSelectedDay,
-    coachChatEnabled,
-    handleActiveViewChange,
-    handleSend,
-    selectedDay?.date,
-    selectedDayLabel,
-    t,
-    todayId,
-  ])
-
   const handleCoachSend = useCallback(async (exerciseId: string, message: string) => {
     const trimmed = message.trim()
     if (!trimmed || !coachChatEnabled) return
@@ -3640,6 +2861,9 @@ const App = () => {
       scope_id: scopeId,
       reference_date: selectedDay?.date ?? todayId,
       exercise_id: exercise.id,
+      ...(workoutRevisionByOwnerDateRef.current[`${currentUserId}:${selectedDay?.date ?? todayId}`]
+        ? { expected_revision: workoutRevisionByOwnerDateRef.current[`${currentUserId}:${selectedDay?.date ?? todayId}`] }
+        : {}),
     }
 
     try {
@@ -3666,24 +2890,6 @@ const App = () => {
     selectedModelLabel,
     t,
     todayId,
-  ])
-
-  const handleSuggestWeight = useCallback(async (exercise: WorkoutExercise) => {
-    void exercise
-    addMessage('Weight suggestions are not available until a canonical history decision API is connected.', 'ai')
-  }, [
-    addMessage,
-  ])
-
-  const handleQuickExerciseDecision = useCallback(async (
-    action: 'last_time' | 'swap_similar' | 'progress_or_deload' | 'rest_time' | 'volume_adjustment' | 'next_exercise',
-    exercise: WorkoutExercise,
-  ) => {
-    void action
-    void exercise
-    addMessage('Exercise decisions are not available until a canonical decision API is connected.', 'ai')
-  }, [
-    addMessage,
   ])
 
   const handleClearChat = useCallback(async () => {
@@ -3725,12 +2931,10 @@ const App = () => {
   }, [])
 
   const resetProfileForSignOut = useCallback(() => {
+    profileRevisionRef.current = null
     setProfile((prev) => ({
       ...prev,
       text: '',
-      weeklyPlan: '',
-      activeNotes: [],
-      dailyTasks: [],
     }))
   }, [])
 
@@ -3793,15 +2997,6 @@ const App = () => {
   const extractPrivyUserId = useCallback(readPrivyUserId, [])
 
   const privyUserId = useMemo(() => extractPrivyUserId(privyUser), [extractPrivyUserId, privyUser])
-
-  const ownerIdCandidates = useMemo(() => {
-    const set = new Set<string>()
-    if (currentUserEmail) set.add(currentUserEmail)
-    if (privySubjectId) set.add(privySubjectId)
-    if (privyUserId) set.add(privyUserId)
-    if (currentUserId) set.add(currentUserId)
-    return Array.from(set)
-  }, [currentUserEmail, currentUserId, privySubjectId, privyUserId])
 
   useEffect(() => {
     if (!privyReady) return
@@ -3960,128 +3155,10 @@ const App = () => {
 
   useEffect(() => {
     if (!privyAuthenticated) {
-      setCoachActAs(null)
-      setCoachLinks([])
-      setCoachLinksError(null)
-      setCoachActionMessage(null)
       setPrivySubjectId(null)
       return
     }
-  }, [privyAuthenticated, setCoachActAs])
-
-  useEffect(() => {
-    if (!coachActAsOwnerId) return
-    const coachEmail = currentUserEmail?.toLowerCase() ?? null
-    const coachOwnerIdSet = new Set(ownerIdCandidates)
-    const normalizedActAs = coachActAsOwnerId.toLowerCase()
-    const valid = coachLinks.some((link) => {
-      if (link.status !== 'active' || !link.permissions.view_progress) return false
-      const traineeEmail = (link.trainee_email || '').toLowerCase()
-      if (link.trainee_owner_id !== coachActAsOwnerId && traineeEmail !== normalizedActAs) return false
-      if (link.coach_owner_id && coachOwnerIdSet.has(link.coach_owner_id)) return true
-      if (coachEmail && link.coach_email?.toLowerCase() === coachEmail) return true
-      return false
-    })
-    if (!valid) {
-      setCoachActAs(null)
-    }
-  }, [coachActAsOwnerId, coachLinks, currentUserEmail, ownerIdCandidates, setCoachActAs])
-
-  const normalizeVideoQuery = useCallback((query: string, limit: number) => (
-    `${limit}:${query.trim().toLowerCase()}`
-  ), [])
-
-  const persistVideoCache = useCallback(() => {
-    try {
-      const entries = Array.from(videoCacheRef.current.entries())
-        .sort((a, b) => b[1].ts - a[1].ts)
-        .slice(0, videoCacheMaxEntries)
-
-      const payload: Record<string, VideoCacheEntry> = {}
-      entries.forEach(([key, value]) => {
-        payload[key] = value
-      })
-
-      localStorage.setItem(videoCacheStorageKey, JSON.stringify(payload))
-    } catch (err) {
-      console.warn('Video cache save failed:', err)
-    }
-  }, [])
-
-  const loadVideoCache = useCallback(() => {
-    try {
-      const raw = localStorage.getItem(videoCacheStorageKey)
-      if (!raw) return
-      const parsed = JSON.parse(raw) as Record<string, VideoCacheEntry>
-      Object.entries(parsed).forEach(([key, entry]) => {
-        if (!entry || typeof entry.ts !== 'number' || !Array.isArray(entry.videos)) return
-        videoCacheRef.current.set(key, entry)
-      })
-    } catch (err) {
-      console.warn('Video cache load failed:', err)
-    }
-  }, [])
-
-  const getCachedVideos = useCallback((query: string, limit: number) => {
-    const key = normalizeVideoQuery(query, limit)
-    const entry = videoCacheRef.current.get(key)
-    if (!entry) return null
-
-    if (Date.now() - entry.ts > videoCacheTtlMs) {
-      videoCacheRef.current.delete(key)
-      persistVideoCache()
-      return null
-    }
-
-    return entry
-  }, [normalizeVideoQuery, persistVideoCache])
-
-  const fetchVideos = useCallback(async ({
-    query,
-    exerciseName,
-    entryName,
-    entryType,
-    limit = 5,
-    force = false,
-  }: {
-    query: string
-    exerciseName?: string
-    entryName?: string
-    entryType?: 'exercise' | 'extra'
-    limit?: number
-    force?: boolean
-  }) => {
-    if (!query) return
-    void exerciseName
-    const requestId = videoRequestIdRef.current + 1
-    videoRequestIdRef.current = requestId
-    const isStale = () => videoRequestIdRef.current !== requestId
-    if (entryName && entryType) {
-      setVideoOwnerKey(`${entryType}:${entryName}`)
-    } else {
-      setVideoOwnerKey(null)
-    }
-    setVideoExactMatch(null)
-    if (!force) {
-      const cachedEntry = getCachedVideos(query, limit)
-      if (cachedEntry) {
-        if (isStale()) return
-        setVideos(cachedEntry.videos)
-        setVideoExactMatch(cachedEntry.exactMatch ?? null)
-        setVideoLoading(false)
-        return
-      }
-    } else {
-      const key = normalizeVideoQuery(query, limit)
-      if (videoCacheRef.current.delete(key)) {
-        persistVideoCache()
-      }
-    }
-
-    setVideos([])
-    setVideoExactMatch(null)
-    setVideoLoading(false)
-  }, [getCachedVideos, normalizeVideoQuery, persistVideoCache])
+  }, [privyAuthenticated])
 
   useEffect(() => {
     if (restState.active && restState.endTs) {
@@ -4228,23 +3305,16 @@ const App = () => {
   }, [warmBackend])
 
   useEffect(() => {
-    const warmIfVisible = () => {
-      if (document.visibilityState === 'visible') {
-        void warmBackend()
-      }
-    }
     const warmAfterFocus = () => {
       if (document.visibilityState === 'visible') {
         void warmBackend({ force: true })
       }
     }
 
-    const keepAliveId = window.setInterval(warmIfVisible, BACKEND_KEEPALIVE_MS)
     window.addEventListener('focus', warmAfterFocus)
     document.addEventListener('visibilitychange', warmAfterFocus)
 
     return () => {
-      window.clearInterval(keepAliveId)
       window.removeEventListener('focus', warmAfterFocus)
       document.removeEventListener('visibilitychange', warmAfterFocus)
     }
@@ -4272,8 +3342,6 @@ const App = () => {
     if (sessionLoadKeyRef.current === authKey) return
     sessionLoadKeyRef.current = authKey
     pendingWorkoutDatesRef.current = new Set()
-    pendingWorkoutPlanDatesRef.current = new Set()
-    workoutWriteVersionByDateRef.current = {}
     sessionReadyRef.current = true
     setServerSessionLoadSettledKey(authKey)
     setSessionLoading(false)
@@ -4295,10 +3363,6 @@ const App = () => {
   useEffect(() => {
     purgeLegacySessionCaches()
   }, [])
-
-  useEffect(() => {
-    loadVideoCache()
-  }, [loadVideoCache])
 
   useEffect(() => {
     document.documentElement.lang = profile.language
@@ -4419,189 +3483,43 @@ const App = () => {
     showWorkoutDetail(id, type)
   }, [showWorkoutDetail])
 
-  const handleApplyQuickAction = useCallback(async (
-    messageId: string,
-    option: QuickActionOption,
-    exercise: WorkoutExercise,
-  ) => {
-    const scopeId = getCoachScopeId(exercise.id)
-    if (option.action === 'next_exercise') {
-      const targetId = String(option.payload.choice ?? '')
-      if (!targetId || !getExercise(targetId)) return
-      showWorkoutDetail(targetId, 'exercise')
-    } else {
-      if (!canEditPlanSelectedDay) return
-      const current = getExercise(exercise.id)
-      if (!current) return
-      if (
-        option.action === 'volume_adjustment'
-        && isExerciseLockedFromLogs(current.id, setLogsRef.current)
-      ) return
-      let replacementId: string | null = null
+  const loadCanonicalProfile = useCallback(async () => {
+    const headers = await getPrivyAuthHeaders()
+    if (!headers.Authorization) return
+    const response = await apiFetch(`${API_BASE_URL}/v1/profile`, { headers })
+    if (!response.ok) throw new Error(`Profile load failed (${response.status})`)
+    const body = await response.json() as { content_md?: unknown; revision?: unknown }
+    profileRevisionRef.current = typeof body.revision === 'string' ? body.revision : null
+    setProfile((prev) => ({
+      ...prev,
+      text: typeof body.content_md === 'string' ? body.content_md : '',
+    }))
+  }, [getPrivyAuthHeaders])
 
-      if (option.action === 'weight') {
-        const load = String(option.payload.load ?? '').trim()
-        if (!load) return
-        current.sets.forEach((set) => {
-          if (!set.isWarmup) set.targetWeight = load
-        })
-      } else if (option.action === 'rest_time') {
-        const seconds = Number(option.payload.seconds)
-        if (!Number.isFinite(seconds) || seconds <= 0) return
-        current.restSec = seconds
-      } else if (option.action === 'volume_adjustment') {
-        const nextCount = Number(option.payload.sets)
-        const target = String(option.payload.target ?? '').trim()
-        if (!Number.isInteger(nextCount) || nextCount < 1 || nextCount > 6) return
-        const warmups = current.sets.filter((set) => set.isWarmup)
-        const workSets = current.sets.filter((set) => !set.isWarmup)
-        const source = workSets[workSets.length - 1]
-        if (!source) return
-        const metricKey = current.metric === 'time' ? 'targetTime' : 'targetReps'
-        const nextWorkSets = Array.from({ length: nextCount }, (_, index) => ({
-          ...(workSets[index] ?? source),
-          [metricKey]: target || (workSets[index] ?? source)[metricKey],
-        }))
-        current.sets = [...warmups, ...nextWorkSets]
-        const existingLogs = setLogsRef.current[current.id] ?? []
-        setLogsRef.current[current.id] = current.sets.map((_, index) => (
-          existingLogs[index] ?? { weight: '', metric: '', done: false }
-        ))
-        baseSetCountsRef.current[current.id] = current.sets.length
-      } else if (option.action === 'swap_similar') {
-        const name = String(option.payload.name ?? '').trim()
-        if (!name) return
-        const suggestedLoad = String(option.payload.suggested_load ?? '').trim()
-        const applyIdentity = (target: WorkoutExercise, usePlanPrescription: boolean) => {
-          const planned = option.payload.exercise && typeof option.payload.exercise === 'object' && !Array.isArray(option.payload.exercise)
-            ? option.payload.exercise as Partial<WorkoutExercise>
-            : null
-          target.name = name
-          target.standardName = planned?.standardName ?? name
-          target.exerciseKey = String(option.payload.choice ?? '') || undefined
-          target.movementFamilyKey = planned?.movementFamilyKey ?? (String(option.payload.movement_family ?? '') || undefined)
-          target.equipment = planned?.equipment ?? ((String(option.payload.equipment ?? '') || undefined) as WorkoutExercise['equipment'])
-          target.weightMode = planned?.weightMode ?? ((String(option.payload.load_basis ?? '') || undefined) as WorkoutExercise['weightMode'])
-          target.primaryMuscle = planned?.primaryMuscle ?? ((String(option.payload.primary_muscle ?? '') || undefined) as WorkoutExercise['primaryMuscle'])
-          target.secondaryMuscles = planned?.secondaryMuscles ?? (Array.isArray(option.payload.secondary_muscles)
-            ? option.payload.secondary_muscles as WorkoutExercise['secondaryMuscles']
-            : undefined)
-          target.catalogMatchQuality = 'catalog_key'
-          if (usePlanPrescription && planned) {
-            if (Array.isArray(planned.sets) && planned.sets.length > 0) target.sets = planned.sets.map((set) => ({ ...set }))
-            if (Array.isArray(planned.cues)) target.cues = [...planned.cues]
-            if (planned.restSec) target.restSec = planned.restSec
-            if (planned.metric) target.metric = planned.metric
-            if (planned.section) target.section = planned.section
-          }
-          target.sets.forEach((set) => {
-            if (!set.isWarmup) set.targetWeight = suggestedLoad
-          })
-        }
-        const currentLogs = setLogsRef.current[current.id] ?? []
-        const completedIndexes = current.sets
-          .map((_, index) => index)
-          .filter((index) => currentLogs[index]?.done)
-        if (completedIndexes.length > 0) {
-          const remainingSets = current.sets.filter((_, index) => !currentLogs[index]?.done)
-          if (remainingSets.length === 0) return
-          const nextId = `${current.id}-swap-${Date.now()}`
-          const replacement: WorkoutExercise = {
-            ...current,
-            id: nextId,
-            sets: remainingSets.map((set) => ({ ...set })),
-            cues: [],
-            notes: undefined,
-          }
-          applyIdentity(replacement, false)
-          current.sets = completedIndexes.map((index) => ({ ...current.sets[index] }))
-          setLogsRef.current[current.id] = completedIndexes.map((index) => ({ ...currentLogs[index] }))
-          baseSetCountsRef.current[current.id] = current.sets.length
-          const currentIndex = workoutExercisesRef.current.findIndex((item) => item.id === current.id)
-          workoutExercisesRef.current.splice(currentIndex + 1, 0, replacement)
-          setLogsRef.current[nextId] = replacement.sets.map(() => ({ weight: '', metric: '', done: false }))
-          baseSetCountsRef.current[nextId] = replacement.sets.length
-          replacementId = nextId
-          updateExerciseSummary(replacement)
-        } else {
-          applyIdentity(current, true)
-        }
-      }
-
-      updateExerciseSummary(current)
-      const targetDate = selectedDay?.date ?? todayId
-      const currentDay = weekPlan.days.find((day) => day.date === targetDate)
-      const nextExercises = [...workoutExercisesRef.current]
-      const nextExtras = [...workoutExtrasRef.current]
-      const nextLogs = { ...setLogsRef.current }
-      const nextBaseCounts = { ...baseSetCountsRef.current }
-      const nextDay: WeekPlanDay = {
-        ...(currentDay ?? {
-          date: targetDate,
-          label: selectedDayLabel,
-          exercises: [],
-          extras: [],
-        }),
-        exercises: nextExercises,
-        extras: nextExtras,
-        isRest: nextExercises.length === 0,
-      }
-      const nextPlan: WeekPlan = {
-        ...weekPlan,
-        days: weekPlan.days.map((day) => day.date === targetDate ? nextDay : day),
-      }
-      workoutExercisesRef.current = nextExercises
-      workoutExtrasRef.current = nextExtras
-      setLogsRef.current = nextLogs
-      baseSetCountsRef.current = nextBaseCounts
-      weekSetLogsRef.current[targetDate] = nextLogs
-      weekBaseCountsRef.current[targetDate] = nextBaseCounts
-      setWeekPlan(nextPlan)
-      bumpData()
-      const saved = await persistWorkoutSessionForDay({
-        dateId: targetDate,
-        sessionId: targetDate,
-        label: nextDay.label,
-        exercises: nextExercises,
-        extras: nextExtras,
-        setLogs: nextLogs,
-        notes: nextDay.notes,
-        dayOverride: nextDay,
-        planMutation: true,
-      })
-      if (!saved) return
-      if (replacementId) showWorkoutDetail(replacementId, 'exercise')
+  const saveCanonicalProfile = useCallback(async (contentMd: string) => {
+    const headers = { 'Content-Type': 'application/json', ...await getPrivyAuthHeaders() }
+    const response = await apiFetch(`${API_BASE_URL}/v1/profile`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({
+        content_md: contentMd,
+        expected_revision: profileRevisionRef.current,
+        request_id: crypto.randomUUID(),
+      }),
+    })
+    if (response.status === 409) {
+      console.warn('Profile save conflicted with a newer revision; reloading canonical profile.')
+      await loadCanonicalProfile()
+      return
     }
+    if (!response.ok) throw new Error(`Profile save failed (${response.status})`)
+    const body = await response.json() as { revision?: unknown }
+    if (typeof body.revision === 'string') {
+      profileRevisionRef.current = body.revision
+    }
+  }, [getPrivyAuthHeaders, loadCanonicalProfile])
 
-    updateCoachMessages(scopeId, (items) => items.map((message) => (
-      message.id === messageId
-        ? {
-            ...message,
-            quickActions: message.quickActions?.map((candidate) => ({
-              ...candidate,
-              applied: candidate.id === option.id,
-            })),
-          }
-        : message
-    )))
-    await addCoachMessage(scopeId, `Applied: ${option.label}`, 'ai')
-  }, [
-    addCoachMessage,
-    bumpData,
-    canEditPlanSelectedDay,
-    getCoachScopeId,
-    getExercise,
-    persistWorkoutSessionForDay,
-    selectedDay?.date,
-    selectedDayLabel,
-    showWorkoutDetail,
-    todayId,
-    updateCoachMessages,
-    weekPlan,
-  ])
-
-  const handleProfileChange = useCallback((field: 'text' | 'weeklyPlan' | 'activeNotes' | 'language' | 'fontScale', value: string) => {
-    markLocalEdit()
+  const handleProfileChange = useCallback((field: 'text' | 'language' | 'fontScale', value: string) => {
     if (field === 'language') {
       const normalized = normalizeLanguage(value) ?? 'en'
       setProfile((prev) => ({
@@ -4618,36 +3536,38 @@ const App = () => {
       }))
       return
     }
-    if (field === 'activeNotes') {
-      setProfile((prev) => ({
-        ...prev,
-        activeNotes: normalizeActiveNotes(value),
-      }))
-      return
-    }
     setProfile((prev) => ({
       ...prev,
-      [field]: value,
+      text: value,
     }))
-  }, [markLocalEdit])
+    if (!value.trim()) return
+    if (profileSaveTimeoutRef.current) {
+      window.clearTimeout(profileSaveTimeoutRef.current)
+    }
+    profileSaveTimeoutRef.current = window.setTimeout(() => {
+      profileSaveTimeoutRef.current = null
+      void saveCanonicalProfile(value).catch((error) => {
+        console.warn('Profile save failed:', error)
+      })
+    }, PROFILE_SAVE_DEBOUNCE_MS)
+  }, [saveCanonicalProfile])
+
+  useEffect(() => {
+    if (!privyReady || !privyAuthenticated || !isBackendHealthy) return
+    void loadCanonicalProfile().catch((error) => {
+      console.warn('Profile load failed:', error)
+    })
+  }, [isBackendHealthy, loadCanonicalProfile, privyAuthenticated, privyReady])
+
+  useEffect(() => () => {
+    if (profileSaveTimeoutRef.current) {
+      window.clearTimeout(profileSaveTimeoutRef.current)
+    }
+  }, [])
 
   const activeCoachMessages = activeEntryType === 'exercise' && activeEntryId
     ? (coachMessagesByScope[getCoachScopeId(activeEntryId)] ?? [])
     : []
-  const selectedDayHasWorkoutItems = workoutExercisesRef.current.length > 0 || workoutExtrasRef.current.length > 0
-  const selectedDayHasLoggedExercises = workoutExercisesRef.current.some((exercise) => (
-    isExerciseLockedFromLogs(exercise.id, setLogsRef.current)
-  ))
-  const selectedDayHasUnloggedItems = workoutExercisesRef.current.some((exercise) => (
-    !isExerciseLockedFromLogs(exercise.id, setLogsRef.current)
-    || getUnloggedSetCount(exercise, setLogsRef.current) > 0
-  )) || workoutExtrasRef.current.length > 0
-  const selectedDayHasText = Boolean((selectedDay?.planNotes ?? '').trim() || (selectedDay?.notes ?? '').trim())
-  const workoutClearMode = selectedDayHasLoggedExercises ? 'unlogged' : 'day'
-  const canClearWorkout = selectedDayHasLoggedExercises
-    ? selectedDayHasUnloggedItems
-    : (selectedDayHasWorkoutItems || selectedDayHasText)
-
   return (
     <I18nProvider value={i18n}>
       <div className={`shell shell--${activeView}${coachActAsOwnerId ? ' shell--coach-view' : ''}`}>
@@ -4681,7 +3601,6 @@ const App = () => {
           <WorkoutView
             active={activeView === 'workout'}
             canLogDay={canLogSelectedDay}
-            canEditPlan={canEditPlanSelectedDay}
             coachChatEnabled={coachChatEnabled}
             weekDays={weekDaySummaries}
             selectedDayLabel={selectedDayLabel}
@@ -4691,28 +3610,16 @@ const App = () => {
             extras={displayedWorkoutExtras}
             setLogs={setLogsRef.current}
             planNotes={selectedDay?.planNotes ?? ''}
-            dayNotes={selectedDay?.notes ?? ''}
             activeEntryId={activeEntryId}
             activeEntryType={activeEntryType}
             editingSet={editingSet}
-            restState={restState}
             holdTimer={holdTimer}
-            videos={videos}
-            videoLoading={videoLoading}
-            videoExactMatch={videoExactMatch}
-            videoOffline={!isBackendHealthy}
-            videoOwnerKey={videoOwnerKey}
             coachMessages={activeCoachMessages}
             showModelLabels
-            exerciseHistory={exerciseHistory}
-            exerciseHistoryLoading={exerciseHistoryLoading}
-            exerciseHistoryError={exerciseHistoryError}
             onSelectEntry={handleSelectEntry}
             onSelectDay={handleSelectDay}
             onBack={hideWorkoutDetail}
             onLogSet={logNextSet}
-            onAddSet={addNewSet}
-            onDeleteSet={deleteSetAtIndex}
             onStartEditingSet={(exerciseId, index) => {
               const stateList = setLogsRef.current[exerciseId]
               const setItem = stateList?.[index]
@@ -4734,6 +3641,7 @@ const App = () => {
                   if (exercise?.metric === 'reps') {
                     setItem.metric = normalizeRepValue(setItem.metric)
                   }
+                  if (setItem.done) void syncLoggedSetRef.current?.(editingSet.exerciseId, editingSet.index)
                 }
               }
               setEditingSet(null)
@@ -4757,57 +3665,17 @@ const App = () => {
             onUpdateSetField={updateSetField}
             onStartHoldTimer={startHoldTimer}
             onLogHoldTimerSet={logHoldTimerSet}
-            onOpenVideo={setActiveVideoId}
-            onRequestVideos={fetchVideos}
             onCoachSend={handleCoachSend}
-            onSuggestWeight={handleSuggestWeight}
-            onQuickDecision={handleQuickExerciseDecision}
-            onApplyQuickAction={handleApplyQuickAction}
-            onRequestExerciseHistory={handleRequestExerciseHistory}
-            onRemoveExercise={removeExerciseFromPlan}
-            onRemoveExtra={removeExtraFromPlan}
-            onRemoveCircuit={removeCircuitFromPlan}
-            onRemoveSection={removeSectionFromPlan}
-            onUpdateDayNotes={updateDayNotes}
-            onUpdateExerciseNotes={updateExerciseNotes}
-          />
-          <HealthTimelineView
-            key={currentUserId}
-            kind={activeView === 'diet' ? 'diet' : 'health'}
-            active={activeView === 'diet' || activeView === 'health'}
-            weekDays={weekDaySummaries}
-            selectedDayLabel={selectedDayLabel}
-            onSelectDay={handleSelectDay}
-            onChat={() => handleActiveViewChange('home')}
-            apiBase={API_BASE_URL}
-            userId={currentUserId}
-            enabled={canQuerySavedWorkoutSessions}
-            canEdit
-            getAuthHeaders={getPrivyAuthHeaders}
           />
           <ProfileView
-            telegramControl={privyAuthenticated && !coachActAsOwnerId ? <TelegramLink apiBase={API_BASE_URL} getHeaders={getPrivyAuthHeaders} /> : undefined}
+            telegramControl={privyAuthenticated ? <TelegramLink apiBase={API_BASE_URL} getHeaders={getPrivyAuthHeaders} /> : undefined}
             active={activeView === 'profile'}
             text={profile.text}
-            weeklyPlan={profile.weeklyPlan}
-            activeNotes={normalizeActiveNotes(profile.activeNotes).map((note) => note.text).join('\n')}
             language={profile.language}
             fontScale={profile.fontScale}
             onChange={handleProfileChange}
             onAuthClick={handleAuthClick}
             authState={authState}
-            coachLinks={coachLinks}
-            coachLinksLoading={coachLinksLoading}
-            coachLinksError={coachLinksError}
-            coachActionMessage={coachActionMessage}
-            coachLatestInviteToken={coachLatestInviteToken}
-            coachActAsOwnerId={coachActAsOwnerId}
-            viewerOwnerIdCandidates={ownerIdCandidates}
-            onCoachActAs={setCoachActAs}
-            onCoachInvite={handleCoachInvite}
-            onCoachAcceptInvite={handleCoachAcceptInvite}
-            onCoachUpdatePermissions={handleCoachUpdatePermissions}
-            onCoachRevoke={handleCoachRevoke}
           />
         </div>
 
@@ -4815,29 +3683,15 @@ const App = () => {
           activeView={activeView}
           onChange={handleActiveViewChange}
           coachModeActive={Boolean(coachActAsOwnerId)}
-          coachContextLabel={coachActAsOwnerId ? activeCoachContextLabel : ''}
-          leadingControl={activeView !== 'workout' && activeView !== 'profile' ? (
-            <ChatOverflowMenu
-              onRefresh={() => {
-                if (activeView === 'diet' || activeView === 'health') window.dispatchEvent(new Event('aifit-channel-change'))
-                return handleRefreshSession()
-              }}
-            />
+          coachContextLabel=""
+          leadingControl={activeView === 'home' ? (
+            <ChatOverflowMenu onRefresh={handleRefreshSession} />
           ) : (
             <WorkoutOverflowMenu
-              canEditPlan={canEditPlanSelectedDay}
-              canClearWorkout={canClearWorkout}
-              canCopyLastWeek={canEditPlanSelectedDay && canQuerySavedWorkoutSessions && isBackendHealthy && !copyingLastWeek}
-              copyingLastWeek={copyingLastWeek}
-              onCopyLastWeek={handleCopyLastWeek}
               canGeneratePlan={canGenerateWorkoutSelectedDay && canQuerySavedWorkoutSessions && isBackendHealthy}
-              canGenerateWithCoach={canLlmEditPlanSelectedDay && coachChatEnabled}
-              clearMode={workoutClearMode}
               onGenerateWorkout={handleGenerateDayWorkout}
               onVaryWorkout={handleVaryDayWorkout}
-              onGenerateWithCoach={handleGenerateDayWorkoutWithCoach}
               onRefresh={handleRefreshSession}
-              onClearWorkout={handleClearWorkoutDay}
             />
           )}
         />
@@ -4849,7 +3703,6 @@ const App = () => {
           onToggleAutoStart={setRestAutoStart}
         />
         <MiniTimer restState={restState} onMaximize={maximizeRest} />
-        <VideoModal activeVideoId={activeVideoId} onClose={() => setActiveVideoId(null)} />
       </div>
     </I18nProvider>
   )

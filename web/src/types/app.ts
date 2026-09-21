@@ -44,23 +44,6 @@ export type ChatMessage = {
   timestamp?: number
   replyElapsedSeconds?: number
   modelLabel?: string
-  quickActions?: QuickActionOption[]
-}
-
-export type QuickActionOption = {
-  id: string
-  action: 'weight' | 'swap_similar' | 'rest_time' | 'volume_adjustment' | 'next_exercise'
-  label: string
-  payload: Record<string, unknown>
-  applied?: boolean
-}
-
-export type Video = {
-  id: string
-  title: string
-  thumbnail: string
-  duration: string
-  link: string
 }
 
 export type AuthUiState = {
@@ -74,27 +57,3 @@ export type AuthUiState = {
   loading: boolean
 }
 
-export type CoachPermissions = {
-  view_progress: boolean
-  edit_programs: boolean
-  chat_as_coach: boolean
-  view_health?: boolean
-  view_diet?: boolean
-  edit_diet?: boolean
-}
-
-export type CoachLink = {
-  id: string
-  coach_email?: string | null
-  coach_owner_id?: string | null
-  trainee_owner_id: string
-  trainee_email?: string | null
-  permissions: CoachPermissions
-  status: string
-  invite_token?: string | null
-  invite_expires_at?: string | null
-  created_at?: string | null
-  updated_at?: string | null
-  accepted_at?: string | null
-  accepted_by_email?: string | null
-}

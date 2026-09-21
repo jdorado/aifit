@@ -20,7 +20,7 @@ from .auth import (
     require_agent_request,
     require_identity,
 )
-from .ez import call as ez_call, provision_telegram, telegram_provisioning_configured, verified_binding
+from .ez import call as ez_call, verified_binding
 from .model_policy import filter_control, require_allowed, routing_provider
 from .workouts import (
     BlueprintInput,
@@ -122,6 +122,7 @@ class ChatInput(BaseModel):
     exercise_id: str | None = Field(default=None, min_length=1, max_length=200)
     workout_id: str | None = Field(default=None, min_length=1, max_length=200)
     exercise_instance_id: str | None = Field(default=None, min_length=1, max_length=200)
+    expected_revision: str | None = Field(default=None, pattern=r"^rev_[a-f0-9]{32}$")
 
 
 class ModelSelectionInput(BaseModel):
@@ -131,11 +132,6 @@ class ModelSelectionInput(BaseModel):
     provider: str | None = Field(default=None, min_length=1, max_length=80)
     model: str | None = Field(default=None, min_length=1, max_length=160)
     effort: str | None = Field(default=None, min_length=1, max_length=40)
-
-
-class TelegramBotInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    bot_token: str = Field(min_length=26, max_length=512, pattern=r"^\d{5,}:[A-Za-z0-9_-]{20,}$")
 
 
 class NewChatInput(BaseModel):
@@ -359,20 +355,6 @@ def public_turn_from_snapshot(run_id: str, request_id: str, snapshot: dict) -> d
     return result
 
 
-def public_turn(turn: dict) -> dict:
-    messages = validated_messages(turn.get("messages", []))
-    result: dict[str, Any] = {"job_id": turn.get("job_id", turn["request_id"]), "request_id": turn["request_id"],
-                              "status": "complete" if turn["status"] == "completed" else turn["status"], "messages": messages}
-    if messages:
-        result["reply"] = messages[-1]["text"]
-    if turn.get("error"):
-        result["error"] = turn["error"]
-    preset = validated_preset(turn.get("preset"))
-    if preset:
-        result["preset"] = preset
-    return result
-
-
 @app.on_event("startup")
 async def indexes() -> None:
     await db.accounts.create_index([("privy_subject", ASCENDING)], unique=True)
@@ -401,20 +383,8 @@ async def get_account(identity: Identity = Depends(require_identity)) -> dict:
 async def get_telegram_connection(identity: Identity = Depends(require_identity)) -> dict:
     account = await account_for(identity)
     binding = await verified_binding(account["account_id"])
-    try:
-        receipt = await ez_call(binding, "GET", "/v1/telegram")
-    except HTTPException as error:
-        if error.status_code in {400, 404, 503} and telegram_provisioning_configured(binding):
-            return {"state": "needs_bot"}
-        raise
-    try:
-        return public_telegram_connection(receipt)
-    except HTTPException as error:
-        if (error.status_code == 502 and telegram_provisioning_configured(binding)
-                and isinstance(receipt, dict) and receipt.get("connected") is True
-                and receipt.get("ready") is not True):
-            return {"state": "needs_bot"}
-        raise
+    receipt = await ez_call(binding, "GET", "/v1/telegram")
+    return public_telegram_connection(receipt)
 
 
 @app.post("/account/telegram/link")
@@ -426,20 +396,6 @@ async def create_telegram_connection(identity: Identity = Depends(require_identi
     except HTTPException as error:
         if error.status_code in {400, 403}:
             raise HTTPException(409, "Telegram is not available for this agent yet.") from error
-        raise
-    return public_telegram_connection(connection, needs_link=True)
-
-
-@app.post("/account/telegram/bot")
-async def configure_telegram_bot(body: TelegramBotInput, identity: Identity = Depends(require_identity)) -> dict:
-    account = await account_for(identity)
-    binding = await verified_binding(account["account_id"])
-    await provision_telegram(binding, body.bot_token)
-    try:
-        connection = await ez_call(binding, "POST", "/v1/telegram/link")
-    except HTTPException as error:
-        if error.status_code in {400, 403}:
-            raise HTTPException(503, "Telegram started but is not ready to issue a connection link yet.") from error
         raise
     return public_telegram_connection(connection, needs_link=True)
 
@@ -545,7 +501,8 @@ async def enqueue_chat(body: ChatInput, identity: Identity = Depends(require_ide
     request_id = str(body.request_id)
     references = {key: value for key, value in {"scopeId": body.scope_id, "referenceDate": body.reference_date,
                                                  "exerciseId": body.exercise_id, "workoutId": body.workout_id,
-                                                 "exerciseInstanceId": body.exercise_instance_id}.items() if value is not None}
+                                                 "exerciseInstanceId": body.exercise_instance_id,
+                                                 "expectedRevision": body.expected_revision}.items() if value is not None}
     admission: dict[str, Any] = {"requestId": request_id, "scope": "owner-chat", "text": body.message, "followOwner": True}
     context = dict(references)
     plugin_context = agent_run_context(account, request_id)
@@ -713,7 +670,7 @@ async def agent_message_v1(body: AgentMessageInput, identity: Identity = Depends
     return await enqueue_chat(ChatInput(
         user_id=identity.subject, request_id=body.request_id, message=body.message, scope_id=body.conversation_id,
         reference_date=workout["date"], workout_id=workout["workout_id"], exercise_id=body.scope.exercise_instance_id,
-        exercise_instance_id=body.scope.exercise_instance_id,
+        exercise_instance_id=body.scope.exercise_instance_id, expected_revision=workout["revision"],
     ), identity)
 
 

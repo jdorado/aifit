@@ -83,28 +83,6 @@ def test_disallowed_selection_is_rejected_before_ez(tmp_path, monkeypatch):
     model_policy.require_allowed(OTHER, DEEPSEEK["cli"], DEEPSEEK["model"], DEEPSEEK["effort"])
 
 
-def test_fallback_follows_policy_order(tmp_path, monkeypatch):
-    configure(tmp_path, monkeypatch)
-    assert model_policy.fallback_choice(OTHER) == model_policy.ModelChoice(**DEEPSEEK)
-    assert model_policy.fallback_choice(JUAN) == model_policy.ModelChoice(**DEEPSEEK)
-    path = tmp_path / "model-policy.json"
-    path.write_text(json.dumps({
-        "privileged_subjects": [JUAN],
-        "default": [DEEPSEEK],
-        "privileged": [LUNA, DEEPSEEK],
-    }))
-    model_policy.configured_model_policy.cache_clear()
-    assert model_policy.fallback_choice(JUAN) == model_policy.ModelChoice(**LUNA)
-    assert model_policy.fallback_choice(OTHER) == model_policy.ModelChoice(**DEEPSEEK)
-
-
-def test_fallback_accepts_preset_only_engine_choice(tmp_path, monkeypatch):
-    configure(tmp_path, monkeypatch)
-    value = control()
-    value["models"] = []
-    assert model_policy.fallback_available(value, model_policy.fallback_choice(OTHER))
-
-
 def test_malformed_config_fails_closed(tmp_path, monkeypatch):
     path = tmp_path / "model-policy.json"
     path.write_text("{}")

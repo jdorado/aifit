@@ -2,16 +2,12 @@ import type { FC } from 'react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useI18n } from '../i18n'
 import CoachChat from '../components/workout/CoachChat'
-import ExerciseHistorySheet from '../components/workout/ExerciseHistorySheet'
 import ExerciseSetList from '../components/workout/ExerciseSetList'
-import NotesBlock from '../components/workout/NotesBlock'
-import { VideoCarousel, VideoListView } from '../components/workout/VideoGallery'
 import WeekStrip from '../components/workout/WeekStrip'
 import WorkoutMiniBar from '../components/workout/WorkoutMiniBar'
 import WorkoutPlanList from '../components/workout/WorkoutPlanList'
 import type { WorkoutExercise, WorkoutExtra } from '../data/testWorkout'
-import type { ExerciseHistoryResponse } from '../types/exerciseHistory'
-import type { ActiveEntryType, ChatMessage, HoldTimerState, QuickActionOption, RestState, SetState, Video } from '../types/app'
+import type { ActiveEntryType, ChatMessage, HoldTimerState, SetState } from '../types/app'
 import {
   formatCircuitTarget,
   parseDurationToSeconds,
@@ -33,12 +29,6 @@ type WeekDaySummary = {
 
 type SectionTone = 'default' | 'warmup' | 'main' | 'conditioning' | 'circuit' | 'rehab' | 'cooldown' | 'recovery' | 'night'
 
-type VideoEntry = {
-  name: string
-  searchName: string
-  kind: 'exercise' | 'extra'
-}
-
 const SECTION_TONE_COLOR_SLOTS: Partial<Record<SectionTone, number>> = {
   warmup: 0,
   main: 1,
@@ -53,7 +43,6 @@ const SECTION_TONE_COLOR_SLOTS: Partial<Record<SectionTone, number>> = {
 type WorkoutViewProps = {
   active: boolean
   canLogDay: boolean
-  canEditPlan: boolean
   coachChatEnabled: boolean
   weekDays: WeekDaySummary[]
   selectedDayLabel: string
@@ -63,32 +52,20 @@ type WorkoutViewProps = {
   extras: WorkoutExtra[]
   setLogs: Record<string, SetState[]>
   planNotes: string
-  dayNotes: string
   activeEntryId: string | null
   activeEntryType: ActiveEntryType
   editingSet: { exerciseId: string, index: number } | null
-  restState: RestState
   holdTimer: HoldTimerState
-  videos: Video[]
-  videoLoading: boolean
-  videoExactMatch: boolean | null
-  videoOffline: boolean
-  videoOwnerKey: string | null
   coachMessages: ChatMessage[]
   showModelLabels?: boolean
-  exerciseHistory: ExerciseHistoryResponse | null
-  exerciseHistoryLoading: boolean
-  exerciseHistoryError: string | null
   onSelectEntry: (id: string, type: ActiveEntryType) => void
   onSelectDay: (index: number, date: string) => void
   onBack: () => void
   onLogSet: (exerciseId?: string) => void
-  onAddSet: () => void
-  onDeleteSet: (exerciseId: string, index: number) => void
   onStartEditingSet: (exerciseId: string, index: number) => void
   onSaveEditingSet: () => void
   onCancelEditingSet: () => void
-  onUpdateSetField: (exerciseId: string, index: number, field: 'weight' | 'metric', value: string, propagate: boolean) => void
+  onUpdateSetField: (exerciseId: string, index: number, field: 'weight' | 'metric', value: string) => void
   onStartHoldTimer: (
     exerciseId: string,
     setIndex: number,
@@ -97,26 +74,7 @@ type WorkoutViewProps = {
     options?: { sideIndex?: number, sideCount?: number },
   ) => void
   onLogHoldTimerSet: () => void
-  onOpenVideo: (videoId: string) => void
-  onRequestVideos: (request: {
-    query: string
-    exerciseName?: string
-    entryName?: string
-    entryType?: 'exercise' | 'extra'
-    limit?: number
-    force?: boolean
-  }) => void
   onCoachSend: (exerciseId: string, message: string) => void
-  onSuggestWeight: (exercise: WorkoutExercise) => void
-  onQuickDecision: (action: 'last_time' | 'swap_similar' | 'progress_or_deload' | 'rest_time' | 'volume_adjustment' | 'next_exercise', exercise: WorkoutExercise) => void
-  onApplyQuickAction: (messageId: string, option: QuickActionOption, exercise: WorkoutExercise) => void
-  onRequestExerciseHistory: (exercise: WorkoutExercise) => void
-  onRemoveExercise: (exerciseId: string) => void
-  onRemoveExtra: (extraId: string) => void
-  onRemoveCircuit: (circuitName: string) => void
-  onRemoveSection: (sectionLabel: string) => void
-  onUpdateDayNotes: (value: string) => void
-  onUpdateExerciseNotes: (exerciseId: string, value: string) => void
 }
 
 const getSectionToneFromText = (rawHaystack: string): SectionTone => {
@@ -135,7 +93,6 @@ const getSectionToneFromText = (rawHaystack: string): SectionTone => {
 const WorkoutView: FC<WorkoutViewProps> = ({
   active,
   canLogDay,
-  canEditPlan,
   coachChatEnabled,
   weekDays,
   selectedDayLabel,
@@ -145,76 +102,33 @@ const WorkoutView: FC<WorkoutViewProps> = ({
   extras,
   setLogs,
   planNotes,
-  dayNotes,
   activeEntryId,
   activeEntryType,
   editingSet,
   holdTimer,
-  videos,
-  videoLoading,
-  videoExactMatch,
-  videoOffline,
-  videoOwnerKey,
   coachMessages,
   showModelLabels = false,
-  exerciseHistory,
-  exerciseHistoryLoading,
-  exerciseHistoryError,
   onSelectEntry,
   onSelectDay,
   onBack,
   onLogSet,
-  onAddSet,
-  onDeleteSet,
   onStartEditingSet,
   onSaveEditingSet,
   onCancelEditingSet,
   onUpdateSetField,
   onStartHoldTimer,
   onLogHoldTimerSet,
-  onOpenVideo,
-  onRequestVideos,
   onCoachSend,
-  onSuggestWeight,
-  onQuickDecision,
-  onApplyQuickAction,
-  onRequestExerciseHistory,
-  onRemoveExercise,
-  onRemoveExtra,
-  onRemoveCircuit,
-  onRemoveSection,
-  onUpdateDayNotes,
-  onUpdateExerciseNotes,
 }) => {
   const { t } = useI18n()
-  const notePresets = useMemo(() => ([
-    t('workout.notePresetPain'),
-    t('workout.notePresetHard'),
-    t('workout.notePresetEasy'),
-    t('workout.notePresetForm'),
-  ].filter((preset) => preset && preset.trim() !== '')), [t])
-  const [videoListOpen, setVideoListOpen] = useState(false)
   const [coachChatOpen, setCoachChatOpen] = useState(false)
-  const [exerciseHistoryOpen, setExerciseHistoryOpen] = useState(false)
+  const [coachDraft, setCoachDraft] = useState('')
 
   useEffect(() => {
     if (!coachChatEnabled) {
       setCoachChatOpen(false)
     }
   }, [coachChatEnabled])
-  const [coachDraft, setCoachDraft] = useState('')
-  const [exerciseNotesOpen, setExerciseNotesOpen] = useState(false)
-
-  const appendNotePreset = useCallback((current: string, preset: string) => {
-    const trimmedPreset = preset.trim()
-    if (!trimmedPreset) return current
-    const trimmedCurrent = current.trim()
-    if (!trimmedCurrent) return trimmedPreset
-    if (trimmedCurrent.toLowerCase().includes(trimmedPreset.toLowerCase())) {
-      return trimmedCurrent
-    }
-    return `${trimmedCurrent} • ${trimmedPreset}`
-  }, [])
 
   const activeExercise = useMemo(() => (
     activeEntryType === 'exercise'
@@ -227,39 +141,6 @@ const WorkoutView: FC<WorkoutViewProps> = ({
       ? extras.find((extra) => extra.id === activeEntryId)
       : null
   ), [activeEntryType, activeEntryId, extras])
-
-  useEffect(() => {
-    setExerciseNotesOpen(false)
-    setExerciseHistoryOpen(false)
-  }, [activeEntryId])
-
-  const previewCount = 5
-  const activeVideoEntry = useMemo<VideoEntry | null>(() => {
-    if (activeExercise) {
-      return {
-        name: activeExercise.name,
-        searchName: activeExercise.standardName?.trim() || activeExercise.name,
-        kind: 'exercise',
-      }
-    }
-    if (activeExtra) {
-      return { name: activeExtra.name, searchName: activeExtra.name, kind: 'extra' }
-    }
-    return null
-  }, [activeExercise, activeExtra])
-  const activeVideoKey = useMemo(() => (
-    activeVideoEntry ? `${activeVideoEntry.kind}:${activeVideoEntry.name}` : null
-  ), [activeVideoEntry])
-  const isVideoStateActive = Boolean(activeVideoKey && videoOwnerKey === activeVideoKey)
-  const activeVideos = isVideoStateActive ? videos : []
-  const activeVideoExactMatch = isVideoStateActive ? videoExactMatch : null
-  const activeVideoLoading = isVideoStateActive ? videoLoading : Boolean(activeVideoEntry)
-  const previewVideos = activeVideos.slice(0, previewCount)
-
-  const videoSuggestions = useMemo(() => {
-    if (!activeExercise || activeVideoExactMatch !== false) return []
-    return exercises.filter((exercise) => exercise.id !== activeExercise.id).slice(0, 3)
-  }, [activeExercise, activeVideoExactMatch, exercises])
 
   const activeWeekDay = useMemo(() => (
     weekDays.find((day) => day.isSelected) ?? weekDays[0]
@@ -276,40 +157,6 @@ const WorkoutView: FC<WorkoutViewProps> = ({
     }
     return 7
   }, [activeExercise, activeExtra])
-
-  const buildVideoQuery = useCallback((name: string, _kind: 'exercise' | 'extra') => {
-    // Send the movement label only. The API strips plan fluff (optional/cooldown),
-    // expands technique phrases, and ranks demos — hard-quoted full plan names miss YouTube.
-    return name.trim()
-  }, [])
-
-  const requestEntryVideos = useCallback((entry: VideoEntry, limit: number, force = false) => {
-    const searchName = entry.searchName.trim() || entry.name
-    const query = buildVideoQuery(searchName, entry.kind)
-    onRequestVideos({
-      query,
-      exerciseName: entry.kind === 'exercise' ? searchName : undefined,
-      entryName: entry.name,
-      entryType: entry.kind,
-      limit,
-      force,
-    })
-  }, [buildVideoQuery, onRequestVideos])
-
-  const openVideoList = () => {
-    if (!activeVideoEntry) return
-    setVideoListOpen(true)
-    requestEntryVideos(activeVideoEntry, 20)
-  }
-
-  const closeVideoList = () => {
-    setVideoListOpen(false)
-  }
-
-  const retryVideos = useCallback((limit: number) => {
-    if (!activeVideoEntry) return
-    requestEntryVideos(activeVideoEntry, limit, true)
-  }, [activeVideoEntry, requestEntryVideos])
 
   const circuitGroups = useMemo(() => {
     const groups = new Map<string, {
@@ -448,50 +295,11 @@ const WorkoutView: FC<WorkoutViewProps> = ({
   }, [isAllDone, logTargetExercise, logTargetNextIndex, logTargetStateList.length, t])
 
   useEffect(() => {
-    if (!activeVideoEntry) return
-    setVideoListOpen(false)
-    requestEntryVideos(activeVideoEntry, previewCount)
-  }, [activeVideoEntry, previewCount, requestEntryVideos])
-
-  useEffect(() => {
     setCoachChatOpen(false)
     setCoachDraft('')
   }, [activeExercise?.id])
 
-  const renderVideoCarousel = () => (
-    <VideoCarousel
-      activeVideoEntry={activeVideoEntry}
-      activeExercise={activeExercise ?? null}
-      activeVideoExactMatch={activeVideoExactMatch}
-      activeVideoLoading={activeVideoLoading}
-      previewVideos={previewVideos}
-      videoOffline={videoOffline}
-      videoSuggestions={videoSuggestions}
-      previewCount={previewCount}
-      onOpenVideo={onOpenVideo}
-      onOpenVideoList={openVideoList}
-      onRetryVideos={retryVideos}
-      onSelectExercise={(exerciseId) => onSelectEntry(exerciseId, 'exercise')}
-    />
-  )
-
-  const renderVideoListView = () => (
-    <VideoListView
-      activeVideoEntry={activeVideoEntry}
-      activeExercise={activeExercise ?? null}
-      activeVideoLoading={activeVideoLoading}
-      activeVideos={activeVideos}
-      onClose={closeVideoList}
-      onOpenVideo={onOpenVideo}
-      onRetryVideos={retryVideos}
-    />
-  )
-
   const renderDetailContent = () => {
-    if (videoListOpen) {
-      return renderVideoListView()
-    }
-
     if (activeExtra) {
       return (
         <>
@@ -499,7 +307,6 @@ const WorkoutView: FC<WorkoutViewProps> = ({
             <p className="card-label">{activeExtra.section}</p>
             <p className="card-sub">{activeExtra.summary}</p>
           </div>
-          {renderVideoCarousel()}
           <div className="detail-cues">
             <div className="detail-cues-large">
               <p className="cues-label">{t('workout.notesLabel')}</p>
@@ -523,12 +330,7 @@ const WorkoutView: FC<WorkoutViewProps> = ({
     const isSkipped = activeExercise.sets.length === 0
     const isCircuitMove = Boolean(activeCircuit)
     const setLabel = isCircuitMove ? t('workout.roundLabel') : t('workout.setLabel')
-    const exerciseNotes = activeExercise.notes ?? ''
     const exerciseCues = Array.isArray(activeExercise.cues) ? activeExercise.cues : []
-
-    const handleExerciseNotePreset = (preset: string) => {
-      onUpdateExerciseNotes(activeExercise.id, appendNotePreset(exerciseNotes, preset))
-    }
 
     return (
       <>
@@ -536,7 +338,6 @@ const WorkoutView: FC<WorkoutViewProps> = ({
           <p className="card-label">{isSkipped ? `${activeExercise.section} • ${t('workout.skipped')}` : t('workout.targetLabel')}</p>
           {isSkipped ? null : <p className="card-sub">{activeExercise.summary}</p>}
         </div>
-        {renderVideoCarousel()}
         {exerciseCues.length > 0 ? (
           <div className="detail-cues">
             <div className="detail-cues-large">
@@ -573,28 +374,12 @@ const WorkoutView: FC<WorkoutViewProps> = ({
           holdTargetSec={holdTargetSec}
           holdPrepSec={holdPrepSec}
           canLogDay={canLogDay}
-          canEditPlan={canEditPlan}
-          onAddSet={onAddSet}
-          onDeleteSet={onDeleteSet}
           onStartEditingSet={onStartEditingSet}
           onSaveEditingSet={onSaveEditingSet}
           onCancelEditingSet={onCancelEditingSet}
           onUpdateSetField={onUpdateSetField}
           onStartHoldTimer={onStartHoldTimer}
           onLogHoldTimerSet={onLogHoldTimerSet}
-        />
-        <NotesBlock
-          open={exerciseNotesOpen}
-          canEdit={canEditPlan}
-          title={t('workout.feedbackLabel')}
-          subtitle={t('workout.feedbackHint')}
-          value={exerciseNotes}
-          placeholder={t('workout.feedbackPlaceholder')}
-          ariaLabel={t('workout.feedbackLabel')}
-          presets={notePresets}
-          onToggle={() => setExerciseNotesOpen((open) => !open)}
-          onChange={(value) => onUpdateExerciseNotes(activeExercise.id, value)}
-          onPresetClick={handleExerciseNotePreset}
         />
         {activeCircuit ? (
           <div className="circuit-card">
@@ -662,7 +447,6 @@ const WorkoutView: FC<WorkoutViewProps> = ({
 
       <WorkoutPlanList
         activeEntryId={activeEntryId}
-        canEditPlan={canEditPlan}
         hasWeekWorkouts={hasWeekWorkouts}
         loading={loading}
         selectedDayLabel={selectedDayLabel}
@@ -670,15 +454,9 @@ const WorkoutView: FC<WorkoutViewProps> = ({
         extras={extras}
         setLogs={setLogs}
         planNotes={planNotes}
-        dayNotes={dayNotes}
         circuitGroups={circuitGroups}
         getNextCircuitExercise={getNextCircuitExercise}
         onSelectEntry={onSelectEntry}
-        onRemoveExercise={onRemoveExercise}
-        onRemoveExtra={onRemoveExtra}
-        onRemoveCircuit={onRemoveCircuit}
-        onRemoveSection={onRemoveSection}
-        onUpdateDayNotes={onUpdateDayNotes}
       />
 
       <section className={`workout-detail ${activeEntryId ? 'active' : ''}`} data-section-color={detailSectionColorSlot}>
@@ -693,30 +471,11 @@ const WorkoutView: FC<WorkoutViewProps> = ({
             <div className="detail-header-actions">
               <button
                 type="button"
-                className={`detail-history-btn${exerciseHistoryOpen ? ' active' : ''}`}
-                aria-label={t('workout.historyTitle')}
-                aria-expanded={exerciseHistoryOpen}
-                onClick={() => {
-                  setCoachChatOpen(false)
-                  setExerciseHistoryOpen(true)
-                  onRequestExerciseHistory(activeExercise)
-                }}
-              >
-                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                  <path d="M3 12a9 9 0 1 0 3-6.7L3 8" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                  <path d="M3 3v5h5M12 7v5l3 2" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
-              </button>
-              <button
-                type="button"
                 className={`detail-coach-btn${coachChatOpen ? ' active' : ''}`}
                 aria-label={t('workout.askCoach')}
                 aria-expanded={coachChatOpen}
                 disabled={!coachChatEnabled}
-                onClick={() => {
-                  setExerciseHistoryOpen(false)
-                  setCoachChatOpen((current) => !current)
-                }}
+                onClick={() => setCoachChatOpen((current) => !current)}
               >
                 <svg className="detail-coach-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
                   <path
@@ -758,61 +517,21 @@ const WorkoutView: FC<WorkoutViewProps> = ({
         </div>
 
         {activeExercise ? (
-          <>
-            <CoachChat
-              open={coachChatOpen}
-              disabled={!coachChatEnabled}
-              messages={coachMessages}
-              showModelLabels={showModelLabels}
-              draft={coachDraft}
-              onToggle={() => setCoachChatOpen((current) => !current)}
-              onDraftChange={setCoachDraft}
-              quickPrompts={[
-                { label: t('workout.promptLastTime'), message: t('workout.promptLastTime') },
-                { label: t('workout.promptSuggestWeight'), message: t('workout.promptSuggestWeight') },
-                { label: t('workout.promptProgressOrDeload'), message: t('workout.promptProgressOrDeload') },
-                { label: t('workout.promptSwapSimilar'), message: t('workout.promptSwapSimilar') },
-                { label: t('workout.promptRestTime'), message: t('workout.promptRestTime') },
-                { label: t('workout.promptAdjustVolume'), message: t('workout.promptAdjustVolume') },
-                { label: t('workout.promptNextExercise'), message: t('workout.promptNextExercise') },
-              ]}
-              onQuickPrompt={(message) => {
-                if (message === t('workout.promptLastTime')) {
-                  onQuickDecision('last_time', activeExercise)
-                  return
-                }
-                if (message === t('workout.promptSuggestWeight')) {
-                  onSuggestWeight(activeExercise)
-                  return
-                }
-                const action = message === t('workout.promptProgressOrDeload') ? 'progress_or_deload'
-                  : message === t('workout.promptSwapSimilar') ? 'swap_similar'
-                  : message === t('workout.promptRestTime') ? 'rest_time'
-                  : message === t('workout.promptAdjustVolume') ? 'volume_adjustment'
-                  : message === t('workout.promptNextExercise') ? 'next_exercise'
-                  : null
-                if (action) {
-                  onQuickDecision(action, activeExercise)
-                  return
-                }
-                onCoachSend(activeExercise.id, message)
-              }}
-              onQuickAction={(messageId, option) => onApplyQuickAction(messageId, option, activeExercise)}
-              onSend={() => {
-                const text = coachDraft.trim()
-                if (!text || !activeExercise) return
-                onCoachSend(activeExercise.id, text)
-                setCoachDraft('')
-              }}
-            />
-            <ExerciseHistorySheet
-              open={exerciseHistoryOpen}
-              loading={exerciseHistoryLoading}
-              error={exerciseHistoryError}
-              history={exerciseHistory}
-              onClose={() => setExerciseHistoryOpen(false)}
-            />
-          </>
+          <CoachChat
+            open={coachChatOpen}
+            disabled={!coachChatEnabled}
+            messages={coachMessages}
+            showModelLabels={showModelLabels}
+            draft={coachDraft}
+            onToggle={() => setCoachChatOpen((current) => !current)}
+            onDraftChange={setCoachDraft}
+            onSend={() => {
+              const text = coachDraft.trim()
+              if (!text || !activeExercise) return
+              onCoachSend(activeExercise.id, text)
+              setCoachDraft('')
+            }}
+          />
         ) : null}
       </section>
     </section>
