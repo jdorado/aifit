@@ -1,4 +1,3 @@
-import asyncio
 import hashlib
 import logging
 import os
@@ -22,7 +21,7 @@ from .auth import (
     require_identity,
 )
 from .ez import call as ez_call, provision_telegram, telegram_provisioning_configured, verified_binding
-from .model_policy import fallback_available, fallback_choice, filter_control, require_allowed, routing_provider
+from .model_policy import filter_control, require_allowed, routing_provider
 from .workouts import (
     BlueprintInput,
     ExerciseDefinitionInput,
@@ -59,7 +58,6 @@ app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True
 async def workout_domain_error(_request: Request, error: WorkoutDomainError) -> JSONResponse:
     return JSONResponse(status_code=error.status_code, content={"detail": {"code": error.code, "message": error.message}})
 
-TERMINAL = {"completed", "failed", "cancelled"}
 MAX_INBOX_PAGES = 10
 MAX_INBOX_RUNS = 500
 MAX_MESSAGES_PER_RUN = 200
@@ -203,167 +201,6 @@ class AgentWorkoutSwapInput(BaseModel):
     request_id: str = Field(min_length=1, max_length=160, pattern=r"^[A-Za-z0-9_.:-]+$")
 
 
-def serialize_day_item(item: dict[str, Any]) -> dict[str, Any]:
-    """Full-fidelity canonical item: every set with target+actual, cues, snapshot.
-
-    The agent explains the whole day and answers exercise questions from this
-    record — the same closed-world data the plugin validates against. Sending
-    only IDs or the first set forces the agent to guess or deflect.
-    """
-    snapshot = item.get("exercise_snapshot", {}) or {}
-    sets = item.get("sets", []) or []
-    return {
-        "exercise_instance_id": item.get("exercise_instance_id"),
-        "slot_id": item.get("slot_id"),
-        "candidate_id": item.get("candidate_id"),
-        "order": item.get("order"),
-        "exercise": {
-            "exercise_id": snapshot.get("exercise_id"),
-            "exercise_revision": snapshot.get("exercise_revision"),
-            "name": snapshot.get("name"),
-            "movement_pattern": snapshot.get("movement_pattern"),
-            "primary_muscles": snapshot.get("primary_muscles"),
-            "secondary_muscles": snapshot.get("secondary_muscles"),
-            "equipment_kind": snapshot.get("equipment_kind"),
-            "laterality": snapshot.get("laterality"),
-            "load_basis": snapshot.get("load_basis"),
-            "equipment_profile_id": snapshot.get("equipment_profile_id"),
-        },
-        "sets": [{
-            "set_id": set_row.get("set_id"),
-            "kind": set_row.get("kind"),
-            "round": set_row.get("round"),
-            "target": set_row.get("target"),
-            "actual": set_row.get("actual"),
-        } for set_row in sets],
-        "cues_md": item.get("cues_md") or "",
-        "sets_logged": sum(1 for set_row in sets if set_row.get("actual") is not None),
-        "sets_total": len(sets),
-    }
-
-
-def serialize_day_segments(workout: dict[str, Any]) -> list[dict[str, Any]]:
-    return [{
-        "segment_id": segment.get("segment_id"),
-        "order": segment.get("order"),
-        "kind": segment.get("kind"),
-        "rounds": segment.get("rounds"),
-        "rest_after_round_seconds": segment.get("rest_after_round_seconds"),
-        "items": [serialize_day_item(item) for item in segment.get("items", [])],
-    } for segment in (workout or {}).get("segments", [])]
-
-
-def serialize_day_workout(workout: dict[str, Any] | None) -> dict[str, Any]:
-    lineage = (workout or {}).get("lineage", {}) or {}
-    return {
-        "workout_id": (workout or {}).get("workout_id"),
-        "workout_revision": (workout or {}).get("revision"),
-        "workout_date": (workout or {}).get("date"),
-        "workout_status": (workout or {}).get("status"),
-        "workout_title": (workout or {}).get("title"),
-        "workout_source": lineage.get("source"),
-        "workout_blueprint_id": lineage.get("blueprint_id"),
-        "workout_blueprint_revision": lineage.get("blueprint_revision"),
-        "segments": serialize_day_segments(workout or {}),
-    }
-
-
-async def mini_chat_workout_context(account: dict[str, Any], body: ChatInput) -> dict[str, Any] | None:
-    """Put the selected exercise plus its whole day in native agent context.
-
-    The plugin remains write-only and the native agent remains the context owner.
-    The backend only resolves the selected item, the complete day record, and
-    recent completed history for that exercise — the same closed-world data the
-    plugin validates against — so mini-chat can explain the exercise in the
-    context of the whole day without follow-up pulls.
-    """
-    if not body.exercise_id:
-        return None
-    workout: dict[str, Any] | None = None
-    if body.workout_id:
-        workout = await db.workouts.find_one({
-            "account_id": account["account_id"],
-            "workout_id": body.workout_id,
-            "deleted_at": {"$exists": False},
-        })
-    elif body.reference_date:
-        workout = await db.workouts.find_one({
-            "account_id": account["account_id"],
-            "date": body.reference_date,
-            "deleted_at": {"$exists": False},
-        })
-    target_item = next((
-        item
-        for segment in (workout or {}).get("segments", [])
-        for item in segment.get("items", [])
-        if item.get("exercise_instance_id") == body.exercise_id
-    ), None)
-    if not workout or not target_item:
-        return None
-
-    service = workouts()
-    active: dict[str, Any] | None = None
-    try:
-        active = await service.active_blueprint(account["account_id"])
-    except WorkoutDomainError:
-        pass
-    try:
-        recent_history = await service.history(
-            account["account_id"],
-            (target_item.get("exercise_snapshot", {}) or {}).get("exercise_id", ""),
-            before=workout.get("date"),
-            limit=5,
-        )
-    except (WorkoutDomainError, ValueError, KeyError, TypeError):
-        recent_history = []
-    blueprint = active["blueprint"] if active else None
-    day = serialize_day_workout(workout)
-    day.update({
-        "selected_exercise_instance_id": target_item.get("exercise_instance_id"),
-        "selected_exercise": serialize_day_item(target_item),
-        "selected_slot_id": target_item.get("slot_id"),
-        "selected_exercise_recent_history": recent_history,
-        "active_blueprint_id": blueprint.get("blueprint_id") if blueprint else None,
-        "active_blueprint_revision": blueprint.get("revision") if blueprint else None,
-    })
-    return {"aifit": day}
-
-
-async def date_scoped_context(account: dict[str, Any], body: ChatInput) -> dict[str, Any] | None:
-    """Put the complete resolved day in native agent context for date-scoped turns.
-
-    Exercise-scoped mini-chat already resolves its item; plain chat turns
-    carry only a reference date, so without the full day record — every
-    segment, item, set target/actual, cue, and rest — the agent cannot explain
-    the day and can only guess or deflect. This resolves the date server-side,
-    the same closed-world data the plugin validates against, while the plugin
-    stays write-only and the native agent stays the decision owner.
-    """
-    if not body.reference_date or body.exercise_id:
-        return None
-    service = workouts()
-    active: dict[str, Any] | None = None
-    try:
-        active = await service.active_blueprint(account["account_id"], body.reference_date)
-    except WorkoutDomainError:
-        pass
-    workout = await db.workouts.find_one({
-        "account_id": account["account_id"], "date": body.reference_date,
-        "deleted_at": {"$exists": False},
-    })
-    if not active and not workout:
-        return None
-    blueprint = active["blueprint"] if active else None
-    day = serialize_day_workout(workout)
-    day.update({
-        "reference_date": body.reference_date,
-        "date_covered_by_blueprint": blueprint is not None,
-        "active_blueprint_id": blueprint.get("blueprint_id") if blueprint else None,
-        "active_blueprint_revision": blueprint.get("revision") if blueprint else None,
-    })
-    return {"aifit": day}
-
-
 async def account_for(identity: Identity) -> dict:
     account_id = stable_id("acc", identity.subject)
     tenant_id = stable_id("ten", identity.subject)
@@ -499,25 +336,32 @@ def public_model_control(value: Any) -> dict:
 
 
 async def lock_control(binding: dict, identity: Identity, control: dict | None = None) -> dict:
+    """Thin transport: filter the Ez control catalog, never auto-select."""
     current = control or public_model_control(await ez_call(binding, "GET", "/v1/control"))
-    filtered = filter_control(current, identity.subject)
-    fallback = fallback_choice(identity.subject)
-    if filtered["selected_id"] or fallback is None or not fallback_available(filtered, fallback):
-        return filtered
-    require_allowed(identity.subject, fallback.cli, fallback.model, fallback.effort)
-    selection: dict[str, Any] = {
-        "action": "model", "expectedSession": current["active_session_id"],
-        "cli": fallback.cli, "model": fallback.model, "effort": fallback.effort,
-    }
-    provider = routing_provider(fallback.cli, fallback.model)
-    if provider:
-        selection["provider"] = provider
-    return filter_control(public_model_control(await ez_call(binding, "POST", "/v1/control", selection)), identity.subject)
+    return filter_control(current, identity.subject)
+
+
+def public_turn_from_snapshot(run_id: str, request_id: str, snapshot: dict) -> dict:
+    """Map one Ez run snapshot to the public turn shape without storing."""
+    status = snapshot.get("status")
+    if not isinstance(status, str):
+        raise HTTPException(502, "Ez returned an invalid run status.")
+    messages = validated_messages(snapshot.get("messages", []))
+    result: dict[str, Any] = {"job_id": run_id, "request_id": request_id,
+                              "status": "complete" if status == "completed" else status, "messages": messages}
+    if messages:
+        result["reply"] = messages[-1]["text"]
+    if snapshot.get("error"):
+        result["error"] = snapshot["error"]
+    preset = validated_preset(snapshot.get("preset"))
+    if preset:
+        result["preset"] = preset
+    return result
 
 
 def public_turn(turn: dict) -> dict:
     messages = validated_messages(turn.get("messages", []))
-    result: dict[str, Any] = {"job_id": turn["request_id"], "request_id": turn["request_id"],
+    result: dict[str, Any] = {"job_id": turn.get("job_id", turn["request_id"]), "request_id": turn["request_id"],
                               "status": "complete" if turn["status"] == "completed" else turn["status"], "messages": messages}
     if messages:
         result["reply"] = messages[-1]["text"]
@@ -529,60 +373,11 @@ def public_turn(turn: dict) -> dict:
     return result
 
 
-async def reconcile_turn(account: dict, turn: dict, snapshot: dict | None = None) -> dict:
-    if not turn.get("run_id") or (turn["status"] in TERMINAL and turn.get("preset")):
-        return turn
-    binding = await verified_binding(account["account_id"])
-    if turn.get("binding_id") != binding["bindingId"]:
-        raise HTTPException(409, "This message belongs to an earlier Ez binding.")
-    current = snapshot or await ez_call(binding, "GET", f"/v1/runs/{turn['run_id']}")
-    status = current.get("status")
-    if not isinstance(status, str):
-        raise HTTPException(502, "Ez returned an invalid run status.")
-    update: dict[str, Any] = {"status": status, "messages": validated_messages(current.get("messages")), "updated_at": now()}
-    preset = validated_preset(current.get("preset"))
-    if preset:
-        update["preset"] = preset
-    if status == "failed":
-        update["error"] = current.get("error", "Agent run failed.")
-    update_guard: dict[str, Any] = {"_id": turn["_id"]}
-    if turn["status"] in TERMINAL:
-        update_guard["preset"] = {"$exists": False}
-    else:
-        update_guard["status"] = {"$nin": list(TERMINAL)}
-    await db.chat_turns.update_one(update_guard, {"$set": update})
-    return await db.chat_turns.find_one({"_id": turn["_id"]})
-
-
 @app.on_event("startup")
 async def indexes() -> None:
     await db.accounts.create_index([("privy_subject", ASCENDING)], unique=True)
     await db.accounts.create_index([("account_id", ASCENDING)], unique=True)
-    await db.chat_turns.create_index(
-        [("tenant_id", ASCENDING), ("request_id", ASCENDING)],
-        unique=True,
-        partialFilterExpression={"tenant_id": {"$type": "string"}, "request_id": {"$type": "string"}},
-    )
-    await db.chat_turns.create_index([("run_id", ASCENDING)], sparse=True)
     await workouts().ensure_indexes()
-    try:
-        from . import telegram_admit
-    except ImportError:  # pragma: no cover - packaged without the bridge
-        telegram_admit = None  # type: ignore[assignment]
-    if telegram_admit is not None and telegram_admit.admit_enabled():
-        stop_event: asyncio.Event = asyncio.Event()
-        app.state.telegram_admit_stop = stop_event
-        app.state.telegram_admit_task = asyncio.create_task(telegram_admit.run_forever(stop_event))
-
-
-@app.on_event("shutdown")
-async def stop_telegram_admit() -> None:
-    stop_event = getattr(app.state, "telegram_admit_stop", None)
-    task = getattr(app.state, "telegram_admit_task", None)
-    if stop_event is not None:
-        stop_event.set()
-    if task is not None:
-        await task
 
 
 @app.get("/health")
@@ -669,12 +464,7 @@ async def select_chat_model(body: ModelSelectionInput, identity: Identity = Depe
         selection["model"] = body.model
     if body.effort is not None:
         selection["effort"] = body.effort
-    fresh = public_model_control(await ez_call(binding, "POST", "/v1/control", {
-        "action": "new", "expectedSession": body.expected_session,
-    }))
-    selection["expectedSession"] = fresh["active_session_id"]
     control = public_model_control(await ez_call(binding, "POST", "/v1/control", selection))
-    await db.chat_turns.delete_many({"tenant_id": account["tenant_id"]})
     return await lock_control(binding, identity, control)
 
 
@@ -685,7 +475,6 @@ async def clear_chat(body: NewChatInput, identity: Identity = Depends(require_id
     control = public_model_control(await ez_call(binding, "POST", "/v1/control", {
         "action": "new", "expectedSession": body.expected_session,
     }))
-    await db.chat_turns.delete_many({"tenant_id": account["tenant_id"]})
     return await lock_control(binding, identity, control)
 
 
@@ -712,132 +501,96 @@ async def inbox_snapshots(binding: dict) -> list[dict]:
 
 @app.get("/chat/history")
 async def chat_history(user_id: str, limit: int = 40, identity: Identity = Depends(require_identity)) -> list[dict]:
+    """Thin transport over the Ez inbox. No backend conversation store.
+
+    The engine owns history; the backend only projects Ez run snapshots.
+    User text lives in the native session, so only Ez-returned ai messages
+    are projected here. Historic workouts remain canonical backend reads.
+    """
     account = await owned_account(identity, user_id)
     try:
         binding = await verified_binding(account["account_id"])
         snapshots = await inbox_snapshots(binding)
-        run_ids = [snapshot.get("originRunId", snapshot["id"]) for snapshot in snapshots]
-        turns = await db.chat_turns.find({"tenant_id": account["tenant_id"], "binding_id": binding["bindingId"],
-                                          "run_id": {"$in": run_ids}}).to_list()
-        by_run = {turn["run_id"]: turn for turn in turns}
-        for snapshot in snapshots:
-            turn = by_run.get(snapshot.get("originRunId", snapshot["id"]))
-            if turn and (turn["status"] not in TERMINAL or not turn.get("preset")):
-                await reconcile_turn(account, turn, snapshot)
     except HTTPException:
-        pass
-    rows = await db.chat_turns.find({"tenant_id": account["tenant_id"]}).sort("created_at", -1).limit(min(max(limit, 1), 100)).to_list()
-    rows.reverse()
+        return []
+    bounded = snapshots[-min(max(limit, 1), 100):]
     history: list[dict] = []
-    for row in rows:
-        history.append({"id": row["request_id"], "role": "user", "content": row["text"], "timestamp": row["created_at"].isoformat()})
-        preset = validated_preset(row.get("preset"))
-        history.extend({"id": item["id"], "role": "ai", "content": item["text"], "timestamp": row["updated_at"].isoformat(),
-                        **({"agent_cli": preset["cli"], "agent_model": preset.get("model"),
-                            "agent_reasoning_effort": preset.get("effort"), "agent_label": preset["name"]} if preset else {})}
-                       for item in validated_messages(row.get("messages", [])))
+    for snapshot in bounded:
+        run_id = snapshot.get("originRunId", snapshot["id"])
+        if not isinstance(run_id, str) or not run_id:
+            continue
+        try:
+            current = await ez_call(binding, "GET", f"/v1/runs/{run_id}")
+        except HTTPException:
+            continue
+        preset = validated_preset(current.get("preset"))
+        for item in validated_messages(current.get("messages")):
+            history.append({"id": item["id"], "role": "ai", "content": item["text"],
+                            "timestamp": current.get("updated_at", ""),
+                            **({"agent_cli": preset["cli"], "agent_model": preset.get("model"),
+                                "agent_reasoning_effort": preset.get("effort"),
+                                "agent_label": preset["name"]} if preset else {})})
     return history
 
 
 @app.post("/chat/async", status_code=202)
 async def enqueue_chat(body: ChatInput, identity: Identity = Depends(require_identity)) -> dict:
+    """Thin admission: untouched user text + slim scope references only.
+
+    No domain resolution, no history lookup, no text mutation, no turn store.
+    Idempotency is owned by Ez via requestId (409 on conflicting reuse).
+    """
     account = await owned_account(identity, body.user_id)
     binding = await verified_binding(account["account_id"])
     request_id = str(body.request_id)
-    key = f"{account['tenant_id']}:{request_id}"
     references = {key: value for key, value in {"scopeId": body.scope_id, "referenceDate": body.reference_date,
                                                  "exerciseId": body.exercise_id, "workoutId": body.workout_id,
                                                  "exerciseInstanceId": body.exercise_instance_id}.items() if value is not None}
-    timestamp = now()
-    turn = await db.chat_turns.find_one_and_update({"_id": key}, {"$setOnInsert": {
-        "tenant_id": account["tenant_id"], "account_id": account["account_id"], "request_id": request_id,
-        "text": body.message, "references": references, "binding_id": binding["bindingId"], "status": "submitting",
-        "messages": [], "created_at": timestamp, "updated_at": timestamp,
-    }}, upsert=True, return_document=ReturnDocument.AFTER)
-    if turn["text"] != body.message or turn.get("references", {}) != references or turn.get("binding_id") != binding["bindingId"]:
-        raise HTTPException(409, "This request already contains different content or binding.")
-    if turn["status"] not in TERMINAL:
-        if not turn.get("run_id"):
-            if fallback_choice(identity.subject) is not None:
-                locked = await lock_control(binding, identity)
-                if not locked["selected_id"]:
-                    raise HTTPException(403, "This model is not enabled for this AIFit account.")
-            admission: dict[str, Any] = {"requestId": request_id, "scope": "owner-chat", "text": turn["text"], "followOwner": True}
-            context = dict(references)
-            plugin_context = agent_run_context(account, request_id)
-            if plugin_context:
-                context.update(plugin_context)
-            workout_context = await mini_chat_workout_context(account, body)
-            if workout_context:
-                context.update(workout_context)
-            day_context = await date_scoped_context(account, body)
-            if day_context:
-                for context_key, context_value in day_context.items():
-                    if isinstance(context_value, dict) and isinstance(context.get(context_key), dict):
-                        context[context_key] = {**context[context_key], **context_value}
-                    else:
-                        context[context_key] = context_value
-            # The engine prompt carries the user text only: admission context
-            # is retrievable but never injected, and host transport skips the
-            # retrieval hint. Scope the text itself with the selected day (and
-            # exercise when mini-chat resolved one), so date-scoped requests
-            # are self-contained. Stored turn text is untouched.
-            scope_lines = []
-            if body.reference_date:
-                scope_lines.append(f"[Selected day: {body.reference_date}]")
-            selected = ((workout_context or {}).get("aifit") or {}).get("selected_exercise") or {}
-            selected_name = (selected.get("exercise") or {}).get("name")
-            if body.exercise_id and selected_name:
-                scope_lines.append(f"[Selected exercise: {selected_name}]")
-            if scope_lines:
-                admission["text"] = turn["text"] + "\n\n" + "\n".join(scope_lines)
-            if context:
-                admission["context"] = context
-            run = await ez_call(binding, "POST", "/v1/runs", admission)
-            if not isinstance(run.get("id"), str):
-                raise HTTPException(502, "Ez returned an invalid run receipt.")
-            await db.chat_turns.update_one({"_id": key}, {"$set": {"run_id": run["id"], "updated_at": now()}})
-            turn = await db.chat_turns.find_one({"_id": key})
-        turn = await reconcile_turn(account, turn)
-    return public_turn(turn)
+    admission: dict[str, Any] = {"requestId": request_id, "scope": "owner-chat", "text": body.message, "followOwner": True}
+    context = dict(references)
+    plugin_context = agent_run_context(account, request_id)
+    if plugin_context:
+        context.update(plugin_context)
+    if context:
+        admission["context"] = context
+    run = await ez_call(binding, "POST", "/v1/runs", admission)
+    if not isinstance(run.get("id"), str):
+        raise HTTPException(502, "Ez returned an invalid run receipt.")
+    current = await ez_call(binding, "GET", f"/v1/runs/{run['id']}")
+    return public_turn_from_snapshot(run["id"], request_id, current)
 
 
 @app.get("/chat/jobs/{job_id}")
-async def chat_job(job_id: UUID, user_id: str, identity: Identity = Depends(require_identity)) -> dict:
+async def chat_job(job_id: str, user_id: str, identity: Identity = Depends(require_identity)) -> dict:
     account = await owned_account(identity, user_id)
-    turn = await db.chat_turns.find_one({"_id": f"{account['tenant_id']}:{job_id}"})
-    if not turn:
+    binding = await verified_binding(account["account_id"])
+    if not job_id or len(job_id) > 200:
         raise HTTPException(404, "Chat job not found.")
-    return public_turn(await reconcile_turn(account, turn))
+    try:
+        current = await ez_call(binding, "GET", f"/v1/runs/{job_id}")
+    except HTTPException as error:
+        if error.status_code == 404:
+            raise HTTPException(404, "Chat job not found.") from error
+        raise
+    request_id = current.get("requestId") if isinstance(current.get("requestId"), str) else job_id
+    return public_turn_from_snapshot(job_id, request_id, current)
 
 
-@app.post("/chat/jobs/{request_id}/cancel")
-async def cancel_chat(request_id: UUID, user_id: str, identity: Identity = Depends(require_identity)) -> dict:
+@app.post("/chat/jobs/{job_id}/cancel")
+async def cancel_chat(job_id: str, user_id: str, identity: Identity = Depends(require_identity)) -> dict:
     account = await owned_account(identity, user_id)
-    turn = await db.chat_turns.find_one({"_id": f"{account['tenant_id']}:{request_id}"})
-    if not turn:
+    binding = await verified_binding(account["account_id"])
+    if not job_id or len(job_id) > 200:
         raise HTTPException(404, "Chat job not found.")
-    if not turn.get("run_id"):
-        raise HTTPException(409, "Check the submission outcome before cancelling.")
-    if turn["status"] not in TERMINAL:
-        binding = await verified_binding(account["account_id"])
-        if turn.get("binding_id") != binding["bindingId"]:
-            raise HTTPException(409, "This message belongs to an earlier Ez binding.")
-        await ez_call(binding, "POST", f"/v1/runs/{turn['run_id']}/cancel", {})
-    return public_turn(await reconcile_turn(account, turn))
-
-
-@app.post("/chat/jobs/{request_id}/retry", status_code=202)
-async def retry_chat(request_id: UUID, user_id: str, identity: Identity = Depends(require_identity)) -> dict:
-    account = await owned_account(identity, user_id)
-    turn = await db.chat_turns.find_one({"_id": f"{account['tenant_id']}:{request_id}"})
-    if not turn:
-        raise HTTPException(404, "Chat job not found.")
-    refs = turn.get("references", {})
-    return await enqueue_chat(ChatInput(user_id=user_id, request_id=request_id, message=turn["text"],
-                                        scope_id=refs.get("scopeId"), reference_date=refs.get("referenceDate"),
-                                        exercise_id=refs.get("exerciseId"), workout_id=refs.get("workoutId"),
-                                        exercise_instance_id=refs.get("exerciseInstanceId")), identity)
+    try:
+        await ez_call(binding, "POST", f"/v1/runs/{job_id}/cancel", {})
+    except HTTPException as error:
+        if error.status_code == 404:
+            raise HTTPException(404, "Chat job not found.") from error
+        raise
+    current = await ez_call(binding, "GET", f"/v1/runs/{job_id}")
+    request_id = current.get("requestId") if isinstance(current.get("requestId"), str) else job_id
+    return public_turn_from_snapshot(job_id, request_id, current)
 
 
 # End-state workout API. These routes intentionally accept only the v1 structured
@@ -966,7 +719,7 @@ async def agent_message_v1(body: AgentMessageInput, identity: Identity = Depends
 
 @app.get("/v1/agent/jobs/{job_id}")
 async def agent_job_v1(job_id: UUID, identity: Identity = Depends(require_identity)) -> dict:
-    return await chat_job(job_id, identity.subject, identity)
+    return await chat_job(str(job_id), identity.subject, identity)
 
 
 # The CLI has three narrow writes. Scope is derived entirely from the signed
