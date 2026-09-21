@@ -123,14 +123,16 @@ resolved by the agent into that complete artifact; the plugin does not read or
 copy workout records.
 
 The backend validates every exercise revision and metric, applies the active
-blueprint's hard constraints, and replaces only an unstarted workout for the
-target date. If `--expected-revision` is supplied it must match the current
-workout revision; if omitted, the backend resolves the current unstarted target
-and applies the replacement atomically. It stores the result with
-`lineage.source: "agent_override"`, the active blueprint ID/revision, the agent
-job ID, the reason, and any replaced workout revision. It does not modify the
-blueprint or its active pointer. A completed target workout is locked, and a
-stale supplied revision is rejected.
+blueprint's hard constraints, and applies the resolved day to the target date.
+If `--expected-revision` is supplied it must match the current workout revision;
+if omitted, the backend resolves the current target and applies the replacement
+atomically. Logged sets are immutable: they keep their original exercise
+snapshot, target, and actual, while the resolved day owns only the unlogged
+remainder, so an override still works after the user has logged sets. It stores
+the result with `lineage.source: "agent_override"`, the active blueprint
+ID/revision, the agent job ID, the reason, and any replaced workout revision. It
+does not modify the blueprint or its active pointer. A stale supplied revision
+is rejected.
 
 ### 3a. Blueprint-constrained swap
 
@@ -153,8 +155,12 @@ selects with JEV unless `--source default` is passed explicitly. The backend
 verifies the expected active blueprint revision
 and the workout's blueprint lineage, then selects an unused candidate from the
 same blueprint slot, preserves every other workout item, and records the active
-blueprint ID/revision in the swap receipt. It rejects stale or completed
-workouts and returns `no_eligible_swap` when the blueprint has no alternative.
+blueprint ID/revision in the swap receipt. Logged sets are immutable: they stay
+under the original exercise and the swap materializes the open sets under the
+new candidate as a new exercise instance, so a partially logged exercise can
+still be swapped. It rejects a stale workout, returns `no_eligible_swap` when
+the blueprint has no alternative, and returns `completed_exercise_locked` only
+when every set of the target exercise is already logged.
 
 The receipt has the same shape as other AIFit writes, with `resource: "workout"`
 and `effect: "swapped"`.

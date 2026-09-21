@@ -28,8 +28,8 @@ Write through the plugin and claim a backend change only after the receipt
 - `ez aifit blueprint draft`, `ez aifit blueprint solidify` — one complete blueprint
 - `ez aifit workout generate` — materialize one day from the active blueprint
 - `ez aifit workout log-set` — one set's actuals
-- `ez aifit workout swap` — one in-blueprint exercise
-- `ez aifit workout override` — one complete resolved day
+- `ez aifit workout swap` — the unlogged sets of one in-blueprint exercise
+- `ez aifit workout override` — one complete resolved day for the unlogged remainder
 
 Never put credentials, owner or tenant identifiers, API URLs, or capabilities
 in an artifact.

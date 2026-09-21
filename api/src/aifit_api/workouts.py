@@ -888,7 +888,7 @@ class WorkoutService:
         if target.get("duration_seconds") is not None and "duration_seconds" not in actual and actual["status"] == "completed":
             raise WorkoutDomainError("actual_metric_missing", "Completed duration set needs actual duration.", 422)
         set_row["actual"] = actual
-        workout["status"] = "completed" if all(set_data.get("actual") is not None for segment in workout["segments"] for item_row in segment["items"] for set_data in item_row["sets"]) else "in_progress"
+        workout["status"] = self._workout_status(workout)
         workout["revision"], workout["updated_at"] = new_revision(), utc_now()
         replaced = await self.db.workouts.replace_one({"account_id": account_id, "workout_id": workout_id, "revision": input.expected_revision}, workout)
         if not replaced.modified_count:
@@ -898,6 +898,15 @@ class WorkoutService:
         response = self.receipt("workout", workout_id, workout["revision"], input.request_id, "set_logged")
         response["workout"] = self._public(workout, ("account_id", "_id"))
         return await self._save_receipt(account_id, input.request_id, fingerprint, response)
+
+    @staticmethod
+    def _workout_status(workout: dict[str, Any]) -> str:
+        sets = [set_row for segment in workout["segments"] for item in segment["items"] for set_row in item["sets"]]
+        if sets and all(set_row.get("actual") is not None for set_row in sets):
+            return "completed"
+        if any(set_row.get("actual") is not None for set_row in sets):
+            return "in_progress"
+        return "planned"
 
     async def _index_performance(self, account_id: str, workout: dict[str, Any], item: dict[str, Any], set_row: dict[str, Any]) -> None:
         actual = set_row["actual"]
@@ -931,8 +940,10 @@ class WorkoutService:
                     break
         if not target_item:
             raise WorkoutDomainError("exercise_instance_not_found", "Workout exercise was not found.", 404)
-        if any(set_row.get("actual") is not None for set_row in target_item["sets"]):
-            raise WorkoutDomainError("completed_exercise_locked", "A completed exercise cannot be swapped.")
+        logged_sets = [set_row for set_row in target_item["sets"] if set_row.get("actual") is not None]
+        open_sets = [set_row for set_row in target_item["sets"] if set_row.get("actual") is None]
+        if not open_sets:
+            raise WorkoutDomainError("completed_exercise_locked", "Every set of this exercise is logged; there is nothing left to swap.")
         active = await self.active_blueprint(account_id, workout["date"])
         blueprint = active["blueprint"]
         if input.expected_blueprint_revision and input.expected_blueprint_revision != blueprint["revision"]:
@@ -962,8 +973,27 @@ class WorkoutService:
         snapshot["equipment_profile_id"] = candidate.get("equipment_profile_id")
         targets = candidate["prescription"].get("round_targets") or [candidate["prescription"]["target"]] * target_segment["rounds"]
         load, load_decision = await self._progression_target(account_id, snapshot, candidate, targets[-1])
-        target_item.update({"candidate_id": candidate["candidate_id"], "exercise_snapshot": snapshot, "cues_md": self._cues(candidate, exercise),
-                            "sets": [{"set_id": new_id("set"), "kind": "work", "target": {**target, **({"load": load} if load else {})}, "actual": None, "round": index + 1} for index, target in enumerate(targets)]})
+        new_sets = []
+        for set_row in open_sets:
+            round_number = set_row.get("round", 1)
+            target = dict(targets[min(max(round_number, 1), len(targets)) - 1])
+            new_sets.append({"set_id": new_id("set"), "kind": set_row.get("kind", "work"),
+                             "target": {**target, **({"load": load} if load else {})}, "actual": None, "round": round_number})
+        if logged_sets:
+            # A logged set is immutable history: it keeps its original exercise
+            # snapshot, target and actual, and the swap continues under a new
+            # exercise instance for the sets that are still open.
+            target_item["sets"] = logged_sets
+            replacement = {"exercise_instance_id": new_id("wex"), "slot_id": target_item["slot_id"], "candidate_id": candidate["candidate_id"],
+                           "order": target_item["order"] + 1, "exercise_snapshot": snapshot, "sets": new_sets, "cues_md": self._cues(candidate, exercise)}
+            position = target_segment["items"].index(target_item) + 1
+            target_segment["items"].insert(position, replacement)
+            for index, item in enumerate(target_segment["items"]):
+                item["order"] = index + 1
+        else:
+            target_item.update({"candidate_id": candidate["candidate_id"], "exercise_snapshot": snapshot, "cues_md": self._cues(candidate, exercise),
+                                "sets": new_sets})
+        workout["status"] = self._workout_status(workout)
         workout["revision"], workout["updated_at"] = new_revision(), utc_now()
         workout["lineage"].setdefault("swaps", []).append({
             "exercise_instance_id": instance_id,
@@ -984,7 +1014,7 @@ class WorkoutService:
 
     @transactional_mutation
     async def override(self, account_id: str, input: WorkoutOverrideInput, actor: dict[str, Any]) -> dict[str, Any]:
-        """Replace an unstarted day with a typed agent exception and preserve lineage."""
+        """Apply a typed agent exception day, preserving logged sets and lineage."""
         fingerprint = _fingerprint({"override": input.model_dump(mode="json")})
         prior = await self._receipt(account_id, input.request_id, fingerprint)
         if prior:
@@ -995,8 +1025,19 @@ class WorkoutService:
         if current and input.expected_revision is not None and current["revision"] != input.expected_revision:
             raise WorkoutDomainError("stale_revision", "Workout changed. Pull the current revision before overriding.")
         target_revision = current["revision"] if current else None
-        if current and any(set_row.get("actual") is not None for segment in current["segments"] for item in segment["items"] for set_row in item["sets"]):
-            raise WorkoutDomainError("completed_workout_locked", "A workout with completed sets cannot be replaced.")
+        # Logged sets are immutable history. A replacement day only owns the
+        # unlogged remainder, so a partially logged workout keeps its logged
+        # sets under their original exercise snapshots.
+        preserved_segments: list[dict[str, Any]] = []
+        if current:
+            for segment in current["segments"]:
+                preserved_items = [
+                    {**item, "sets": [set_row for set_row in item["sets"] if set_row.get("actual") is not None]}
+                    for item in segment["items"]
+                ]
+                preserved_items = [item for item in preserved_items if item["sets"]]
+                if preserved_items:
+                    preserved_segments.append({**segment, "items": preserved_items})
         # An exception can target a date that the current blueprint does not
         # cover. The active blueprint still supplies timezone and hard
         # constraints, while the exception owns the target day's structure.
@@ -1021,6 +1062,17 @@ class WorkoutService:
             account_id, blueprint, day,
             GenerateInput(date=input.date, source="default", request_id=input.request_id),
         )
+        if preserved_segments:
+            used_segment_ids = {segment["segment_id"] for segment in preserved_segments}
+            for segment in materialized["segments"]:
+                original_id = segment["segment_id"]
+                suffix = 2
+                while segment["segment_id"] in used_segment_ids:
+                    segment["segment_id"] = f"{original_id}_{suffix}"
+                    suffix += 1
+                used_segment_ids.add(segment["segment_id"])
+            materialized["segments"] = preserved_segments + materialized["segments"]
+            materialized["status"] = "in_progress"
         timestamp = utc_now()
         materialized["lineage"] = {
             **materialized["lineage"],

@@ -204,8 +204,10 @@ Rules:
 Every slot has exactly one candidate, `selection_count` is 1, and candidate
 exercises are unique in the day. Pass `--expected-revision` only when a read or
 native context holds the current target workout revision; otherwise omit it and
-let the backend resolve the unstarted target atomically. A completed target
-workout is locked.
+let the backend resolve the target atomically. Logged sets are immutable: the
+backend preserves them under their original exercise snapshots and applies the
+resolved day to the unlogged remainder, so an override still works after the
+user has logged sets.
 
 ## Set actual artifact
 
@@ -232,9 +234,12 @@ a completed duration set needs `duration_seconds`; `load` is optional
 ```
 
 `--expected-revision` is the current workout revision. Use swap (not override)
-for in-blueprint changes. If the required workout or blueprint context is
-absent, stop with structured feedback; never invent a candidate or turn a swap
-into an exception day.
+for in-blueprint changes. Logged sets are immutable: the backend keeps them
+under the original exercise and swaps only the sets that are still open, so a
+partially logged exercise can still be swapped. Only an exercise whose every
+set is logged returns `completed_exercise_locked`. If the required workout or
+blueprint context is absent, stop with structured feedback; never invent a
+candidate or turn a swap into an exception day.
 
 ## Receipts and errors
 
@@ -246,7 +251,7 @@ A successful write prints one JSON receipt and exits 0:
 
 A failed write prints one JSON error to stderr and exits 1. Validation failures
 name the offending fields; domain failures carry an actionable `detail.code`
-such as `stale_revision`, `no_eligible_swap`, or `completed_workout_locked`:
+such as `stale_revision`, `no_eligible_swap`, or `completed_exercise_locked`:
 
 ```json
 {"error":{"status":422,"message":"AIFit API 422: body.days.0.segments...","detail":{"code":"validation_error","message":"...","errors":[{"loc":["body","days",0],"msg":"...","type":"..."}]}}}

@@ -25,8 +25,8 @@ receipt). Do not expand the list.
 - [ ] BLUEPRINT-02 `blueprint solidify` publishes; `blueprint active` shows the revision
 - [ ] DAY-01 `workout generate` with `default` and `jev` picks only blueprint candidates; same date + request id is idempotent
 - [ ] LOG-01 `workout log-set` records actuals; workout reads back `in_progress` or `completed`
-- [ ] LOAD-01 "heavier weights" → one complete `workout override`; unstarted work only
+- [ ] LOAD-01 "heavier weights" → one complete `workout override`; only unlogged sets change
 - [ ] SWAP-01 "machine taken" → `workout swap`; other items and the blueprint revision unchanged
 - [ ] ADD-01 "add an exercise" → complete `workout override`; blueprint unchanged
-- [ ] LOCK-01 logged sets are locked: mutation rejected, no receipt, coach language + valid alternative
+- [ ] LOCK-01 after one logged set, `workout swap`/`workout override` change only open sets; the logged set reads back verbatim; a fully logged exercise swap returns `completed_exercise_locked`
 - [ ] TG-01 a Telegram turn runs a plugin read and a plugin write

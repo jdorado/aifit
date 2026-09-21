@@ -44,7 +44,9 @@ The override input is a complete resolved target-day artifact. Every override
 slot contains exactly one resolved candidate. The agent resolves item changes
 and copied days from native context; a swap input contains the current
 `workout_id`, `exercise_instance_id`, `expected_blueprint_revision`, and a
-reason. The frontend consumes the same backend records separately.
+reason. Logged sets are immutable: swap and override preserve them under their
+original exercise snapshots and apply the change to the unlogged remainder. The
+frontend consumes the same backend records separately.
 
 ## Local verification
 

@@ -8,6 +8,11 @@ from aifit_api.workouts import BlueprintInput, GenerateInput, WorkoutService
 from test_workout_contract import blueprint
 
 
+class ReplaceResult:
+    def __init__(self, modified_count):
+        self.modified_count = modified_count
+
+
 class FakeCollection:
     def __init__(self, database, name):
         self.database = database
@@ -22,6 +27,15 @@ class FakeCollection:
 
     async def insert_one(self, document, **_kwargs):
         self.documents.append(deepcopy(document))
+
+    async def replace_one(self, query, document, upsert=False, **_kwargs):
+        for index, row in enumerate(self.documents):
+            if matches(row, query):
+                self.documents[index] = deepcopy(document)
+                return ReplaceResult(1)
+        if upsert:
+            self.documents.append(deepcopy(document))
+        return ReplaceResult(0)
 
     async def find_one_and_update(self, query, update, upsert=False, **_kwargs):
         for index, row in enumerate(self.documents):
@@ -108,7 +122,14 @@ class StandaloneDatabase(FakeDatabase):
 
 
 def matches(document, query):
-    return all(document.get(key) == value for key, value in query.items())
+    for key, value in query.items():
+        if isinstance(value, dict) and "$exists" in value:
+            if (key in document) != value["$exists"]:
+                return False
+            continue
+        if document.get(key) != value:
+            return False
+    return True
 
 
 def apply_update(document, update):
