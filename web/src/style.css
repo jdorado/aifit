@@ -3898,6 +3898,10 @@ button.ghost {
   color: var(--ink-secondary);
 }
 
+.video-empty-title.error {
+  color: #9e3f3f;
+}
+
 .video-empty-subtitle {
   font-size: calc(12px * var(--font-scale));
   color: var(--ink-tertiary);

@@ -1,13 +1,20 @@
 import type { FC } from 'react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useI18n } from '../i18n'
 import CoachChat from '../components/workout/CoachChat'
+import ExerciseHistorySheet from '../components/workout/ExerciseHistorySheet'
 import ExerciseSetList from '../components/workout/ExerciseSetList'
+import VideoGallery from '../components/workout/VideoGallery'
 import WeekStrip from '../components/workout/WeekStrip'
 import WorkoutMiniBar from '../components/workout/WorkoutMiniBar'
 import WorkoutPlanList from '../components/workout/WorkoutPlanList'
 import type { WorkoutExercise, WorkoutExtra } from '../data/testWorkout'
 import type { ActiveEntryType, ChatMessage, HoldTimerState, SetState } from '../types/app'
+import {
+  fetchExerciseHistory,
+  groupExerciseHistory,
+  type ExerciseHistorySession,
+} from '../utils/exerciseHistory'
 import {
   formatCircuitTarget,
   parseDurationToSeconds,
@@ -44,6 +51,8 @@ type WorkoutViewProps = {
   active: boolean
   canLogDay: boolean
   coachChatEnabled: boolean
+  apiBaseUrl: string
+  getAuthHeaders: () => Promise<Record<string, string>>
   weekDays: WeekDaySummary[]
   selectedDayLabel: string
   hasWeekWorkouts: boolean
@@ -94,6 +103,8 @@ const WorkoutView: FC<WorkoutViewProps> = ({
   active,
   canLogDay,
   coachChatEnabled,
+  apiBaseUrl,
+  getAuthHeaders,
   weekDays,
   selectedDayLabel,
   hasWeekWorkouts,
@@ -123,6 +134,11 @@ const WorkoutView: FC<WorkoutViewProps> = ({
   const { t } = useI18n()
   const [coachChatOpen, setCoachChatOpen] = useState(false)
   const [coachDraft, setCoachDraft] = useState('')
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const [historyLoading, setHistoryLoading] = useState(false)
+  const [historyError, setHistoryError] = useState(false)
+  const [historySessions, setHistorySessions] = useState<ExerciseHistorySession[]>([])
+  const historyRequestRef = useRef(0)
 
   useEffect(() => {
     if (!coachChatEnabled) {
@@ -297,7 +313,32 @@ const WorkoutView: FC<WorkoutViewProps> = ({
   useEffect(() => {
     setCoachChatOpen(false)
     setCoachDraft('')
+    setHistoryOpen(false)
   }, [activeExercise?.id])
+
+  const openExerciseHistory = useCallback(() => {
+    const exerciseId = activeExercise?.exerciseKey
+    if (!exerciseId) return
+    setCoachChatOpen(false)
+    setHistoryOpen(true)
+    setHistoryLoading(true)
+    setHistoryError(false)
+    const requestId = historyRequestRef.current + 1
+    historyRequestRef.current = requestId
+    fetchExerciseHistory({ apiBaseUrl, getHeaders: getAuthHeaders, exerciseId, limit: 20 })
+      .then((rows) => {
+        if (historyRequestRef.current !== requestId) return
+        setHistorySessions(groupExerciseHistory(rows))
+      })
+      .catch(() => {
+        if (historyRequestRef.current !== requestId) return
+        setHistorySessions([])
+        setHistoryError(true)
+      })
+      .finally(() => {
+        if (historyRequestRef.current === requestId) setHistoryLoading(false)
+      })
+  }, [activeExercise?.exerciseKey, apiBaseUrl, getAuthHeaders])
 
   const renderDetailContent = () => {
     if (activeExtra) {
@@ -338,6 +379,14 @@ const WorkoutView: FC<WorkoutViewProps> = ({
           <p className="card-label">{isSkipped ? `${activeExercise.section} • ${t('workout.skipped')}` : t('workout.targetLabel')}</p>
           {isSkipped ? null : <p className="card-sub">{activeExercise.summary}</p>}
         </div>
+        {activeExercise.exerciseKey ? (
+          <VideoGallery
+            exerciseKey={activeExercise.exerciseKey}
+            exerciseName={activeExercise.name}
+            apiBaseUrl={apiBaseUrl}
+            getAuthHeaders={getAuthHeaders}
+          />
+        ) : null}
         {exerciseCues.length > 0 ? (
           <div className="detail-cues">
             <div className="detail-cues-large">
@@ -469,13 +518,30 @@ const WorkoutView: FC<WorkoutViewProps> = ({
           </div>
           {activeExercise ? (
             <div className="detail-header-actions">
+              {activeExercise.exerciseKey ? (
+                <button
+                  type="button"
+                  className={`detail-history-btn${historyOpen ? ' active' : ''}`}
+                  aria-label={t('workout.historyTitle')}
+                  aria-expanded={historyOpen}
+                  onClick={openExerciseHistory}
+                >
+                  <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                    <path d="M3 12a9 9 0 1 0 3-6.7L3 8" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                    <path d="M3 3v5h5M12 7v5l3 2" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </button>
+              ) : null}
               <button
                 type="button"
                 className={`detail-coach-btn${coachChatOpen ? ' active' : ''}`}
                 aria-label={t('workout.askCoach')}
                 aria-expanded={coachChatOpen}
                 disabled={!coachChatEnabled}
-                onClick={() => setCoachChatOpen((current) => !current)}
+                onClick={() => {
+                  setHistoryOpen(false)
+                  setCoachChatOpen((current) => !current)
+                }}
               >
                 <svg className="detail-coach-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
                   <path
@@ -517,6 +583,17 @@ const WorkoutView: FC<WorkoutViewProps> = ({
         </div>
 
         {activeExercise ? (
+          <ExerciseHistorySheet
+            open={historyOpen}
+            loading={historyLoading}
+            error={historyError ? t('workout.historyError') : null}
+            exerciseName={activeExercise.name}
+            sessions={historySessions}
+            onClose={() => setHistoryOpen(false)}
+          />
+        ) : null}
+
+        {activeExercise ? (
           <CoachChat
             open={coachChatOpen}
             disabled={!coachChatEnabled}
@@ -530,6 +607,9 @@ const WorkoutView: FC<WorkoutViewProps> = ({
               if (!text || !activeExercise) return
               onCoachSend(activeExercise.id, text)
               setCoachDraft('')
+            }}
+            onQuickPrompt={(message) => {
+              if (activeExercise) onCoachSend(activeExercise.id, message)
             }}
           />
         ) : null}

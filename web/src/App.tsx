@@ -3518,6 +3518,8 @@ const App = () => {
             active={activeView === 'workout'}
             canLogDay={canLogSelectedDay}
             coachChatEnabled={coachChatEnabled}
+            apiBaseUrl={API_BASE_URL}
+            getAuthHeaders={getPrivyAuthHeaders}
             weekDays={weekDaySummaries}
             selectedDayLabel={selectedDayLabel}
             hasWeekWorkouts={hasWeekWorkouts}

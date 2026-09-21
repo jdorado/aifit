@@ -47,8 +47,10 @@ Chat and agent-authored workout writes require an Ez deployment and server-side
 binding that you operate separately. This repository does not contain a
 provider-specific provisioning command or deployment manifest for that service.
 The web release reads canonical workout records and can request typed day
-generation; arbitrary plan rewrites, coach impersonation, and provider-specific
-video/history helpers stay disabled until their own typed public contracts exist.
+generation. Exercise history and YouTube demo videos have typed public
+contracts (`GET /v1/exercises/{exercise_id}/history`, `GET /v1/videos`).
+Arbitrary plan rewrites and coach impersonation stay disabled until their own
+typed public contracts exist.
 
 ## Testing
 

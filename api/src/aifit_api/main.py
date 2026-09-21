@@ -7,7 +7,7 @@ from typing import Any, Literal
 from urllib.parse import parse_qsl, quote, urlparse
 from uuid import UUID
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -23,6 +23,7 @@ from .auth import (
     require_identity,
 )
 from . import telegram_admit
+from . import videos
 from .ez import call as ez_call, provision_telegram, telegram_provisioning_configured, verified_binding
 from .model_policy import filter_control, require_allowed
 from .workouts import (
@@ -636,6 +637,14 @@ async def get_exercise_v1(exercise_id: str, revision: str | None = None,
                           identity: Identity = Depends(require_identity)) -> dict:
     account = await browser_account(identity)
     return await workouts().exercise(account["account_id"], exercise_id, revision)
+
+
+@app.get("/v1/videos")
+async def search_videos_v1(q: str = Query(min_length=1, max_length=200),
+                           limit: int = Query(default=20, ge=1, le=40),
+                           identity: Identity = Depends(require_identity)) -> dict:
+    await browser_account(identity)
+    return await videos.search_videos(q, limit)
 
 
 @app.post("/v1/plans/draft")

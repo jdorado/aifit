@@ -14,7 +14,10 @@ type CoachChatProps = {
   onToggle: () => void
   onDraftChange: (value: string) => void
   onSend: () => void
+  onQuickPrompt: (message: string) => void
 }
+
+const QUICK_PROMPT_KEYS = ['quickLastTime', 'quickSuggestWeight', 'quickRestTime'] as const
 
 const CoachChat: FC<CoachChatProps> = ({
   open,
@@ -25,6 +28,7 @@ const CoachChat: FC<CoachChatProps> = ({
   onToggle,
   onDraftChange,
   onSend,
+  onQuickPrompt,
 }) => {
   const { t } = useI18n()
   const hasDraft = !disabled && draft.trim().length > 0
@@ -219,6 +223,18 @@ const CoachChat: FC<CoachChatProps> = ({
                 </div>
               )
             })}
+          </div>
+          <div className="coach-chat-prompts" role="group" aria-label={t('workout.quickPromptsLabel')}>
+            {QUICK_PROMPT_KEYS.map((key) => (
+              <button
+                type="button"
+                key={key}
+                disabled={disabled}
+                onClick={() => onQuickPrompt(t(`workout.${key}`))}
+              >
+                {t(`workout.${key}`)}
+              </button>
+            ))}
           </div>
           <div className="coach-chat-input">
             <textarea
