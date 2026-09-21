@@ -9224,6 +9224,304 @@ body:has(.view[data-view="profile"].active) {
   color: var(--aifit-ink);
 }
 
+.view[data-view="profile"] .coach-sharing {
+  display: grid;
+  gap: 14px;
+}
+
+.view[data-view="profile"] .coach-sharing-active {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--aifit-radius);
+  background: #dbeafe;
+  color: #1e3a8a;
+  font-size: calc(12px * var(--font-scale));
+  font-weight: 700;
+}
+
+.view[data-view="profile"] .coach-sharing-active button {
+  min-height: 32px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 999px;
+  background: #1d4ed8;
+  color: #ffffff;
+  font-size: calc(12px * var(--font-scale));
+  font-weight: 700;
+}
+
+.view[data-view="profile"] .coach-invite-form,
+.view[data-view="profile"] .coach-accept-form {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--aifit-line);
+  border-radius: var(--aifit-radius);
+  background: rgba(255, 255, 255, 0.62);
+}
+
+.view[data-view="profile"] .coach-accept-form > label {
+  color: var(--aifit-ink);
+  font-size: calc(14px * var(--font-scale));
+  font-weight: 700;
+}
+
+.view[data-view="profile"] .coach-permissions-field {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.view[data-view="profile"] .coach-permissions-field legend {
+  padding: 0;
+  color: var(--aifit-muted);
+  font-size: calc(11px * var(--font-scale));
+  font-weight: 700;
+}
+
+.view[data-view="profile"] .coach-permissions-field label,
+.view[data-view="profile"] .coach-link-permissions label {
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px;
+  border-radius: var(--aifit-radius);
+  background: #ffffff;
+  color: var(--aifit-ink);
+  font-size: calc(13px * var(--font-scale));
+  font-weight: 600;
+}
+
+.view[data-view="profile"] .coach-permissions-field input,
+.view[data-view="profile"] .coach-link-permissions input {
+  width: 17px;
+  height: 17px;
+  accent-color: var(--aifit-purple);
+}
+
+.view[data-view="profile"] .coach-invite-form button[type="submit"],
+.view[data-view="profile"] .coach-accept-row button {
+  min-height: 42px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--aifit-purple);
+  color: #ffffff;
+  font-size: calc(13px * var(--font-scale));
+  font-weight: 700;
+}
+
+.view[data-view="profile"] .coach-invite-form button[type="submit"]:disabled,
+.view[data-view="profile"] .coach-accept-row button:disabled,
+.view[data-view="profile"] .coach-link-actions button:disabled {
+  opacity: 0.6;
+}
+
+.view[data-view="profile"] .coach-accept-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.view[data-view="profile"] .coach-accept-row input {
+  min-width: 0;
+  min-height: 42px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--aifit-radius);
+  background: #ffffff;
+  color: var(--aifit-ink);
+  font-family: inherit;
+  font-size: calc(13px * var(--font-scale));
+}
+
+.view[data-view="profile"] .coach-accept-row input:focus {
+  outline: 2px solid rgba(29, 78, 216, 0.16);
+}
+
+.view[data-view="profile"] .coach-links-hint,
+.view[data-view="profile"] .coach-links-empty {
+  margin: 0;
+  color: var(--aifit-muted);
+  font-size: calc(12px * var(--font-scale));
+  line-height: 1.35;
+}
+
+.view[data-view="profile"] .coach-links-error {
+  margin: 0;
+  color: #b91c1c;
+  font-size: calc(12px * var(--font-scale));
+  line-height: 1.35;
+}
+
+.view[data-view="profile"] .coach-link-group {
+  display: grid;
+  gap: 8px;
+}
+
+.view[data-view="profile"] .coach-link-group h3 {
+  margin: 0;
+  color: var(--aifit-muted);
+  font-size: calc(11px * var(--font-scale));
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.view[data-view="profile"] .coach-link-card {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--aifit-line);
+  border-radius: var(--aifit-radius);
+  background: #ffffff;
+}
+
+.view[data-view="profile"] .coach-link-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.view[data-view="profile"] .coach-link-head strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--aifit-ink);
+  font-size: calc(14px * var(--font-scale));
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.view[data-view="profile"] .coach-link-status {
+  flex: 0 0 auto;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: var(--aifit-soft);
+  color: var(--aifit-muted);
+  font-size: calc(11px * var(--font-scale));
+  font-weight: 700;
+}
+
+.view[data-view="profile"] .coach-link-status--active {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.view[data-view="profile"] .coach-link-status--revoked {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.view[data-view="profile"] .coach-link-token {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px dashed rgba(29, 78, 216, 0.4);
+  border-radius: var(--aifit-radius);
+  background: rgba(29, 78, 216, 0.06);
+}
+
+.view[data-view="profile"] .coach-link-token-label {
+  color: var(--aifit-muted);
+  font-size: calc(11px * var(--font-scale));
+  font-weight: 700;
+}
+
+.view[data-view="profile"] .coach-link-token code {
+  flex: 1 1 100%;
+  overflow-wrap: anywhere;
+  color: var(--aifit-ink);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: calc(12px * var(--font-scale));
+}
+
+.view[data-view="profile"] .coach-link-token button {
+  min-height: 28px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--aifit-soft);
+  color: var(--aifit-ink);
+  font-size: calc(11px * var(--font-scale));
+  font-weight: 700;
+}
+
+.view[data-view="profile"] .coach-link-expiry {
+  color: var(--aifit-muted);
+  font-size: calc(11px * var(--font-scale));
+}
+
+.view[data-view="profile"] .coach-link-permissions {
+  display: grid;
+  gap: 6px;
+  color: var(--aifit-muted);
+  font-size: calc(12px * var(--font-scale));
+}
+
+.view[data-view="profile"] .coach-link-permissions-label {
+  color: var(--aifit-muted);
+  font-size: calc(11px * var(--font-scale));
+  font-weight: 700;
+}
+
+.view[data-view="profile"] .coach-link-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.view[data-view="profile"] .coach-link-actions button {
+  min-height: 34px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--aifit-soft);
+  color: var(--aifit-ink);
+  font-size: calc(12px * var(--font-scale));
+  font-weight: 700;
+}
+
+.view[data-view="profile"] .coach-link-actions .coach-link-revoke {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.app-top-bar-coach-notice {
+  min-width: 0;
+  overflow: hidden;
+  color: #1e3a8a;
+  font-size: calc(11px * var(--font-scale));
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-top-bar-coach-exit {
+  flex: 0 0 auto;
+  min-height: 26px;
+  margin-left: auto;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 999px;
+  background: #1d4ed8;
+  color: #ffffff;
+  font-size: calc(11px * var(--font-scale));
+  font-weight: 700;
+}
+
+.app-top-bar .app-top-nav-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 @media (max-width: 390px) {
   .view[data-view="profile"] .profile-panel-title {
     font-size: calc(18px * var(--font-scale));

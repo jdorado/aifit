@@ -9,6 +9,9 @@ type TabBarProps = {
   onChange: (view: TabName) => void
   coachModeActive?: boolean
   coachContextLabel?: string
+  onExitCoachMode?: () => void
+  disabledTab?: TabName | null
+  disabledNotice?: string
   leadingControl?: ReactNode
 }
 
@@ -17,6 +20,9 @@ const TabBar: FC<TabBarProps> = ({
   onChange,
   coachModeActive = false,
   coachContextLabel = '',
+  onExitCoachMode,
+  disabledTab = null,
+  disabledNotice = '',
   leadingControl = null,
 }) => {
   const { t } = useI18n()
@@ -66,29 +72,42 @@ const TabBar: FC<TabBarProps> = ({
   return (
     <div className={`app-top-bar ${coachModeActive ? 'coach-active' : ''}`}>
       <BrandMark alt={t('chat.logoAlt')} className="app-top-bar-logo" />
-      {coachContextLabel ? (
+      {coachModeActive || coachContextLabel ? (
         <div className="app-top-bar-coach-context" role="status">
           <span>{t('coach.viewingTrainee')}</span>
-          <strong title={coachContextLabel}>{coachContextLabel}</strong>
+          <strong title={coachContextLabel}>{coachContextLabel || t('coach.traineeFallback')}</strong>
+          {disabledNotice ? (
+            <span className="app-top-bar-coach-notice">{disabledNotice}</span>
+          ) : null}
+          {onExitCoachMode ? (
+            <button type="button" className="app-top-bar-coach-exit" onClick={onExitCoachMode}>
+              {t('coach.exitCoachView')}
+            </button>
+          ) : null}
         </div>
       ) : null}
       <div className="app-top-bar-controls">
         <nav className={`app-top-nav ${coachModeActive ? 'coach-active' : ''}`} aria-label="Primary">
           <div className="app-top-nav-track">
-            {tabs.map((tab) => (
-              <button
-                key={tab.key}
-                className={`app-top-nav-btn ${activeView === tab.key ? 'active' : ''} ${tab.featured ? 'featured' : ''}`}
-                data-tab={tab.key}
-                type="button"
-                onClick={() => onChange(tab.key)}
-                aria-label={tab.label}
-                aria-pressed={activeView === tab.key}
-                title={tab.label}
-              >
-                <span className="app-top-nav-icon">{tab.icon}</span>
-              </button>
-            ))}
+            {tabs.map((tab) => {
+              const tabDisabled = disabledTab === tab.key
+              return (
+                <button
+                  key={tab.key}
+                  className={`app-top-nav-btn ${activeView === tab.key ? 'active' : ''} ${tab.featured ? 'featured' : ''}`}
+                  data-tab={tab.key}
+                  type="button"
+                  onClick={() => onChange(tab.key)}
+                  aria-label={tab.label}
+                  aria-pressed={activeView === tab.key}
+                  aria-disabled={tabDisabled}
+                  disabled={tabDisabled}
+                  title={tabDisabled ? (disabledNotice || tab.label) : tab.label}
+                >
+                  <span className="app-top-nav-icon">{tab.icon}</span>
+                </button>
+              )
+            })}
           </div>
         </nav>
         {leadingControl ? <div className="app-top-bar-extra">{leadingControl}</div> : null}

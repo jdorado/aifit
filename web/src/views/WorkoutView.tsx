@@ -54,6 +54,7 @@ type WorkoutViewProps = {
   coachChatEnabled: boolean
   apiBaseUrl: string
   getAuthHeaders: () => Promise<Record<string, string>>
+  actAsLinkId?: string | null
   weekDays: WeekDaySummary[]
   selectedDayLabel: string
   hasWeekWorkouts: boolean
@@ -112,6 +113,7 @@ const WorkoutView: FC<WorkoutViewProps> = ({
   coachChatEnabled,
   apiBaseUrl,
   getAuthHeaders,
+  actAsLinkId = null,
   weekDays,
   selectedDayLabel,
   hasWeekWorkouts,
@@ -338,7 +340,7 @@ const WorkoutView: FC<WorkoutViewProps> = ({
     setHistoryError(false)
     const requestId = historyRequestRef.current + 1
     historyRequestRef.current = requestId
-    fetchExerciseHistory({ apiBaseUrl, getHeaders: getAuthHeaders, exerciseId, limit: 20 })
+    fetchExerciseHistory({ apiBaseUrl, getHeaders: getAuthHeaders, exerciseId, limit: 20, actAsLinkId })
       .then((rows) => {
         if (historyRequestRef.current !== requestId) return
         setHistorySessions(groupExerciseHistory(rows))
@@ -351,7 +353,7 @@ const WorkoutView: FC<WorkoutViewProps> = ({
       .finally(() => {
         if (historyRequestRef.current === requestId) setHistoryLoading(false)
       })
-  }, [activeExercise?.exerciseKey, apiBaseUrl, getAuthHeaders])
+  }, [activeExercise?.exerciseKey, actAsLinkId, apiBaseUrl, getAuthHeaders])
 
   const renderDetailContent = () => {
     if (activeExtra) {

@@ -48,9 +48,11 @@ binding that you operate separately. This repository does not contain a
 provider-specific provisioning command or deployment manifest for that service.
 The web release reads canonical workout records and can request typed day
 generation. Exercise history and YouTube demo videos have typed public
-contracts (`GET /v1/exercises/{exercise_id}/history`, `GET /v1/videos`).
-Arbitrary plan rewrites and coach impersonation stay disabled until their own
-typed public contracts exist.
+contracts (`GET /v1/exercises/{exercise_id}/history`, `GET /v1/videos`). Coach
+sharing has a typed public contract too: `POST/GET/PATCH /v1/coach-links` plus
+the `act_as_link_id` parameter on the canonical `/v1` routes, re-checked on
+every request. Arbitrary plan rewrites stay disabled until their own typed
+public contract exists.
 
 ## Testing
 
