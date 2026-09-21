@@ -24,6 +24,13 @@ from .auth import (
 )
 from . import telegram_admit
 from . import videos
+from .coach_links import (
+    CoachLinkAcceptInput,
+    CoachLinkInviteInput,
+    CoachLinkRole,
+    CoachLinkService,
+    CoachLinkUpdateInput,
+)
 from .ez import call as ez_call, provision_telegram, telegram_provisioning_configured, verified_binding
 from .model_policy import filter_control, require_allowed
 from .workouts import (
@@ -108,6 +115,10 @@ def agent_api_base_url() -> str | None:
 
 def workouts() -> WorkoutService:
     return WorkoutService(db)
+
+
+def coach_links() -> CoachLinkService:
+    return CoachLinkService(db)
 
 
 def agent_actor(capability: AgentCapability) -> dict[str, str]:
@@ -386,6 +397,7 @@ async def indexes() -> None:
     await db.accounts.create_index([("privy_subject", ASCENDING)], unique=True)
     await db.accounts.create_index([("account_id", ASCENDING)], unique=True)
     await workouts().ensure_indexes()
+    await coach_links().ensure_indexes()
     global _telegram_admit_task, _telegram_admit_stop
     if telegram_admit.admit_enabled() and _telegram_admit_task is None:
         _telegram_admit_stop = asyncio.Event()
@@ -623,24 +635,70 @@ async def browser_account(identity: Identity) -> dict[str, Any]:
     return await account_for(identity)
 
 
-@app.post("/v1/exercises")
-async def create_exercise_v1(body: ExerciseMutationInput, identity: Identity = Depends(require_identity)) -> dict:
+def canonical_account(permission: str):
+    """Resolve the canonical account for the browser /v1 surface.
+
+    Without ``act_as_link_id`` this is the signed-in account. With it, the
+    server re-reads the stored coach link on every request, requires the caller
+    to be its coach, and derives the trainee account; a browser-supplied owner
+    or account id is never trusted.
+    """
+    async def dependency(
+        act_as_link_id: str | None = Query(default=None, max_length=200),
+        identity: Identity = Depends(require_identity),
+    ) -> dict[str, Any]:
+        account = await browser_account(identity)
+        if act_as_link_id is None:
+            return account
+        return await coach_links().resolve_act_as(account["account_id"], act_as_link_id, permission)
+    return dependency
+
+
+require_view_account = canonical_account("view_progress")
+require_edit_account = canonical_account("edit_programs")
+
+
+@app.post("/v1/coach-links")
+async def create_coach_link_v1(body: CoachLinkInviteInput, identity: Identity = Depends(require_identity)) -> dict:
     account = await browser_account(identity)
+    return await coach_links().create_invite(account, body)
+
+
+@app.post("/v1/coach-links/accept")
+async def accept_coach_link_v1(body: CoachLinkAcceptInput, identity: Identity = Depends(require_identity)) -> dict:
+    account = await browser_account(identity)
+    return await coach_links().accept(account, body)
+
+
+@app.get("/v1/coach-links")
+async def list_coach_links_v1(role: CoachLinkRole = Query(default="all"),
+                              identity: Identity = Depends(require_identity)) -> list[dict]:
+    account = await browser_account(identity)
+    return await coach_links().list_for(account, role)
+
+
+@app.patch("/v1/coach-links/{link_id}")
+async def update_coach_link_v1(link_id: str, body: CoachLinkUpdateInput,
+                               identity: Identity = Depends(require_identity)) -> dict:
+    account = await browser_account(identity)
+    return await coach_links().update(account, link_id, body)
+
+
+@app.post("/v1/exercises")
+async def create_exercise_v1(body: ExerciseMutationInput, account: dict = Depends(require_edit_account)) -> dict:
     return await workouts().create_exercise(account["account_id"], body.definition, body.request_id,
                                             {"kind": "browser", "account_id": account["account_id"]}, body.expected_revision)
 
 
 @app.get("/v1/exercises/{exercise_id}/history")
 async def exercise_history_v1(exercise_id: str, before: str | None = None, limit: int = 10,
-                              identity: Identity = Depends(require_identity)) -> list[dict]:
-    account = await browser_account(identity)
+                              account: dict = Depends(require_view_account)) -> list[dict]:
     return await workouts().history(account["account_id"], exercise_id, before, limit)
 
 
 @app.get("/v1/exercises/{exercise_id}")
 async def get_exercise_v1(exercise_id: str, revision: str | None = None,
-                          identity: Identity = Depends(require_identity)) -> dict:
-    account = await browser_account(identity)
+                          account: dict = Depends(require_view_account)) -> dict:
     return await workouts().exercise(account["account_id"], exercise_id, revision)
 
 
@@ -680,73 +738,62 @@ async def active_program_v1(date: str | None = None, identity: Identity = Depend
 
 
 @app.get("/v1/blueprints/active")
-async def active_blueprint_v1(date: str | None = None, identity: Identity = Depends(require_identity)) -> dict:
-    account = await browser_account(identity)
+async def active_blueprint_v1(date: str | None = None, account: dict = Depends(require_view_account)) -> dict:
     return await workouts().active_blueprint(account["account_id"], date)
 
 
 @app.post("/v1/workouts/generate")
-async def generate_workout_v1(body: GenerateInput, identity: Identity = Depends(require_identity)) -> dict:
-    account = await browser_account(identity)
+async def generate_workout_v1(body: GenerateInput, account: dict = Depends(require_edit_account)) -> dict:
     return await workouts().generate(account["account_id"], body)
 
 
 @app.post("/v1/workouts/copy-last-week")
-async def copy_last_week_v1(body: CopyLastWeekInput, identity: Identity = Depends(require_identity)) -> dict:
-    account = await browser_account(identity)
+async def copy_last_week_v1(body: CopyLastWeekInput, account: dict = Depends(require_edit_account)) -> dict:
     return await workouts().copy_last_week(account["account_id"], body)
 
 
 @app.post("/v1/workouts/{workout_id}/clear")
-async def clear_workout_v1(workout_id: str, body: ClearWorkoutInput, identity: Identity = Depends(require_identity)) -> dict:
-    account = await browser_account(identity)
+async def clear_workout_v1(workout_id: str, body: ClearWorkoutInput, account: dict = Depends(require_edit_account)) -> dict:
     return await workouts().clear_workout(account["account_id"], workout_id, body)
 
 
 @app.get("/v1/workouts")
-async def list_workouts_v1(start: str, end: str, identity: Identity = Depends(require_identity)) -> list[dict]:
-    account = await browser_account(identity)
+async def list_workouts_v1(start: str, end: str, account: dict = Depends(require_view_account)) -> list[dict]:
     return await workouts().workouts(account["account_id"], start, end)
 
 
 @app.get("/v1/workouts/{workout_id}")
-async def get_workout_v1(workout_id: str, identity: Identity = Depends(require_identity)) -> dict:
-    account = await browser_account(identity)
+async def get_workout_v1(workout_id: str, account: dict = Depends(require_view_account)) -> dict:
     return await workouts().workout(account["account_id"], workout_id)
 
 
 @app.patch("/v1/workouts/{workout_id}/sets/{set_id}")
 async def log_workout_set_v1(workout_id: str, set_id: str, body: SetLogInput,
-                             identity: Identity = Depends(require_identity)) -> dict:
-    account = await browser_account(identity)
+                             account: dict = Depends(require_edit_account)) -> dict:
     return await workouts().log_set(account["account_id"], workout_id, set_id, body)
 
 
 @app.post("/v1/workouts/{workout_id}/sets/{set_id}/unlog")
 async def unlog_workout_set_v1(workout_id: str, set_id: str, body: SetUnlogInput,
-                               identity: Identity = Depends(require_identity)) -> dict:
-    account = await browser_account(identity)
+                               account: dict = Depends(require_edit_account)) -> dict:
     return await workouts().unlog_set(account["account_id"], workout_id, set_id, body)
 
 
 @app.patch("/v1/workouts/{workout_id}/notes")
 async def update_workout_notes_v1(workout_id: str, body: WorkoutNotesInput,
-                                  identity: Identity = Depends(require_identity)) -> dict:
-    account = await browser_account(identity)
+                                  account: dict = Depends(require_edit_account)) -> dict:
     return await workouts().update_notes(account["account_id"], workout_id, body)
 
 
 @app.patch("/v1/workouts/{workout_id}/exercises/{exercise_instance_id}/notes")
 async def update_workout_exercise_notes_v1(workout_id: str, exercise_instance_id: str, body: ExerciseNoteInput,
-                                           identity: Identity = Depends(require_identity)) -> dict:
-    account = await browser_account(identity)
+                                           account: dict = Depends(require_edit_account)) -> dict:
     return await workouts().update_exercise_notes(account["account_id"], workout_id, exercise_instance_id, body)
 
 
 @app.post("/v1/workouts/{workout_id}/exercises/{exercise_instance_id}/swap")
 async def swap_workout_exercise_v1(workout_id: str, exercise_instance_id: str, body: SwapInput,
-                                   identity: Identity = Depends(require_identity)) -> dict:
-    account = await browser_account(identity)
+                                   account: dict = Depends(require_edit_account)) -> dict:
     return await workouts().swap(account["account_id"], workout_id, exercise_instance_id, body)
 
 

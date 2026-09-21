@@ -11,7 +11,7 @@ import RestOverlay from './components/RestOverlay'
 import MiniTimer from './components/MiniTimer'
 import ChatView from './views/ChatView'
 import WorkoutView from './views/WorkoutView'
-import ProfileView from './views/ProfileView'
+import ProfileView, { type CoachActAsTarget, type CoachPermissions } from './views/ProfileView'
 import TelegramLink from './components/profile/TelegramLink'
 import WorkoutOverflowMenu from './components/workout/WorkoutOverflowMenu'
 import ChatOverflowMenu from './components/chat/ChatOverflowMenu'
@@ -844,7 +844,20 @@ const App = () => {
   const [currentUserEmail, setCurrentUserEmail] = useState<string | null>(null)
   const [currentUserId, setCurrentUserId] = useState('')
   const [privyAuthError, setPrivyAuthError] = useState<string | null>(null)
-  const coachActAsOwnerId: string | null = null
+  const [coachActAsLinkId, setCoachActAsLinkId] = useState<string | null>(null)
+  const [coachActAsLabel, setCoachActAsLabel] = useState('')
+  const [coachActAsPermissions, setCoachActAsPermissions] = useState<CoachPermissions | null>(null)
+  const coachActAsOwnerId = coachActAsLinkId
+  const coachCanEditPrograms = !coachActAsLinkId || coachActAsPermissions?.edit_programs === true
+  const coachActAsLinkIdRef = useRef<string | null>(null)
+  coachActAsLinkIdRef.current = coachActAsLinkId
+  // Canonical /v1 calls carry the act-as link as a query parameter; the server
+  // re-checks the stored link on every request, so no trust is cached here.
+  const withCoachActAs = useCallback((url: string) => {
+    const linkId = coachActAsLinkIdRef.current
+    if (!linkId) return url
+    return `${url}${url.includes('?') ? '&' : '?'}act_as_link_id=${encodeURIComponent(linkId)}`
+  }, [])
   const [privySubjectId, setPrivySubjectId] = useState<string | null>(null)
   const privyAuth = usePrivy()
   const {
@@ -868,7 +881,7 @@ const App = () => {
   )
   const i18n = useMemo(() => createI18n(profile.language), [profile.language])
   const { t } = i18n
-  const coachChatEnabled = true
+  const coachChatEnabled = !coachActAsLinkId
   const selectedModelPreset = modelControl?.presets.find((preset) => preset.id === modelControl.selected_id)
   const selectedModelLabel = presetLabel(selectedModelPreset, modelControl?.models)
   const modelOptions = (modelControl?.models ?? []).flatMap((model) => {
@@ -1084,12 +1097,13 @@ const App = () => {
   }, [])
 
   const handleActiveViewChange = useCallback((view: 'home' | 'workout' | 'profile') => {
+    if (view === 'home' && coachActAsLinkId) return
     dismissKeyboard()
     setActiveView(view)
     resetAppViewportScroll()
     requestAnimationFrame(resetAppViewportScroll)
     window.setTimeout(resetAppViewportScroll, 250)
-  }, [dismissKeyboard, resetAppViewportScroll])
+  }, [coachActAsLinkId, dismissKeyboard, resetAppViewportScroll])
 
   const isPlanEditableDate = useCallback((dateId?: string | null) => {
     if (!dateId) return false
@@ -1119,20 +1133,20 @@ const App = () => {
   // The public v1 API supports canonical reads, generation, and per-set
   // actual logging. Arbitrary plan/set rewrites have no browser contract.
   const canGenerateWorkoutSelectedDay = useMemo(() => (
-    isPlanEditableDate(selectedDay?.date ?? todayId)
-  ), [isPlanEditableDate, selectedDay?.date, todayId])
+    isPlanEditableDate(selectedDay?.date ?? todayId) && coachCanEditPrograms
+  ), [coachCanEditPrograms, isPlanEditableDate, selectedDay?.date, todayId])
 
   const canLogSelectedDay = useMemo(() => {
-    if (!canQuerySavedWorkoutSessions) return false
+    if (!canQuerySavedWorkoutSessions || !coachCanEditPrograms) return false
     const ownerId = coachActAsOwnerId ?? currentUserId
     const key = `${ownerId}:${selectedDay?.date ?? todayId}`
     return Boolean(workoutIdByOwnerDateRef.current[key] && workoutRevisionByOwnerDateRef.current[key])
-  }, [canQuerySavedWorkoutSessions, coachActAsOwnerId, currentUserId, selectedDay?.date, todayId, dataVersion])
+  }, [canQuerySavedWorkoutSessions, coachActAsOwnerId, coachCanEditPrograms, currentUserId, selectedDay?.date, todayId, dataVersion])
 
   // Clear day acts on a canonical workout and is offered while something
   // unlogged remains to remove; fully logged history has nothing to clear.
   const canClearSelectedDay = useMemo(() => {
-    if (!canQuerySavedWorkoutSessions) return false
+    if (!canQuerySavedWorkoutSessions || !coachCanEditPrograms) return false
     const targetDate = selectedDay?.date ?? todayId
     const ownerId = coachActAsOwnerId ?? currentUserId
     if (!workoutIdByOwnerDateRef.current[`${ownerId}:${targetDate}`]) return false
@@ -1147,7 +1161,7 @@ const App = () => {
       return exercise.sets.some((_, index) => !states[index]?.done)
     }) || day.extras.length > 0
     return hasLogged ? hasUnlogged : (day.exercises.length > 0 || day.extras.length > 0)
-  }, [canQuerySavedWorkoutSessions, coachActAsOwnerId, currentUserId, dataVersion, selectedDay, todayId])
+  }, [canQuerySavedWorkoutSessions, coachActAsOwnerId, coachCanEditPrograms, currentUserId, dataVersion, selectedDay, todayId])
 
   const hasWeekWorkouts = useMemo(() => (
     weekPlan.days.some((day) => day.exercises.length > 0 || day.extras.length > 0)
@@ -2296,7 +2310,7 @@ const App = () => {
       start: sortedDates[0],
       end: sortedDates[sortedDates.length - 1],
     })
-    const response = await apiFetch(`${API_BASE_URL}/v1/workouts?${params.toString()}`, { headers })
+    const response = await apiFetch(withCoachActAs(`${API_BASE_URL}/v1/workouts?${params.toString()}`), { headers })
     if (!response.ok) {
       throw new Error(`Failed to load workout sessions (${response.status})`)
     }
@@ -2318,6 +2332,7 @@ const App = () => {
     getPrivyAuthHeaders,
     privyAuthenticated,
     privyReady,
+    withCoachActAs,
   ])
 
   const applySavedWorkoutSessionsToWeek = useCallback((
@@ -2631,7 +2646,7 @@ const App = () => {
     try {
       const headers = { 'Content-Type': 'application/json', ...(await getPrivyAuthHeaders()) }
       const response = await apiFetch(
-        `${API_BASE_URL}/v1/workouts/${encodeURIComponent(workoutId)}/sets/${encodeURIComponent(setTarget.setId)}`,
+        withCoachActAs(`${API_BASE_URL}/v1/workouts/${encodeURIComponent(workoutId)}/sets/${encodeURIComponent(setTarget.setId)}`),
         {
           method: 'PATCH',
           headers,
@@ -2706,7 +2721,7 @@ const App = () => {
     try {
       const headers = { 'Content-Type': 'application/json', ...(await getPrivyAuthHeaders()) }
       const response = await apiFetch(
-        `${API_BASE_URL}/v1/workouts/${encodeURIComponent(workoutId)}/sets/${encodeURIComponent(setTarget.setId)}/unlog`,
+        withCoachActAs(`${API_BASE_URL}/v1/workouts/${encodeURIComponent(workoutId)}/sets/${encodeURIComponent(setTarget.setId)}/unlog`),
         {
           method: 'POST',
           headers,
@@ -2788,7 +2803,7 @@ const App = () => {
   }, [bumpData, canLogSelectedDay, getExercise, unlogLoggedSet])
 
   const handleSaveDayNote = useCallback(async (notes: string): Promise<boolean> => {
-    if (!canQuerySavedWorkoutSessions || dayNoteSaving) return false
+    if (!canQuerySavedWorkoutSessions || !coachCanEditPrograms || dayNoteSaving) return false
     const ownerId = coachActAsOwnerId ?? currentUserId
     const targetDate = selectedDay?.date ?? todayId
     const ownerKey = `${ownerId}:${targetDate}`
@@ -2799,7 +2814,7 @@ const App = () => {
     setDayNoteSaving(true)
     try {
       const headers = { 'Content-Type': 'application/json', ...(await getPrivyAuthHeaders()) }
-      const response = await apiFetch(`${API_BASE_URL}/v1/workouts/${encodeURIComponent(workoutId)}/notes`, {
+      const response = await apiFetch(withCoachActAs(`${API_BASE_URL}/v1/workouts/${encodeURIComponent(workoutId)}/notes`), {
         method: 'PATCH',
         headers,
         body: JSON.stringify({ notes, expected_revision: revision, request_id: crypto.randomUUID() }),
@@ -2830,12 +2845,14 @@ const App = () => {
   }, [
     canQuerySavedWorkoutSessions,
     coachActAsOwnerId,
+    coachCanEditPrograms,
     currentUserId,
     dayNoteSaving,
     getPrivyAuthHeaders,
     refreshVisibleWorkoutSessions,
     selectedDay?.date,
     todayId,
+    withCoachActAs,
   ])
 
   const handleSaveExerciseFeedback = useCallback(async (
@@ -2843,7 +2860,7 @@ const App = () => {
     note: string,
     preset: WorkoutFeedbackPreset | null,
   ): Promise<boolean> => {
-    if (!canQuerySavedWorkoutSessions || exerciseFeedbackSaving) return false
+    if (!canQuerySavedWorkoutSessions || !coachCanEditPrograms || exerciseFeedbackSaving) return false
     const ownerId = coachActAsOwnerId ?? currentUserId
     const targetDate = selectedDay?.date ?? todayId
     const ownerKey = `${ownerId}:${targetDate}`
@@ -2855,7 +2872,7 @@ const App = () => {
     try {
       const headers = { 'Content-Type': 'application/json', ...(await getPrivyAuthHeaders()) }
       const response = await apiFetch(
-        `${API_BASE_URL}/v1/workouts/${encodeURIComponent(workoutId)}/exercises/${encodeURIComponent(exerciseId)}/notes`,
+        withCoachActAs(`${API_BASE_URL}/v1/workouts/${encodeURIComponent(workoutId)}/exercises/${encodeURIComponent(exerciseId)}/notes`),
         {
           method: 'PATCH',
           headers,
@@ -2891,12 +2908,14 @@ const App = () => {
     bumpData,
     canQuerySavedWorkoutSessions,
     coachActAsOwnerId,
+    coachCanEditPrograms,
     currentUserId,
     exerciseFeedbackSaving,
     getPrivyAuthHeaders,
     refreshVisibleWorkoutSessions,
     selectedDay?.date,
     todayId,
+    withCoachActAs,
   ])
 
   const handleRefreshSession = useCallback(async () => {
@@ -3042,7 +3061,7 @@ const App = () => {
     pendingWorkoutDatesRef.current.add(targetDate)
     try {
       const headers = { 'Content-Type': 'application/json', ...await getPrivyAuthHeaders() }
-      const response = await apiFetch(`${API_BASE_URL}/v1/workouts/generate`, {
+      const response = await apiFetch(withCoachActAs(`${API_BASE_URL}/v1/workouts/generate`), {
         method: 'POST',
         headers,
         body: JSON.stringify({
@@ -3083,6 +3102,7 @@ const App = () => {
     selectedDay?.date,
     t,
     todayId,
+    withCoachActAs,
   ])
 
   const handleGenerateDayWorkout = useCallback(() => {
@@ -3101,7 +3121,7 @@ const App = () => {
     try {
       const headers = { 'Content-Type': 'application/json', ...await getPrivyAuthHeaders() }
       const ownerKey = `${coachActAsOwnerId ?? currentUserId}:${targetDate}`
-      const response = await apiFetch(`${API_BASE_URL}/v1/workouts/copy-last-week`, {
+      const response = await apiFetch(withCoachActAs(`${API_BASE_URL}/v1/workouts/copy-last-week`), {
         method: 'POST',
         headers,
         body: JSON.stringify({
@@ -3152,6 +3172,7 @@ const App = () => {
     selectedDay?.date,
     t,
     todayId,
+    withCoachActAs,
   ])
 
   const handleClearWorkoutDay = useCallback(async () => {
@@ -3173,7 +3194,7 @@ const App = () => {
     pendingWorkoutDatesRef.current.add(targetDate)
     try {
       const headers = { 'Content-Type': 'application/json', ...await getPrivyAuthHeaders() }
-      const response = await apiFetch(`${API_BASE_URL}/v1/workouts/${workoutId}/clear`, {
+      const response = await apiFetch(withCoachActAs(`${API_BASE_URL}/v1/workouts/${workoutId}/clear`), {
         method: 'POST',
         headers,
         body: JSON.stringify({ expected_revision: expectedRevision, request_id: crypto.randomUUID() }),
@@ -3232,6 +3253,7 @@ const App = () => {
     todayId,
     weekPlan.days,
     weekPlan.weekStart,
+    withCoachActAs,
   ])
 
   const handleGenerateDayWorkoutWithCoach = useCallback(() => {
@@ -3881,6 +3903,34 @@ const App = () => {
     showWorkoutDetail(id, type)
   }, [showWorkoutDetail])
 
+  const resetVisibleWeek = useCallback(() => {
+    // The owner changed: drop the previous account's in-memory week and let the
+    // canonical hydration effect pull the new owner's records.
+    workoutIdByOwnerDateRef.current = {}
+    workoutRevisionByOwnerDateRef.current = {}
+    weekSetLogsRef.current = {}
+    applyWeekPlan(buildWeekPlanFromSingleDay(todayId, [], [], profile.language), {
+      selectedDate: todayId,
+      logsByDay: {},
+    })
+  }, [applyWeekPlan, profile.language, todayId])
+
+  const handleStartCoachView = useCallback((target: CoachActAsTarget) => {
+    setCoachActAsLinkId(target.linkId)
+    setCoachActAsLabel(target.label)
+    setCoachActAsPermissions(target.permissions)
+    resetVisibleWeek()
+    handleActiveViewChange('workout')
+  }, [handleActiveViewChange, resetVisibleWeek])
+
+  const handleStopCoachView = useCallback(() => {
+    setCoachActAsLinkId(null)
+    setCoachActAsLabel('')
+    setCoachActAsPermissions(null)
+    resetVisibleWeek()
+    handleActiveViewChange('workout')
+  }, [handleActiveViewChange, resetVisibleWeek])
+
   const handleProfileChange = useCallback((field: 'language' | 'fontScale', value: string) => {
     if (field === 'language') {
       const normalized = normalizeLanguage(value) ?? 'en'
@@ -4019,6 +4069,7 @@ const App = () => {
             onSaveDayNote={handleSaveDayNote}
             onSaveExerciseFeedback={handleSaveExerciseFeedback}
             onCoachSend={handleCoachSend}
+            actAsLinkId={coachActAsLinkId}
           />
           <ProfileView
             telegramControl={privyAuthenticated ? <TelegramLink apiBase={API_BASE_URL} getHeaders={getPrivyAuthHeaders} /> : undefined}
@@ -4028,14 +4079,22 @@ const App = () => {
             onChange={handleProfileChange}
             onAuthClick={handleAuthClick}
             authState={authState}
+            apiBaseUrl={API_BASE_URL}
+            getHeaders={getPrivyAuthHeaders}
+            actAsLinkId={coachActAsLinkId}
+            onStartActAs={handleStartCoachView}
+            onStopActAs={handleStopCoachView}
           />
         </div>
 
         <TabBar
           activeView={activeView}
           onChange={handleActiveViewChange}
-          coachModeActive={Boolean(coachActAsOwnerId)}
-          coachContextLabel=""
+          coachModeActive={Boolean(coachActAsLinkId)}
+          coachContextLabel={coachActAsLabel}
+          onExitCoachMode={coachActAsLinkId ? handleStopCoachView : undefined}
+          disabledTab={coachActAsLinkId ? 'home' : null}
+          disabledNotice={coachActAsLinkId ? t('coach.chatDisabledNotice') : ''}
           leadingControl={activeView === 'home' ? (
             <ChatOverflowMenu onRefresh={handleRefreshSession} />
           ) : (

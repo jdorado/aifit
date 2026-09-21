@@ -29,6 +29,7 @@ type ExerciseHistoryFetch = {
   exerciseId: string
   before?: string
   limit?: number
+  actAsLinkId?: string | null
 }
 
 const asRecord = (value: unknown): Record<string, unknown> | null => (
@@ -85,9 +86,11 @@ export const fetchExerciseHistory = async ({
   exerciseId,
   before,
   limit = 20,
+  actAsLinkId = null,
 }: ExerciseHistoryFetch): Promise<ExerciseHistorySet[]> => {
   const params = new URLSearchParams({ limit: String(limit) })
   if (before) params.set('before', before)
+  if (actAsLinkId) params.set('act_as_link_id', actAsLinkId)
   const response = await fetch(
     `${apiBaseUrl}/v1/exercises/${encodeURIComponent(exerciseId)}/history?${params.toString()}`,
     { headers: await getHeaders() },
