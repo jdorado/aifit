@@ -24,6 +24,7 @@ def override_segments() -> list[dict]:
         "segment_id": "seg_main",
         "order": 1,
         "kind": "straight_sets",
+        "title": "Press Main",
         "rounds": 2,
         "rest_after_round_seconds": 60,
         "slots": [{

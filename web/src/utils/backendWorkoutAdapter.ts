@@ -66,6 +66,7 @@ type BackendSegment = {
   segment_id: string
   order: number
   kind: 'warmup' | 'straight_sets' | 'superset' | 'circuit' | 'interval' | 'mobility' | 'cooldown'
+  title?: string | null
   rounds: number
   rest_after_round_seconds: number
   items: BackendWorkoutItem[]
@@ -200,6 +201,10 @@ const toExercise = (segment: BackendSegment, item: BackendWorkoutItem): WorkoutE
     .split(/\r?\n/)
     .map((cue) => cue.trim())
     .filter(Boolean)
+  // Segment titles are agent-authored (required on write); untitled history
+  // falls back to the kind label. Grouping never uses this display string —
+  // see circuit.key / circuitGroupKey().
+  const label = segment.title?.trim() || sectionLabel(segment.kind)
 
   return {
     id: item.exercise_instance_id,
@@ -207,7 +212,7 @@ const toExercise = (segment: BackendSegment, item: BackendWorkoutItem): WorkoutE
     standardName: snapshot.name,
     exerciseKey: snapshot.exercise_id,
     movementFamilyKey: snapshot.movement_pattern,
-    section: sectionLabel(segment.kind),
+    section: label,
     summary: exerciseSummary(item.sets, metric),
     restSec: segment.rest_after_round_seconds || undefined,
     metric,
@@ -225,7 +230,7 @@ const toExercise = (segment: BackendSegment, item: BackendWorkoutItem): WorkoutE
     ...(segment.kind === 'circuit' || segment.kind === 'superset'
       ? {
         circuit: {
-          name: sectionLabel(segment.kind),
+          name: label,
           key: segment.segment_id,
           rounds: segment.rounds,
           restAfterSec: segment.rest_after_round_seconds,

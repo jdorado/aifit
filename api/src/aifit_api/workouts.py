@@ -195,6 +195,7 @@ class Segment(StrictModel):
     segment_id: str = Field(pattern=r"^seg_[a-z0-9_]{3,120}$")
     order: int = Field(ge=1, le=100)
     kind: Literal["warmup", "straight_sets", "superset", "circuit", "interval", "mobility", "cooldown"]
+    title: str | None = Field(default=None, min_length=1, max_length=80)
     rounds: int = Field(ge=1, le=10)
     rest_after_round_seconds: int = Field(default=0, ge=0, le=3_600)
     slots: list[Slot] = Field(min_length=1, max_length=12)
@@ -234,6 +235,8 @@ class BlueprintDay(StrictModel):
         exercise_ids = [candidate.exercise_id for segment in self.segments for slot in segment.slots for candidate in slot.candidates]
         if len(exercise_ids) != len(set(exercise_ids)):
             raise ValueError("each day candidate exercise belongs to exactly one slot")
+        if self.kind == "training" and any(not segment.title for segment in self.segments):
+            raise ValueError("training day segments need titles")
         return self
 
 
@@ -328,6 +331,8 @@ class WorkoutOverrideInput(StrictModel):
         exercise_ids = [candidate.exercise_id for candidate in candidates]
         if len(exercise_ids) != len(set(exercise_ids)):
             raise ValueError("override candidate exercises must be unique")
+        if any(not segment.title for segment in self.segments):
+            raise ValueError("override segments need titles")
         return self
 
 
@@ -778,7 +783,8 @@ class WorkoutService:
                     decisions.append({"slot_id": slot["slot_id"], "candidate_id": candidate["candidate_id"], "source": input.source,
                                       "probabilities": probabilities, "load": load_decision})
             segments.append({"segment_id": segment["segment_id"], "order": segment["order"], "kind": segment["kind"], "rounds": segment["rounds"],
-                             "rest_after_round_seconds": segment["rest_after_round_seconds"], "items": items})
+                             "rest_after_round_seconds": segment["rest_after_round_seconds"], "items": items,
+                             "title": segment.get("title")})
         timestamp = utc_now()
         return {"account_id": account_id, "workout_id": new_id("wrk"), "schema_version": SCHEMA_VERSION, "revision": new_revision(),
                 "date": day["date"], "timezone": blueprint["timezone"], "status": "planned", "title": day["title"], "segments": segments,

@@ -46,11 +46,13 @@ Artifacts (full typed schema and rules are in the installed aifit skill):
     secondary_muscles, equipment_kind, laterality, load_basis, metrics,
     instructions_md
   blueprint: schema_version=1, timezone, start_date, end_date, hard_constraints,
-    days[{day_id,date,kind,title,intent_md,segments[{segment_id,order,kind,rounds,
+    days[{day_id,date,kind,title,intent_md,segments[{segment_id,order,kind,title,rounds,
     rest_after_round_seconds,slots[{slot_id,order,role,selection_count,candidates[
     {candidate_id,exercise_id,exercise_revision,priority,rationale_md,
     equipment_profile_id,prescription{metric,target{reps|duration_seconds,load,rpe},
     rest_seconds,tempo},progression}]}]}]}]
+  Every training-day and override segment needs a short title (1-80 chars,
+  e.g. "Chest + Back", "Warm-up Flow") naming its focus.
   override: date, title, reason_md, segments (every slot exactly one candidate)
   set actual: status, reps, duration_seconds, load, rpe, completed_at
   swap: workout_id, exercise_instance_id, expected_blueprint_revision, reason

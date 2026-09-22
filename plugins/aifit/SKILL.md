@@ -105,6 +105,7 @@ Revise an existing exercise by passing the same `exercise_id` with
           "segment_id": "seg_main",
           "order": 1,
           "kind": "straight_sets",
+          "title": "Pull Main",
           "rounds": 3,
           "rest_after_round_seconds": 90,
           "slots": [
@@ -165,6 +166,10 @@ Rules:
 - IDs and `order` values are unique inside their collection; every day date is
   inside the declared period; one exercise cannot appear twice in a day.
 - A training day has at least one segment; a rest day has none.
+- Every training-day and override segment carries a short `title` (1-80
+  chars) naming its focus, e.g. `"Warm-up Flow"`, `"Chest + Back"`,
+  `"Arms"`. The app shows this title; untitled history falls back to the
+  kind label.
 - Segment `kind` is one of `warmup`, `straight_sets`, `superset`, `circuit`,
   `interval`, `mobility`, `cooldown`; `rounds` is 1-10.
 - A blueprint slot needs more candidates than `selection_count`, so one
@@ -192,7 +197,7 @@ Rules:
   "date": "2026-09-21",
   "title": "Upper A (busy gym)",
   "reason_md": "Machine occupied.",
-  "segments": [{"segment_id": "seg_main", "order": 1, "kind": "straight_sets", "rounds": 3,
+  "segments": [{"segment_id": "seg_main", "order": 1, "kind": "straight_sets", "title": "Press Main", "rounds": 3,
     "rest_after_round_seconds": 90, "slots": [{"slot_id": "slot_press", "order": 1, "role": "horizontal_push",
       "selection_count": 1, "candidates": [{"candidate_id": "cand_press", "exercise_id": "ex_dumbbell_press",
         "exercise_revision": "rev_0123456789abcdef0123456789abcdef", "priority": 1, "rationale_md": "Resolved for today.",
