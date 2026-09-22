@@ -3206,11 +3206,19 @@ const App = () => {
         throw new Error(detailMessage || t('workout.clearFailed'))
       }
       const receipt = await response.json() as BackendWorkoutReceipt
-      pendingWorkoutDatesRef.current.delete(targetDate)
       if (receipt.workout) {
-        applySavedWorkoutSessionToWeek(backendWorkoutToSession(receipt.workout, currentUserId))
+        const saved = backendWorkoutToSession(receipt.workout, currentUserId)
+        // The reduced day is authoritative. Release the in-flight guard only
+        // for the synchronous apply, then hold it again through the refresh
+        // below so a stale pre-clear hydration cannot restore removed sets.
+        pendingWorkoutDatesRef.current.delete(targetDate)
+        applySavedWorkoutSessionToWeek(saved)
+        pendingWorkoutDatesRef.current.add(targetDate)
       } else {
         // The canonical record is gone: render the selected day as empty.
+        // Keep the in-flight guard held through the refresh below and stamp
+        // the suppression time so a stale pre-clear hydration cannot re-apply
+        // the just-deleted workout.
         delete workoutIdByOwnerDateRef.current[ownerKey]
         delete workoutRevisionByOwnerDateRef.current[ownerKey]
         const clearedDay: WeekPlanDay = {
@@ -3219,6 +3227,7 @@ const App = () => {
           exercises: [],
           extras: [],
           isRest: true,
+          autoFillSuppressedAt: (receipt as unknown as { updated_at?: string }).updated_at ?? new Date().toISOString(),
           planNotes: '',
           notes: '',
         }
