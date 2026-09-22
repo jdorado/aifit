@@ -6,7 +6,7 @@ from fastapi import HTTPException
 from aifit_api import model_policy
 
 
-JUAN = "did:privy:owner"
+OWNER = "did:privy:owner"
 OTHER = "did:privy:other"
 DEEPSEEK = {"cli": "codex", "model": "deepseek/deepseek-v4.1-flash", "effort": "max"}
 LUNA = {"cli": "codex", "model": "gpt-5.6-luna", "effort": "max"}
@@ -23,7 +23,7 @@ def clear_policy_cache(monkeypatch):
 def configure(tmp_path, monkeypatch):
     path = tmp_path / "model-policy.json"
     path.write_text(json.dumps({
-        "privileged_subjects": [JUAN, "did:privy:member_a", "did:privy:member_b"],
+        "privileged_subjects": [OWNER, "did:privy:member_a", "did:privy:member_b"],
         "default": [DEEPSEEK],
         "privileged": [DEEPSEEK, LUNA],
     }))
@@ -63,7 +63,7 @@ def test_default_account_sees_only_curated_choice(tmp_path, monkeypatch):
 
 def test_privileged_account_sees_curated_choices(tmp_path, monkeypatch):
     configure(tmp_path, monkeypatch)
-    filtered = model_policy.filter_control(control(), JUAN)
+    filtered = model_policy.filter_control(control(), OWNER)
     assert [item["id"] for item in filtered["presets"]] == ["deepseek", "luna"]
     assert filtered["selected_id"] == "luna"
 

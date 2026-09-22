@@ -12,13 +12,13 @@ from aifit_api.auth import Identity
 
 DEEPSEEK = {"cli": "codex", "model": "deepseek/deepseek-v4.1-flash", "effort": "max"}
 LUNA = {"cli": "codex", "model": "gpt-5.6-luna", "effort": "max"}
-JUAN = "did:privy:owner"
+OWNER = "did:privy:owner"
 
 
 def configure_policy(tmp_path, monkeypatch, privileged=None):
     path = tmp_path / "model-policy.json"
     path.write_text(json.dumps({
-        "privileged_subjects": [JUAN],
+        "privileged_subjects": [OWNER],
         "default": [DEEPSEEK],
         "privileged": privileged or [DEEPSEEK, LUNA],
     }))
@@ -285,7 +285,7 @@ async def test_privileged_chat_models_filter_without_auto_select(tmp_path, monke
     monkeypatch.setattr(main, "account_for", lambda *_args: async_value({"account_id": "acc_1", "tenant_id": "ten_1"}))
     monkeypatch.setattr(main, "verified_binding", lambda *_args: async_value({"bindingId": "binding_1"}))
     monkeypatch.setattr(main, "ez_call", ez_call)
-    result = await main.chat_models(Identity(subject=JUAN, email="owner@example.com"))
+    result = await main.chat_models(Identity(subject=OWNER, email="owner@example.com"))
     assert result["selected_id"] == ""
     assert calls == [None]
 

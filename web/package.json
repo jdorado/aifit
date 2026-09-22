@@ -1,7 +1,8 @@
 {
-  "name": "frontend",
+  "name": "aifit-web",
   "private": true,
   "version": "0.0.0",
+  "description": "The AIFit web app: the removable interaction surface over the canonical API.",
   "license": "MIT",
   "scripts": {
     "dev": "node scripts/dev.cjs",
