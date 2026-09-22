@@ -10,11 +10,20 @@ export type WorkoutSet = {
 
 export type CircuitMeta = {
     name: string
+    // Stable group identity: the backend segment id. Display keeps `name`.
+    // Untitled segments of the same kind share a name, so grouping by name
+    // merges distinct circuits (e.g. three 2-exercise circuits render as one
+    // group of 6). Group by circuitGroupKey() instead.
+    key?: string
     rounds?: number
     restAfterSec?: number
     order?: number
     totalExercises?: number
 }
+
+export const circuitGroupKey = (circuit?: CircuitMeta): string | undefined => (
+    circuit?.key ?? circuit?.name
+)
 
 export type ExerciseCategory =
     'strength'

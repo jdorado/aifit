@@ -3,6 +3,7 @@ import { usePrivy } from '@privy-io/react-auth'
 import { marked } from 'marked'
 import { formatDurationForDisplay, normalizeWorkoutTargetText } from './utils/workoutDisplay'
 import type { WorkoutExercise, WorkoutExtra } from './data/testWorkout'
+import { circuitGroupKey } from './data/testWorkout'
 import { backendWorkoutToSession, type BackendWorkoutReceipt } from './utils/backendWorkoutAdapter'
 import { I18nProvider, createI18n } from './i18n'
 import { normalizeLanguage, type Language } from './i18n/strings'
@@ -1171,10 +1172,10 @@ const App = () => {
     workoutExercisesRef.current.find((exercise) => exercise.id === id)
   ), [])
 
-  const getCircuitItems = useCallback((circuitName: string) => (
+  const getCircuitItems = useCallback((circuitKey: string) => (
     workoutExercisesRef.current
       .map((exercise, index) => ({ exercise, index }))
-      .filter((item) => item.exercise.circuit?.name === circuitName)
+      .filter((item) => circuitGroupKey(item.exercise.circuit) === circuitKey)
       .sort((a, b) => {
         const orderA = a.exercise.circuit?.order ?? a.index
         const orderB = b.exercise.circuit?.order ?? b.index
@@ -1198,12 +1199,12 @@ const App = () => {
     return stateList
   }, [])
 
-  const getNextPendingCircuitExercise = useCallback((circuitName: string): WorkoutExercise | null => {
+  const getNextPendingCircuitExercise = useCallback((circuitKey: string): WorkoutExercise | null => {
     let nextExercise: WorkoutExercise | null = null
     let nextRoundIndex = Number.POSITIVE_INFINITY
     let nextOrder = Number.POSITIVE_INFINITY
 
-    getCircuitItems(circuitName).forEach(({ exercise }, order) => {
+    getCircuitItems(circuitKey).forEach(({ exercise }, order) => {
       const stateList = setLogsRef.current[exercise.id] ?? []
       const nextSetIndex = exercise.sets.findIndex((_, index) => !stateList[index]?.done)
       if (nextSetIndex === -1) return
@@ -1759,7 +1760,7 @@ const App = () => {
     let stateList = ensureExerciseStateList(exercise)
     let nextIndex = exercise.sets.findIndex((_, index) => !stateList[index]?.done)
     if (nextIndex === -1 && exercise.circuit?.name) {
-      const pendingExercise = getNextPendingCircuitExercise(exercise.circuit.name)
+      const pendingExercise = getNextPendingCircuitExercise(circuitGroupKey(exercise.circuit) ?? exercise.circuit.name)
       if (pendingExercise && pendingExercise.id !== exercise.id) {
         exercise = pendingExercise
         stateList = ensureExerciseStateList(exercise)
@@ -1809,7 +1810,7 @@ const App = () => {
     }
 
     if (circuitName) {
-      const circuitItems = getCircuitItems(circuitName)
+      const circuitItems = getCircuitItems(circuitGroupKey(exercise.circuit) ?? circuitName)
       const circuitExercises = circuitItems.map((item) => item.exercise)
       if (circuitExercises.length) {
         const getWorkSetIndex = (sets: Array<{ isWarmup?: boolean }>, workIndex: number) => {
@@ -2549,6 +2550,31 @@ const App = () => {
     todayId,
     weekStartDayIndex,
   ])
+
+  // Agent-side changes (new blueprint revision, override) arrive with no
+  // push signal, and the initial hydration runs once per session. Revalidate
+  // the visible strip when the app regains focus so an externally published
+  // revision replaces the stale snapshot. Cooldown keeps background tab
+  // churn to one cheap range fetch per minute at most.
+  const lastFocusRefreshRef = useRef(0)
+  useEffect(() => {
+    if (!currentUserId || !canQuerySavedWorkoutSessions || !isBackendHealthy) return
+    const revalidate = () => {
+      const now = Date.now()
+      if (now - lastFocusRefreshRef.current < 60_000) return
+      lastFocusRefreshRef.current = now
+      void refreshVisibleWorkoutSessions().catch(() => {})
+    }
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') revalidate()
+    }
+    window.addEventListener('focus', revalidate)
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      window.removeEventListener('focus', revalidate)
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
+  }, [currentUserId, canQuerySavedWorkoutSessions, isBackendHealthy, refreshVisibleWorkoutSessions])
 
   const syncLoggedSet = useCallback(async (exerciseId: string, index: number) => {
     // A set is only rendered as logged when its canonical actual lands. Any

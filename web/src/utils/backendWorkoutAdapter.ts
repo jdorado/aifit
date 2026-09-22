@@ -226,6 +226,7 @@ const toExercise = (segment: BackendSegment, item: BackendWorkoutItem): WorkoutE
       ? {
         circuit: {
           name: sectionLabel(segment.kind),
+          key: segment.segment_id,
           rounds: segment.rounds,
           restAfterSec: segment.rest_after_round_seconds,
           order: item.order,

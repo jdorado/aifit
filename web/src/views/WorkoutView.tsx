@@ -7,6 +7,7 @@ import WeekStrip from '../components/workout/WeekStrip'
 import WorkoutMiniBar from '../components/workout/WorkoutMiniBar'
 import WorkoutPlanList from '../components/workout/WorkoutPlanList'
 import type { WorkoutExercise, WorkoutExtra } from '../data/testWorkout'
+import { circuitGroupKey } from '../data/testWorkout'
 import type { ActiveEntryType, ChatMessage, HoldTimerState, SetState } from '../types/app'
 import {
   formatCircuitTarget,
@@ -168,13 +169,15 @@ const WorkoutView: FC<WorkoutViewProps> = ({
 
     exercises.forEach((exercise, index) => {
       const circuit = exercise.circuit
-      if (!circuit?.name) return
-      const existing = groups.get(circuit.name) ?? { items: [], rounds: circuit.rounds, restAfterSec: circuit.restAfterSec, totalExercises: circuit.totalExercises }
+      if (!circuit) return
+      const groupKey = circuitGroupKey(circuit)
+      if (!groupKey) return
+      const existing = groups.get(groupKey) ?? { items: [], rounds: circuit.rounds, restAfterSec: circuit.restAfterSec, totalExercises: circuit.totalExercises }
       existing.items.push({ exercise, index })
       if (existing.rounds === undefined && circuit.rounds !== undefined) existing.rounds = circuit.rounds
       if (existing.restAfterSec === undefined && circuit.restAfterSec !== undefined) existing.restAfterSec = circuit.restAfterSec
       if (existing.totalExercises === undefined && circuit.totalExercises !== undefined) existing.totalExercises = circuit.totalExercises
-      groups.set(circuit.name, existing)
+      groups.set(groupKey, existing)
     })
 
     return groups
@@ -182,8 +185,9 @@ const WorkoutView: FC<WorkoutViewProps> = ({
 
   const activeCircuit = useMemo(() => {
     const circuitName = activeExercise?.circuit?.name
-    if (!circuitName || !activeExercise) return null
-    const group = circuitGroups.get(circuitName)
+    const groupKey = circuitGroupKey(activeExercise?.circuit)
+    if (!circuitName || !groupKey || !activeExercise) return null
+    const group = circuitGroups.get(groupKey)
     const items = group?.items.length
       ? group.items
       : [{ exercise: activeExercise, index: 0 }]
