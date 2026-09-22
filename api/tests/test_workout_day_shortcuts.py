@@ -70,6 +70,85 @@ async def log_first_set(service: WorkoutService, workout: dict, request_id: str)
 
 
 @pytest.mark.asyncio
+async def test_copy_last_week_keeps_segment_labels_from_the_source_day():
+    database = DayShortcutDatabase()
+    source_segment = {
+        "segment_id": "seg_source",
+        "order": 1,
+        "kind": "circuit",
+        "title": "Arms Pair",
+        "rounds": 2,
+        "rest_after_round_seconds": 60,
+        "items": [{
+            "exercise_instance_id": "wex_source",
+            "slot_id": "slot_legacy_biceps",
+            "candidate_id": "cand_legacy_biceps",
+            "order": 1,
+            "exercise_snapshot": {
+                "exercise_id": "ex_biceps_curl_machine", "exercise_revision": "rev_" + "1" * 32,
+                "name": "Biceps Curl Machine", "movement_pattern": "elbow_flexion",
+                "primary_muscles": ["biceps"], "secondary_muscles": [], "equipment_kind": "machine",
+                "laterality": "bilateral", "load_basis": "total", "equipment_profile_id": None,
+            },
+            "sets": [{"set_id": "set_source", "kind": "work", "target": {"reps": {"min": 8, "max": 8}, "load": {"value": 40, "unit": "kg"}}, "actual": None, "round": 1}],
+            "cues_md": "",
+        }],
+    }
+    database.documents["workouts"].append({
+        "account_id": "acc_one", "workout_id": "wrk_source", "revision": "rev_" + "2" * 32,
+        "date": SOURCE_DATE, "timezone": "Asia/Dubai", "status": "planned", "title": "Mon",
+        "notes": "", "segments": [source_segment], "lineage": {"source": "legacy_import"},
+        "created_at": "2026-09-21T10:00:00Z", "updated_at": "2026-09-21T10:00:00Z",
+    })
+
+    service = WorkoutService(database)
+    response = await service.copy_last_week("acc_one", CopyLastWeekInput(date=TARGET_DATE, request_id="copy-title-001"))
+
+    copied = response["workout"]["segments"][0]
+    assert copied["title"] == "Arms Pair"
+    assert copied["kind"] == "circuit"
+    assert copied["items"][0]["sets"][0]["actual"] is None
+
+
+@pytest.mark.asyncio
+async def test_copy_last_week_omits_an_absent_segment_label():
+    database = DayShortcutDatabase()
+    database.documents["workouts"].append({
+        "account_id": "acc_one", "workout_id": "wrk_source", "revision": "rev_" + "3" * 32,
+        "date": SOURCE_DATE, "timezone": "Asia/Dubai", "status": "planned", "title": "Mon",
+        "notes": "", "lineage": {"source": "legacy_import"},
+        "segments": [{
+            "segment_id": "seg_source",
+            "order": 1,
+            "kind": "circuit",
+            "rounds": 2,
+            "rest_after_round_seconds": 60,
+            "items": [{
+                "exercise_instance_id": "wex_source",
+                "slot_id": "slot_legacy_biceps",
+                "candidate_id": "cand_legacy_biceps",
+                "order": 1,
+                "exercise_snapshot": {
+                    "exercise_id": "ex_biceps_curl_machine", "exercise_revision": "rev_" + "1" * 32,
+                    "name": "Biceps Curl Machine", "movement_pattern": "elbow_flexion",
+                    "primary_muscles": ["biceps"], "secondary_muscles": [], "equipment_kind": "machine",
+                    "laterality": "bilateral", "load_basis": "total", "equipment_profile_id": None,
+                },
+                "sets": [{"set_id": "set_source", "kind": "work", "target": {"reps": {"min": 8, "max": 8}, "load": {"value": 40, "unit": "kg"}}, "actual": None, "round": 1}],
+                "cues_md": "",
+            }],
+        }],
+        "created_at": "2026-09-21T10:00:00Z", "updated_at": "2026-09-21T10:00:00Z",
+    })
+
+    service = WorkoutService(database)
+    response = await service.copy_last_week("acc_one", CopyLastWeekInput(date=TARGET_DATE, request_id="copy-002"))
+
+    for segment in response["workout"]["segments"]:
+        assert "title" not in segment
+
+
+@pytest.mark.asyncio
 async def test_copy_last_week_creates_fresh_planned_structure():
     database = DayShortcutDatabase()
     service, source = await generated_day(database)

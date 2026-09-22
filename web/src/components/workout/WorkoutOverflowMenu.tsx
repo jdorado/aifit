@@ -7,7 +7,6 @@ type WorkoutOverflowMenuProps = {
   canCopyLastWeek: boolean
   canClearWorkout: boolean
   onGenerateWorkout: () => void
-  onVaryWorkout: () => void
   onGenerateWithCoach: () => void
   onCopyLastWeek: () => void
   onClearWorkout: () => void
@@ -20,7 +19,6 @@ const WorkoutOverflowMenu: FC<WorkoutOverflowMenuProps> = ({
   canCopyLastWeek,
   canClearWorkout,
   onGenerateWorkout,
-  onVaryWorkout,
   onGenerateWithCoach,
   onCopyLastWeek,
   onClearWorkout,
@@ -146,18 +144,6 @@ const WorkoutOverflowMenu: FC<WorkoutOverflowMenuProps> = ({
               />
             </svg>
             <span>{t('workout.generateAction')}</span>
-          </button>
-          <button
-            className="header-menu-item"
-            type="button"
-            role="menuitem"
-            onClick={() => closeAfter(onVaryWorkout)}
-            disabled={!canGeneratePlan}
-          >
-            <svg className="header-menu-item-icon" viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M4 7h4l8 10h4M16 7h4v4M4 17h4l2-2M16 17h4v-4" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-            <span>{t('workout.varyAction')}</span>
           </button>
           <button
             className="header-menu-item"

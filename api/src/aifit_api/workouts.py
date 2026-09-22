@@ -12,6 +12,7 @@ from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from functools import wraps
 from hashlib import sha256
+from re import escape as regex_escape
 from typing import Any, Literal
 from uuid import uuid4
 
@@ -23,7 +24,7 @@ from pymongo.errors import DuplicateKeyError, OperationFailure
 SCHEMA_VERSION = 1
 SEGMENT_KINDS = {"warmup", "straight_sets", "superset", "circuit", "interval", "mobility", "cooldown"}
 LOAD_BASES = {"total", "per_side", "per_hand", "machine_stack", "bodyweight", "assisted", "band_level"}
-LineageSource = Literal["default", "jev", "agent_override", "copy_last_week"]
+LineageSource = Literal["default", "jev", "agent_override", "copy_last_week", "legacy_import"]
 
 
 class WorkoutDomainError(ValueError):
@@ -197,6 +198,7 @@ class Segment(StrictModel):
     segment_id: str = Field(pattern=r"^seg_[a-z0-9_]{3,120}$")
     order: int = Field(ge=1, le=100)
     kind: Literal["warmup", "straight_sets", "superset", "circuit", "interval", "mobility", "cooldown"]
+    title: str | None = Field(default=None, min_length=1, max_length=80)
     rounds: int = Field(ge=1, le=10)
     rest_after_round_seconds: int = Field(default=0, ge=0, le=3_600)
     slots: list[Slot] = Field(min_length=1, max_length=12)
@@ -236,6 +238,8 @@ class BlueprintDay(StrictModel):
         exercise_ids = [candidate.exercise_id for segment in self.segments for slot in segment.slots for candidate in slot.candidates]
         if len(exercise_ids) != len(set(exercise_ids)):
             raise ValueError("each day candidate exercise belongs to exactly one slot")
+        if self.kind == "training" and any(not segment.title for segment in self.segments):
+            raise ValueError("training day segments need titles")
         return self
 
 
@@ -309,6 +313,7 @@ class ClearWorkoutInput(StrictModel):
 class SwapInput(StrictModel):
     source: Literal["default", "jev"] = "default"
     reason: str = Field(min_length=1, max_length=500)
+    target_candidate_id: str | None = Field(default=None, pattern=r"^cand_[a-z0-9_]{3,120}$")
     expected_revision: str = Field(pattern=r"^rev_[a-f0-9]{32}$")
     expected_blueprint_revision: str | None = Field(default=None, pattern=r"^rev_[a-f0-9]{32}$")
     request_id: str = Field(min_length=1, max_length=160, pattern=r"^[A-Za-z0-9_.:-]+$")
@@ -341,6 +346,8 @@ class WorkoutOverrideInput(StrictModel):
         exercise_ids = [candidate.exercise_id for candidate in candidates]
         if len(exercise_ids) != len(set(exercise_ids)):
             raise ValueError("override candidate exercises must be unique")
+        if any(not segment.title for segment in self.segments):
+            raise ValueError("override segments need titles")
         return self
 
 
@@ -541,6 +548,8 @@ class WorkoutService:
         await self.db.program_state.create_index([("account_id", ASCENDING)], unique=True)
         await self.db.workouts.create_index([("account_id", ASCENDING), ("date", ASCENDING)], unique=True)
         await self.db.performance_index.create_index([("account_id", ASCENDING), ("load_key", ASCENDING), ("completed_at", DESCENDING)])
+        await self.db.performance_index.create_index([("account_id", ASCENDING), ("exercise_id", ASCENDING), ("completed_at", DESCENDING)])
+        await self.db.performance_index.create_index([("account_id", ASCENDING), ("movement_pattern", ASCENDING), ("completed_at", DESCENDING)])
         await self.db.mutation_receipts.create_index([("account_id", ASCENDING), ("request_id", ASCENDING)], unique=True)
 
     async def _receipt(self, account_id: str, request_id: str, fingerprint: str) -> dict[str, Any] | None:
@@ -813,7 +822,8 @@ class WorkoutService:
                     decisions.append({"slot_id": slot["slot_id"], "candidate_id": candidate["candidate_id"], "source": input.source,
                                       "probabilities": probabilities, "load": load_decision})
             segments.append({"segment_id": segment["segment_id"], "order": segment["order"], "kind": segment["kind"], "rounds": segment["rounds"],
-                             "rest_after_round_seconds": segment["rest_after_round_seconds"], "items": items})
+                             "rest_after_round_seconds": segment["rest_after_round_seconds"], "items": items,
+                             "title": segment.get("title")})
         timestamp = utc_now()
         return {"account_id": account_id, "workout_id": new_id("wrk"), "schema_version": SCHEMA_VERSION, "revision": new_revision(),
                 "date": day["date"], "timezone": blueprint["timezone"], "status": "planned", "title": day["title"], "notes": "", "segments": segments,
@@ -990,6 +1000,9 @@ class WorkoutService:
             return
         snapshot = item["exercise_snapshot"]
         document = {"account_id": account_id, "load_key": exercise_load_key(snapshot), "workout_id": workout["workout_id"],
+                    "exercise_id": snapshot.get("exercise_id"), "exercise_name": snapshot.get("name"),
+                    "movement_pattern": snapshot.get("movement_pattern") or "",
+                    "primary_muscles": list(snapshot.get("primary_muscles") or []),
                     "exercise_instance_id": item["exercise_instance_id"], "set_id": set_row["set_id"], "date": workout["date"],
                     "completed_at": actual["completed_at"], "load": load, "reps": actual.get("reps"), "duration_seconds": actual.get("duration_seconds"),
                     "rpe": actual.get("rpe")}
@@ -1049,25 +1062,52 @@ class WorkoutService:
         response["workout"] = self._public(workout, ("account_id", "_id"))
         return await self._save_receipt(account_id, input.request_id, fingerprint, response)
 
-    @transactional_mutation
-    async def swap(self, account_id: str, workout_id: str, instance_id: str, input: SwapInput) -> dict[str, Any]:
-        fingerprint = _fingerprint({"workout_id": workout_id, "instance_id": instance_id, **input.model_dump(mode="json")})
-        prior = await self._receipt(account_id, input.request_id, fingerprint)
-        if prior:
-            return prior
+    @staticmethod
+    def _candidate_target_summary(candidate: dict[str, Any]) -> str:
+        """One-line target text for a slot candidate (instant swap picker)."""
+        prescription = candidate.get("prescription", {})
+        target = prescription.get("target", {})
+        if prescription.get("metric") == "duration_seconds":
+            window = target.get("duration_seconds") or {}
+            unit, values = "s", (window.get("min"), window.get("max"))
+        else:
+            window = target.get("reps") or {}
+            unit, values = " reps", (window.get("min"), window.get("max"))
+        low, high = values
+        if low is None or high is None:
+            metric_text = "-"
+        elif low == high:
+            metric_text = f"{low}{unit}"
+        else:
+            metric_text = f"{low}-{high}{unit}"
+        load = target.get("load")
+        if isinstance(load, dict) and load.get("value") is not None and load.get("unit"):
+            metric_text = f"{metric_text} · {load['value']:g}{load['unit']}"
+        return metric_text
+
+    async def _swap_context(
+        self,
+        account_id: str,
+        workout_id: str,
+        instance_id: str,
+        expected_revision: str | None = None,
+        expected_blueprint_revision: str | None = None,
+    ) -> dict[str, Any]:
+        """Resolve the workout item and its blueprint slot for a swap read or write."""
         workout = await self.db.workouts.find_one({"account_id": account_id, "workout_id": workout_id, "deleted_at": {"$exists": False}})
         if not workout:
             raise WorkoutDomainError("workout_not_found", "Workout was not found.", 404)
-        if workout["revision"] != input.expected_revision:
+        if expected_revision is not None and workout["revision"] != expected_revision:
             raise WorkoutDomainError("stale_revision", "Workout changed. Pull the current revision before swapping.")
         target_item: dict[str, Any] | None = None
+        target_segment: dict[str, Any] | None = None
         for segment in workout["segments"]:
             for item in segment["items"]:
                 if item["exercise_instance_id"] == instance_id:
                     target_item = item
                     target_segment = segment
                     break
-        if not target_item:
+        if not target_item or target_segment is None:
             raise WorkoutDomainError("exercise_instance_not_found", "Workout exercise was not found.", 404)
         logged_sets = [set_row for set_row in target_item["sets"] if set_row.get("actual") is not None]
         open_sets = [set_row for set_row in target_item["sets"] if set_row.get("actual") is None]
@@ -1075,7 +1115,7 @@ class WorkoutService:
             raise WorkoutDomainError("completed_exercise_locked", "Every set of this exercise is logged; there is nothing left to swap.")
         active = await self.active_blueprint(account_id, workout["date"])
         blueprint = active["blueprint"]
-        if input.expected_blueprint_revision and input.expected_blueprint_revision != blueprint["revision"]:
+        if expected_blueprint_revision and expected_blueprint_revision != blueprint["revision"]:
             raise WorkoutDomainError("stale_blueprint", "Blueprint changed. Pull the current blueprint before swapping.")
         lineage = workout.get("lineage", {})
         if (
@@ -1094,8 +1134,90 @@ class WorkoutService:
         candidates = [candidate for candidate in candidates if candidate["candidate_id"] != target_item["candidate_id"]]
         if not candidates:
             raise WorkoutDomainError("no_eligible_swap", "No eligible candidate remains in this blueprint slot.")
-        index, probabilities = _decision_index(f"{workout_id}:{instance_id}:{input.request_id}", candidates, input.source)
-        candidate = sorted(candidates, key=lambda item: (item["priority"], item["candidate_id"]))[index]
+        return {
+            "workout": workout,
+            "blueprint": blueprint,
+            "source_slot": source_slot,
+            "target_item": target_item,
+            "target_segment": target_segment,
+            "logged_sets": logged_sets,
+            "open_sets": open_sets,
+            "candidates": sorted(candidates, key=lambda item: (item["priority"], item["candidate_id"])),
+        }
+
+    async def swap_candidates(self, account_id: str, workout_id: str, instance_id: str) -> dict[str, Any]:
+        """List the eligible in-slot alternatives for an instant swap picker.
+
+        A deterministic read: same slot candidates the swap write accepts,
+        ordered by blueprint priority. No selection is made here.
+        """
+        context = await self._swap_context(account_id, workout_id, instance_id)
+        workout = context["workout"]
+        blueprint = context["blueprint"]
+        target_item = context["target_item"]
+        options = []
+        for candidate in context["candidates"]:
+            exercise = await self._candidate_exercise(account_id, candidate)
+            options.append({
+                "candidate_id": candidate["candidate_id"],
+                "exercise_id": candidate["exercise_id"],
+                "name": exercise.get("name") or candidate["exercise_id"],
+                "equipment_kind": exercise.get("equipment_kind") or "",
+                "priority": candidate["priority"],
+                "target_summary": self._candidate_target_summary(candidate),
+                "rest_seconds": candidate.get("prescription", {}).get("rest_seconds", 0),
+            })
+        return {
+            "workout_id": workout["workout_id"],
+            "workout_revision": workout["revision"],
+            "exercise_instance_id": instance_id,
+            "slot_id": target_item["slot_id"],
+            "current_candidate_id": target_item["candidate_id"],
+            "current_exercise_name": target_item["exercise_snapshot"].get("name", ""),
+            "blueprint_id": blueprint["blueprint_id"],
+            "blueprint_revision": blueprint["revision"],
+            "candidates": options,
+        }
+
+    @transactional_mutation
+    async def swap(self, account_id: str, workout_id: str, instance_id: str, input: SwapInput) -> dict[str, Any]:
+        fingerprint = _fingerprint({"workout_id": workout_id, "instance_id": instance_id, **input.model_dump(mode="json")})
+        prior = await self._receipt(account_id, input.request_id, fingerprint)
+        if prior:
+            return prior
+        context = await self._swap_context(
+            account_id, workout_id, instance_id,
+            expected_revision=input.expected_revision,
+            expected_blueprint_revision=input.expected_blueprint_revision,
+        )
+        workout = context["workout"]
+        active_blueprint = context["blueprint"]
+        source_slot = context["source_slot"]
+        target_item = context["target_item"]
+        target_segment = context["target_segment"]
+        logged_sets = context["logged_sets"]
+        open_sets = context["open_sets"]
+        candidates = context["candidates"]
+        if input.target_candidate_id is not None:
+            # The engine already chose from the slot (mini-chat top-3 pick).
+            # The backend only validates the choice stays inside the same
+            # blueprint slot and applies it deterministically.
+            requested = next(
+                (item for item in source_slot["candidates"] if item["candidate_id"] == input.target_candidate_id),
+                None,
+            )
+            if requested is None:
+                raise WorkoutDomainError("swap_target_not_in_slot", "The requested candidate is not in this blueprint slot.", 422)
+            if requested["candidate_id"] == target_item["candidate_id"]:
+                raise WorkoutDomainError("swap_target_unchanged", "The requested candidate is already the selected exercise.")
+            if all(item["candidate_id"] != requested["candidate_id"] for item in candidates):
+                raise WorkoutDomainError("swap_target_unavailable", "The requested candidate is already used elsewhere in this workout.")
+            ordered = candidates
+            candidate = requested
+            probabilities = {item["candidate_id"]: (1.0 if item["candidate_id"] == candidate["candidate_id"] else 0.0) for item in ordered}
+        else:
+            index, probabilities = _decision_index(f"{workout_id}:{instance_id}:{input.request_id}", candidates, input.source)
+            candidate = candidates[index]
         exercise = await self._candidate_exercise(account_id, candidate)
         snapshot = {key: exercise[key] for key in ("exercise_id", "revision", "name", "movement_pattern", "primary_muscles", "secondary_muscles", "equipment_kind", "laterality", "load_basis")}
         snapshot["exercise_revision"] = snapshot.pop("revision")
@@ -1132,8 +1254,9 @@ class WorkoutService:
             "reason": input.reason,
             "source": input.source,
             "candidate_id": candidate["candidate_id"],
-            "blueprint_id": active["blueprint"]["blueprint_id"],
-            "blueprint_revision": active["blueprint"]["revision"],
+            **({"target_candidate_id": input.target_candidate_id} if input.target_candidate_id is not None else {}),
+            "blueprint_id": active_blueprint["blueprint_id"],
+            "blueprint_revision": active_blueprint["revision"],
             "probabilities": probabilities,
             "load": load_decision,
         })
@@ -1290,14 +1413,20 @@ class WorkoutService:
                     "sets": sets,
                     "cues_md": item.get("cues_md", ""),
                 })
-            segments.append({
+            segment_copy: dict[str, Any] = {
                 "segment_id": new_id("seg"),
                 "order": segment["order"],
                 "kind": segment["kind"],
                 "rounds": segment["rounds"],
                 "rest_after_round_seconds": segment["rest_after_round_seconds"],
                 "items": items,
-            })
+            }
+            # A segment label is part of the copied shape: imported legacy days
+            # carry their circuit/section name, and dropping it would merge
+            # distinct circuits under one generic label in the app.
+            if segment.get("title"):
+                segment_copy["title"] = segment["title"]
+            segments.append(segment_copy)
         source_lineage = source.get("lineage", {})
         source_kind: LineageSource = "copy_last_week"
         lineage: dict[str, Any] = {
@@ -1387,11 +1516,55 @@ class WorkoutService:
         return await self._save_receipt(account_id, input.request_id, fingerprint, response)
 
     async def history(self, account_id: str, exercise_id: str, before: str | None = None, limit: int = 10) -> list[dict[str, Any]]:
-        prefix = f"{exercise_id}|"
-        query: dict[str, Any] = {"account_id": account_id, "load_key": {"$regex": f"^{prefix}"}}
+        prefix = f"{regex_escape(exercise_id)}\\|"
+        query: dict[str, Any] = {
+            "account_id": account_id,
+            "$or": [
+                {"exercise_id": exercise_id},
+                {"load_key": {"$regex": f"^{prefix}"}},
+            ],
+        }
         if before:
             query["date"] = {"$lte": before}
         rows = await self.db.performance_index.find(query).sort("completed_at", DESCENDING).limit(min(max(limit, 1), 50)).to_list()
+        return [self._public(row, ("account_id", "_id", "load_key")) for row in rows]
+
+    async def related_history(self, account_id: str, exercise_id: str, limit: int = 20) -> dict[str, Any]:
+        """Exact history plus related moves from the same movement pattern and muscle."""
+        bounded = min(max(limit, 1), 50)
+        head = await self.db.exercise_heads.find_one({"account_id": account_id, "exercise_id": exercise_id})
+        if not head:
+            raise WorkoutDomainError("exercise_not_found", "Exercise was not found.", 404)
+        document = await self.db.exercises.find_one({
+            "account_id": account_id, "exercise_id": exercise_id, "revision": head["revision"],
+        }) or {}
+        pattern = str(document.get("movement_pattern") or "")
+        muscles = [str(muscle) for muscle in (document.get("primary_muscles") or []) if muscle]
+        exact = await self.history(account_id, exercise_id, None, bounded)
+        family: list[dict[str, Any]] = []
+        if pattern and pattern != "general":
+            family = await self._history_rows(
+                account_id, {"exercise_id": {"$ne": exercise_id}, "movement_pattern": pattern}, bounded,
+            )
+        muscle_rows: list[dict[str, Any]] = []
+        if muscles:
+            muscle_rows = await self._history_rows(
+                account_id, {"exercise_id": {"$ne": exercise_id}, "primary_muscles": muscles[0]}, bounded,
+            )
+        family_sets = {row["set_id"] for row in family}
+        muscle_rows = [row for row in muscle_rows if row["set_id"] not in family_sets]
+        return {
+            "exercise_id": exercise_id,
+            "movement_pattern": pattern or None,
+            "primary_muscle": muscles[0] if muscles else None,
+            "exact": exact,
+            "family": family,
+            "muscle": muscle_rows,
+        }
+
+    async def _history_rows(self, account_id: str, extra: dict[str, Any], limit: int) -> list[dict[str, Any]]:
+        query = {"account_id": account_id, **extra}
+        rows = await self.db.performance_index.find(query).sort("completed_at", DESCENDING).limit(limit).to_list()
         return [self._public(row, ("account_id", "_id", "load_key")) for row in rows]
 
     @staticmethod

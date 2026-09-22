@@ -73,6 +73,7 @@ type BackendSegment = {
   segment_id: string
   order: number
   kind: 'warmup' | 'straight_sets' | 'superset' | 'circuit' | 'interval' | 'mobility' | 'cooldown'
+  title?: string
   rounds: number
   rest_after_round_seconds: number
   items: BackendWorkoutItem[]
@@ -88,7 +89,7 @@ export type BackendWorkout = {
   notes?: string | null
   segments: BackendSegment[]
   lineage?: {
-    source?: 'default' | 'jev' | 'agent_override' | 'copy_last_week'
+    source?: 'default' | 'jev' | 'agent_override' | 'copy_last_week' | 'legacy_import'
     blueprint_id?: string
     blueprint_revision?: string
     day_id?: string
@@ -214,6 +215,9 @@ const toExercise = (segment: BackendSegment, item: BackendWorkoutItem): WorkoutE
     .split(/\r?\n/)
     .map((cue) => cue.trim())
     .filter(Boolean)
+  // Imported legacy days carry their original circuit/section name; generated
+  // days fall back to the kind label. Distinct names keep circuits separate.
+  const label = segment.title?.trim() || sectionLabel(segment.kind)
 
   return {
     id: item.exercise_instance_id,
@@ -221,7 +225,7 @@ const toExercise = (segment: BackendSegment, item: BackendWorkoutItem): WorkoutE
     standardName: snapshot.name,
     exerciseKey: snapshot.exercise_id,
     movementFamilyKey: snapshot.movement_pattern,
-    section: sectionLabel(segment.kind),
+    section: label,
     summary: exerciseSummary(item.sets, metric),
     restSec: segment.rest_after_round_seconds || undefined,
     metric,
@@ -240,7 +244,8 @@ const toExercise = (segment: BackendSegment, item: BackendWorkoutItem): WorkoutE
     ...(segment.kind === 'circuit' || segment.kind === 'superset'
       ? {
         circuit: {
-          name: sectionLabel(segment.kind),
+          name: label,
+          key: segment.segment_id,
           rounds: segment.rounds,
           restAfterSec: segment.rest_after_round_seconds,
           order: item.order,

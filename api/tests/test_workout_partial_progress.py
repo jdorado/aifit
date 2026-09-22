@@ -1,5 +1,6 @@
 import pytest
 
+from aifit_api import main
 from aifit_api.workouts import (
     BlueprintInput,
     GenerateInput,
@@ -24,6 +25,7 @@ def override_segments() -> list[dict]:
         "segment_id": "seg_main",
         "order": 1,
         "kind": "straight_sets",
+        "title": "Press Main",
         "rounds": 2,
         "rest_after_round_seconds": 60,
         "slots": [{
@@ -92,6 +94,129 @@ async def test_swap_keeps_logged_sets_and_swaps_only_the_open_ones():
     assert items[0]["sets"][0]["actual"]["reps"] == 10
     assert [set_row["round"] for set_row in items[1]["sets"]] == [2, 3]
     assert all(set_row["actual"] is None for set_row in items[1]["sets"])
+
+
+@pytest.mark.asyncio
+async def test_swap_with_explicit_target_candidate_applies_the_pick():
+    database = FakeDatabase()
+    service, workout = await generated_day(database)
+    target = workout["segments"][0]["items"][0]["exercise_instance_id"]
+
+    result = await service.swap(
+        "acc_one", workout["workout_id"], target,
+        SwapInput(
+            expected_revision=workout["revision"],
+            reason="The user picked the cable alternative.",
+            request_id="swap-target-001",
+            target_candidate_id="cand_row_cable",
+        ),
+    )
+
+    assert result["effect"] == "swapped"
+    items = result["workout"]["segments"][0]["items"]
+    assert [item["exercise_snapshot"]["exercise_id"] for item in items] == [CABLE]
+    assert items[0]["candidate_id"] == "cand_row_cable"
+    entry = result["workout"]["lineage"]["swaps"][-1]
+    assert entry["target_candidate_id"] == "cand_row_cable"
+    assert entry["probabilities"] == {"cand_row_cable": 1.0}
+
+
+@pytest.mark.asyncio
+async def test_swap_rejects_a_target_candidate_outside_the_slot():
+    database = FakeDatabase()
+    service, workout = await generated_day(database)
+    target = workout["segments"][0]["items"][0]["exercise_instance_id"]
+
+    with pytest.raises(WorkoutDomainError) as error:
+        await service.swap(
+            "acc_one", workout["workout_id"], target,
+            SwapInput(
+                expected_revision=workout["revision"],
+                reason="No such candidate.",
+                request_id="swap-target-002",
+                target_candidate_id="cand_elsewhere",
+            ),
+        )
+
+    assert error.value.code == "swap_target_not_in_slot"
+
+
+@pytest.mark.asyncio
+async def test_swap_rejects_the_already_selected_target_candidate():
+    database = FakeDatabase()
+    service, workout = await generated_day(database)
+    target = workout["segments"][0]["items"][0]["exercise_instance_id"]
+    current = workout["segments"][0]["items"][0]["candidate_id"]
+
+    with pytest.raises(WorkoutDomainError) as error:
+        await service.swap(
+            "acc_one", workout["workout_id"], target,
+            SwapInput(
+                expected_revision=workout["revision"],
+                reason="Same exercise.",
+                request_id="swap-target-003",
+                target_candidate_id=current,
+            ),
+        )
+
+    assert error.value.code == "swap_target_unchanged"
+
+
+@pytest.mark.asyncio
+async def test_swap_candidates_lists_the_eligible_slot_alternatives():
+    database = FakeDatabase()
+    service, workout = await generated_day(database)
+    target = workout["segments"][0]["items"][0]["exercise_instance_id"]
+
+    result = await service.swap_candidates("acc_one", workout["workout_id"], target)
+
+    assert result["workout_id"] == workout["workout_id"]
+    assert result["workout_revision"] == workout["revision"]
+    assert result["exercise_instance_id"] == target
+    assert result["current_candidate_id"] == workout["segments"][0]["items"][0]["candidate_id"]
+    assert result["blueprint_revision"]
+    assert [option["candidate_id"] for option in result["candidates"]] == ["cand_row_cable"]
+    option = result["candidates"][0]
+    assert option["name"] == "Chest Supported Row Cable"
+    assert option["target_summary"] == "8-12 reps · 30kg"
+    assert option["priority"] == 2
+
+
+@pytest.mark.asyncio
+async def test_swap_candidates_rejects_a_fully_logged_exercise():
+    database = FakeDatabase()
+    service, workout = await generated_day(database)
+    for index in range(3):
+        workout, _ = await log_set_at(service, workout, index, f"log-{index:03d}")
+    target = workout["segments"][0]["items"][0]["exercise_instance_id"]
+
+    with pytest.raises(WorkoutDomainError) as error:
+        await service.swap_candidates("acc_one", workout["workout_id"], target)
+
+    assert error.value.code == "completed_exercise_locked"
+
+
+@pytest.mark.asyncio
+async def test_swap_candidates_browser_route_delegates_to_the_service(monkeypatch):
+    routes = [
+        route for route in main.app.routes
+        if getattr(route, "path", "") == "/v1/workouts/{workout_id}/exercises/{exercise_instance_id}/swap-candidates"
+    ]
+    assert len(routes) == 1
+    assert routes[0].methods == {"GET"}
+
+    seen = {}
+
+    class StubService:
+        async def swap_candidates(self, account_id, workout_id, instance_id):
+            seen.update(account_id=account_id, workout_id=workout_id, instance_id=instance_id)
+            return {"workout_id": workout_id, "candidates": []}
+
+    monkeypatch.setattr(main, "workouts", lambda: StubService())
+    result = await main.swap_candidates_v1("wrk_one", "wex_one", {"account_id": "acc_one"})
+
+    assert result == {"workout_id": "wrk_one", "candidates": []}
+    assert seen == {"account_id": "acc_one", "workout_id": "wrk_one", "instance_id": "wex_one"}
 
 
 @pytest.mark.asyncio

@@ -151,10 +151,10 @@ module.exports = (_env, argv) => {
       static: {
         directory: path.resolve(__dirname, 'public'),
       },
-      allowedHosts: ['localhost', '127.0.0.1'],
+      allowedHosts: ['localhost', '127.0.0.1', '.ngrok-free.app'],
       historyApiFallback: true,
       port: 5175,
-      host: '127.0.0.1',
+      host: '0.0.0.0',
       hot: true,
       client: {
         overlay: { errors: true, warnings: false },

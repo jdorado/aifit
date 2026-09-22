@@ -4,22 +4,27 @@ import { useI18n } from '../i18n'
 import CoachChat from '../components/workout/CoachChat'
 import ExerciseFeedback from '../components/workout/ExerciseFeedback'
 import ExerciseHistorySheet from '../components/workout/ExerciseHistorySheet'
+import SwapCandidateSheet from '../components/workout/SwapCandidateSheet'
 import ExerciseSetList from '../components/workout/ExerciseSetList'
 import VideoGallery from '../components/workout/VideoGallery'
 import WeekStrip from '../components/workout/WeekStrip'
 import WorkoutMiniBar from '../components/workout/WorkoutMiniBar'
 import WorkoutPlanList from '../components/workout/WorkoutPlanList'
 import type { WorkoutExercise, WorkoutExtra, WorkoutFeedbackPreset } from '../data/testWorkout'
+import { circuitGroupKey } from '../data/testWorkout'
 import type { ActiveEntryType, ChatMessage, HoldTimerState, SetState } from '../types/app'
 import {
-  fetchExerciseHistory,
+  fetchExerciseHistoryWindow,
+  fetchRelatedExerciseHistory,
   groupExerciseHistory,
+  type ExerciseHistoryRelated,
   type ExerciseHistorySession,
 } from '../utils/exerciseHistory'
 import {
   formatCircuitTarget,
   parseDurationToSeconds,
 } from '../utils/workoutDisplay'
+import type { SwapCandidate } from '../utils/swapCandidates'
 
 type WeekDaySummary = {
   index: number
@@ -71,6 +76,10 @@ type WorkoutViewProps = {
   holdTimer: HoldTimerState
   coachMessages: ChatMessage[]
   showModelLabels?: boolean
+  miniModelOptions?: Array<{ value: string, label: string }>
+  miniSelectedModel?: string
+  miniModelSelectionDisabled?: boolean
+  onMiniModelChange?: (value: string) => void
   onSelectEntry: (id: string, type: ActiveEntryType) => void
   onSelectDay: (index: number, date: string) => void
   onBack: () => void
@@ -92,6 +101,14 @@ type WorkoutViewProps = {
   onSaveDayNote: (notes: string) => Promise<boolean>
   onSaveExerciseFeedback: (exerciseId: string, note: string, preset: WorkoutFeedbackPreset | null) => Promise<boolean>
   onCoachSend: (exerciseId: string, message: string) => void
+  swapOpen: boolean
+  swapLoading: boolean
+  swappingCandidateId: string | null
+  swapError: string | null
+  swapCandidates: SwapCandidate[]
+  onOpenSwap: (exerciseId: string) => void
+  onSelectSwapCandidate: (candidate: SwapCandidate) => void
+  onCloseSwap: () => void
 }
 
 const getSectionToneFromText = (rawHaystack: string): SectionTone => {
@@ -130,6 +147,10 @@ const WorkoutView: FC<WorkoutViewProps> = ({
   holdTimer,
   coachMessages,
   showModelLabels = false,
+  miniModelOptions = [],
+  miniSelectedModel = '',
+  miniModelSelectionDisabled = false,
+  onMiniModelChange,
   onSelectEntry,
   onSelectDay,
   onBack,
@@ -145,6 +166,14 @@ const WorkoutView: FC<WorkoutViewProps> = ({
   onSaveDayNote,
   onSaveExerciseFeedback,
   onCoachSend,
+  swapOpen,
+  swapLoading,
+  swappingCandidateId,
+  swapError,
+  swapCandidates,
+  onOpenSwap,
+  onSelectSwapCandidate,
+  onCloseSwap,
 }) => {
   const { t } = useI18n()
   const [coachChatOpen, setCoachChatOpen] = useState(false)
@@ -153,6 +182,7 @@ const WorkoutView: FC<WorkoutViewProps> = ({
   const [historyLoading, setHistoryLoading] = useState(false)
   const [historyError, setHistoryError] = useState(false)
   const [historySessions, setHistorySessions] = useState<ExerciseHistorySession[]>([])
+  const [historyRelated, setHistoryRelated] = useState<ExerciseHistoryRelated | null>(null)
   const historyRequestRef = useRef(0)
 
   useEffect(() => {
@@ -199,13 +229,15 @@ const WorkoutView: FC<WorkoutViewProps> = ({
 
     exercises.forEach((exercise, index) => {
       const circuit = exercise.circuit
-      if (!circuit?.name) return
-      const existing = groups.get(circuit.name) ?? { items: [], rounds: circuit.rounds, restAfterSec: circuit.restAfterSec, totalExercises: circuit.totalExercises }
+      if (!circuit) return
+      const groupKey = circuitGroupKey(circuit)
+      if (!groupKey) return
+      const existing = groups.get(groupKey) ?? { items: [], rounds: circuit.rounds, restAfterSec: circuit.restAfterSec, totalExercises: circuit.totalExercises }
       existing.items.push({ exercise, index })
       if (existing.rounds === undefined && circuit.rounds !== undefined) existing.rounds = circuit.rounds
       if (existing.restAfterSec === undefined && circuit.restAfterSec !== undefined) existing.restAfterSec = circuit.restAfterSec
       if (existing.totalExercises === undefined && circuit.totalExercises !== undefined) existing.totalExercises = circuit.totalExercises
-      groups.set(circuit.name, existing)
+      groups.set(groupKey, existing)
     })
 
     return groups
@@ -213,8 +245,9 @@ const WorkoutView: FC<WorkoutViewProps> = ({
 
   const activeCircuit = useMemo(() => {
     const circuitName = activeExercise?.circuit?.name
-    if (!circuitName || !activeExercise) return null
-    const group = circuitGroups.get(circuitName)
+    const groupKey = circuitGroupKey(activeExercise?.circuit)
+    if (!circuitName || !groupKey || !activeExercise) return null
+    const group = circuitGroups.get(groupKey)
     const items = group?.items.length
       ? group.items
       : [{ exercise: activeExercise, index: 0 }]
@@ -329,6 +362,7 @@ const WorkoutView: FC<WorkoutViewProps> = ({
     setCoachChatOpen(false)
     setCoachDraft('')
     setHistoryOpen(false)
+    onCloseSwap()
   }, [activeExercise?.id])
 
   const openExerciseHistory = useCallback(() => {
@@ -338,9 +372,10 @@ const WorkoutView: FC<WorkoutViewProps> = ({
     setHistoryOpen(true)
     setHistoryLoading(true)
     setHistoryError(false)
+    setHistoryRelated(null)
     const requestId = historyRequestRef.current + 1
     historyRequestRef.current = requestId
-    fetchExerciseHistory({ apiBaseUrl, getHeaders: getAuthHeaders, exerciseId, limit: 20, actAsLinkId })
+    fetchExerciseHistoryWindow({ apiBaseUrl, getHeaders: getAuthHeaders, exerciseId, minSessions: 10, pageSize: 50, actAsLinkId })
       .then((rows) => {
         if (historyRequestRef.current !== requestId) return
         setHistorySessions(groupExerciseHistory(rows))
@@ -352,6 +387,15 @@ const WorkoutView: FC<WorkoutViewProps> = ({
       })
       .finally(() => {
         if (historyRequestRef.current === requestId) setHistoryLoading(false)
+      })
+    fetchRelatedExerciseHistory({ apiBaseUrl, getHeaders: getAuthHeaders, exerciseId, limit: 20, actAsLinkId })
+      .then((related) => {
+        if (historyRequestRef.current !== requestId) return
+        setHistoryRelated(related)
+      })
+      .catch(() => {
+        if (historyRequestRef.current !== requestId) return
+        setHistoryRelated({ exerciseId, movementPattern: null, primaryMuscle: null, family: [], muscle: [] })
       })
   }, [activeExercise?.exerciseKey, actAsLinkId, apiBaseUrl, getAuthHeaders])
 
@@ -617,6 +661,7 @@ const WorkoutView: FC<WorkoutViewProps> = ({
             error={historyError ? t('workout.historyError') : null}
             exerciseName={activeExercise.name}
             sessions={historySessions}
+            related={historyRelated}
             onClose={() => setHistoryOpen(false)}
           />
         ) : null}
@@ -627,6 +672,11 @@ const WorkoutView: FC<WorkoutViewProps> = ({
             disabled={!coachChatEnabled}
             messages={coachMessages}
             showModelLabels={showModelLabels}
+            subtitle={detailTitle || undefined}
+            modelOptions={miniModelOptions}
+            selectedModel={miniSelectedModel}
+            modelSelectionDisabled={miniModelSelectionDisabled || coachMessages.some((message) => message.thinking)}
+            onModelChange={onMiniModelChange}
             draft={coachDraft}
             onToggle={() => setCoachChatOpen((current) => !current)}
             onDraftChange={setCoachDraft}
@@ -639,6 +689,25 @@ const WorkoutView: FC<WorkoutViewProps> = ({
             onQuickPrompt={(message) => {
               if (activeExercise) onCoachSend(activeExercise.id, message)
             }}
+            onSwap={() => {
+              if (activeExercise) {
+                setCoachChatOpen(false)
+                onOpenSwap(activeExercise.id)
+              }
+            }}
+          />
+        ) : null}
+
+        {activeExercise ? (
+          <SwapCandidateSheet
+            open={swapOpen}
+            loading={swapLoading}
+            swappingId={swappingCandidateId}
+            error={swapError}
+            exerciseName={activeExercise.name}
+            candidates={swapCandidates}
+            onSelect={onSelectSwapCandidate}
+            onClose={onCloseSwap}
           />
         ) : null}
       </section>

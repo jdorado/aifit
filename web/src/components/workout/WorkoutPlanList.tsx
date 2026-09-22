@@ -1,6 +1,7 @@
 import { useCallback, useState, type FC } from 'react'
 import { useI18n } from '../../i18n'
 import type { WorkoutExercise, WorkoutExtra } from '../../data/testWorkout'
+import { circuitGroupKey } from '../../data/testWorkout'
 import type { ActiveEntryType, SetState } from '../../types/app'
 import PlanNotes from './PlanNotes'
 
@@ -188,9 +189,10 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
 
   exercises.forEach((exercise) => {
     const circuitName = exercise.circuit?.name
-    if (circuitName) {
-      if (renderedCircuits.has(circuitName)) return
-      renderedCircuits.add(circuitName)
+    const groupKey = circuitGroupKey(exercise.circuit)
+    if (circuitName && groupKey) {
+      if (renderedCircuits.has(groupKey)) return
+      renderedCircuits.add(groupKey)
       const stage = getStageInfo(exercise)
       const colorSlot = getSectionColorSlot(stage.key, stage.tone)
       if (stage.key !== lastStageKey) {
@@ -199,7 +201,7 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
       }
       if (collapsedSections[stage.key]) return
 
-      const group = circuitGroups.get(circuitName)
+      const group = circuitGroups.get(groupKey)
       const items = group?.items.length
         ? [...group.items].sort((a, b) => {
           const orderA = a.exercise.circuit?.order ?? a.index

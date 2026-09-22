@@ -40,9 +40,10 @@ for (const translationKey of [
 
 assert.match(appSource, /handleGenerateDayWorkout/, 'timeline generation must remain available')
 assert.match(menuSource, /onGenerateWorkout/, 'workout menu must keep the generated-workout action')
-assert.match(appSource, /\/v1\/workouts\/generate/, 'recommended and Jev generation must use the typed canonical endpoint')
+assert.match(appSource, /\/v1\/workouts\/generate/, 'recommended generation must use the typed canonical endpoint')
 assert.doesNotMatch(appSource, /workout-sessions|coach_links|exercise-history|exercise-decisions|search_videos/, 'removed legacy routes must not return to the public frontend')
-assert.match(appSource, /handleVaryDayWorkout/, 'Jev day variation must remain available')
-assert.match(menuSource, /onVaryWorkout/, 'workout menu must keep the Jev variation action')
+assert.doesNotMatch(appSource, /handleVaryDayWorkout/, 'whole-day Jev variation must not return to the timeline')
+assert.doesNotMatch(menuSource, /onVaryWorkout/, 'whole-day Jev variation must not return to the workout menu')
+assert.doesNotMatch(stringsSource, /varyAction/, 'whole-day Jev variation copy must not return to workout strings')
 
 console.log('workout timeline contract passed')

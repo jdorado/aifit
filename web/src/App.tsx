@@ -3,7 +3,9 @@ import { usePrivy } from '@privy-io/react-auth'
 import { marked } from 'marked'
 import { formatDurationForDisplay, normalizeWorkoutTargetText } from './utils/workoutDisplay'
 import type { WorkoutExercise, WorkoutExtra, WorkoutFeedbackPreset } from './data/testWorkout'
+import { circuitGroupKey } from './data/testWorkout'
 import { backendWorkoutToSession, type BackendWorkoutReceipt } from './utils/backendWorkoutAdapter'
+import { fetchSwapCandidates, readApiError, swapErrorKey, SwapCandidatesError, type SwapCandidate, type SwapCandidates } from './utils/swapCandidates'
 import { I18nProvider, createI18n } from './i18n'
 import { normalizeLanguage, type Language } from './i18n/strings'
 import TabBar from './components/TabBar'
@@ -84,6 +86,54 @@ const presetLabel = (preset: EzPreset | undefined, models: EzModel[] = []) => {
     : preset.name
 }
 
+type ModelOption = {
+  value: string
+  label: string
+  cli: string
+  provider?: string
+  model?: string
+  effort?: string
+}
+
+const MINI_CHAT_SCOPE = 'owner-minichat'
+
+const buildModelOptions = (control: ModelControl | null): ModelOption[] => {
+  const options = (control?.models ?? []).flatMap((model) => {
+    const efforts = model.efforts.length > 0 ? model.efforts : [undefined]
+    return efforts.map((effort) => ({
+      value: JSON.stringify([model.cli, model.provider ?? null, model.model ?? null, effort ?? null]),
+      label: `${modelDisplayName(model)}${effort ? ` ${titleCase(effort)}` : ''}${providerLabel(model.provider) ? ` · ${providerLabel(model.provider)}` : ''}`,
+      cli: model.cli,
+      provider: model.provider,
+      model: model.model,
+      effort,
+    }))
+  })
+  const optionKeys = new Set(options.map((option) => option.value))
+  for (const preset of control?.presets ?? []) {
+    if (!preset.model || !preset.effort) continue
+    const value = JSON.stringify([preset.cli, preset.provider ?? null, preset.model, preset.effort])
+    if (optionKeys.has(value)) continue
+    optionKeys.add(value)
+    options.push({
+      value,
+      label: presetLabel(preset, control?.models) ?? preset.name,
+      cli: preset.cli,
+      provider: preset.provider,
+      model: preset.model,
+      effort: preset.effort,
+    })
+  }
+  return options
+}
+
+const selectedModelValueFor = (control: ModelControl | null): string => {
+  const preset = control?.presets.find((item) => item.id === control.selected_id)
+  return preset
+    ? JSON.stringify([preset.cli, preset.provider ?? null, preset.model ?? null, preset.effort ?? null])
+    : ''
+}
+
 const isProd = (process.env.NODE_ENV || '').trim() === 'production'
 
 const getLocalRuntimeApiBaseUrl = () => {
@@ -152,9 +202,12 @@ type ChatRequestPayload = {
   user_id: string
   request_id: string
   message: string
+  scope?: string
   scope_id?: string
   reference_date?: string
   exercise_id?: string
+  workout_id?: string
+  exercise_instance_id?: string
   expected_revision?: string
 }
 
@@ -810,7 +863,16 @@ const App = () => {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [modelControl, setModelControl] = useState<ModelControl | null>(null)
   const [modelSelectionPending, setModelSelectionPending] = useState(false)
+  const [miniModelControl, setMiniModelControl] = useState<ModelControl | null>(null)
+  const [miniModelSelectionPending, setMiniModelSelectionPending] = useState(false)
   const [coachMessagesByScope, setCoachMessagesByScope] = useState<Record<string, ChatMessage[]>>({})
+  const [swapOpen, setSwapOpen] = useState(false)
+  const [swapLoading, setSwapLoading] = useState(false)
+  const [swapError, setSwapError] = useState<string | null>(null)
+  const [swapCandidates, setSwapCandidates] = useState<SwapCandidate[]>([])
+  const [swappingCandidateId, setSwappingCandidateId] = useState<string | null>(null)
+  const swapResponseRef = useRef<SwapCandidates | null>(null)
+  const swapExerciseIdRef = useRef<string | null>(null)
   const [chatInput, setChatInput] = useState('')
   const [showChatScrollToBottom, setShowChatScrollToBottom] = useState(false)
   const [restState, setRestState] = useState<RestState>({
@@ -884,35 +946,12 @@ const App = () => {
   const coachChatEnabled = !coachActAsLinkId
   const selectedModelPreset = modelControl?.presets.find((preset) => preset.id === modelControl.selected_id)
   const selectedModelLabel = presetLabel(selectedModelPreset, modelControl?.models)
-  const modelOptions = (modelControl?.models ?? []).flatMap((model) => {
-    const efforts = model.efforts.length > 0 ? model.efforts : [undefined]
-    return efforts.map((effort) => ({
-      value: JSON.stringify([model.cli, model.provider ?? null, model.model ?? null, effort ?? null]),
-      label: `${modelDisplayName(model)}${effort ? ` ${titleCase(effort)}` : ''}${providerLabel(model.provider) ? ` · ${providerLabel(model.provider)}` : ''}`,
-      cli: model.cli,
-      provider: model.provider,
-      model: model.model,
-      effort,
-    }))
-  })
-  const modelOptionKeys = new Set(modelOptions.map((option) => option.value))
-  for (const preset of modelControl?.presets ?? []) {
-    if (!preset.model || !preset.effort) continue
-    const value = JSON.stringify([preset.cli, preset.provider ?? null, preset.model, preset.effort])
-    if (modelOptionKeys.has(value)) continue
-    modelOptionKeys.add(value)
-    modelOptions.push({
-      value,
-      label: presetLabel(preset, modelControl?.models) ?? preset.name,
-      cli: preset.cli,
-      provider: preset.provider,
-      model: preset.model,
-      effort: preset.effort,
-    })
-  }
-  const selectedModelValue = selectedModelPreset
-    ? JSON.stringify([selectedModelPreset.cli, selectedModelPreset.provider ?? null, selectedModelPreset.model ?? null, selectedModelPreset.effort ?? null])
-    : ''
+  const modelOptions = useMemo(() => buildModelOptions(modelControl), [modelControl])
+  const selectedModelValue = useMemo(() => selectedModelValueFor(modelControl), [modelControl])
+  const miniSelectedModelPreset = miniModelControl?.presets.find((preset) => preset.id === miniModelControl.selected_id)
+  const miniSelectedModelLabel = presetLabel(miniSelectedModelPreset, miniModelControl?.models)
+  const miniModelOptions = useMemo(() => buildModelOptions(miniModelControl), [miniModelControl])
+  const miniSelectedModelValue = useMemo(() => selectedModelValueFor(miniModelControl), [miniModelControl])
   const chatBodyRef = useRef<HTMLDivElement>(null)
   const chatBottomFrameRef = useRef<number | null>(null)
   const chatBottomTimeoutRef = useRef<number | null>(null)
@@ -923,6 +962,18 @@ const App = () => {
   const pendingSetSyncsByDateRef = useRef<Record<string, number>>({})
   const syncLoggedSetRef = useRef<((exerciseId: string, index: number, previous?: SetSyncRevert | null) => void) | null>(null)
   const pendingWorkoutDatesRef = useRef(new Set<string>())
+  // Delete tombstones: date -> server timestamp of a clear that removed the
+  // record. Any fetched session at or before that time is pre-delete state
+  // and must never resurrect the day, no matter which stale closure applies
+  // it. Sessions created after the clear carry a newer server timestamp and
+  // pass through untouched.
+  const clearedWorkoutAtRef = useRef<Record<string, string>>({})
+  // Latest applied plan for same-tick merges. React state read inside a
+  // callback created before a re-render is stale, so a saved-session merge
+  // that follows a clear in the same tick would rebuild the week from the
+  // pre-clear day and write it back. Every plan written to state is mirrored
+  // here so merges always start from the plan the user is looking at.
+  const weekPlanRef = useRef<WeekPlan>(weekPlan)
   const sessionLoadKeyRef = useRef<string | null>(null)
   const sessionReadyRef = useRef(false)
   const sessionHydrationInProgressRef = useRef(false)
@@ -1215,10 +1266,10 @@ const App = () => {
     workoutExercisesRef.current.find((exercise) => exercise.id === id)
   ), [])
 
-  const getCircuitItems = useCallback((circuitName: string) => (
+  const getCircuitItems = useCallback((circuitKey: string) => (
     workoutExercisesRef.current
       .map((exercise, index) => ({ exercise, index }))
-      .filter((item) => item.exercise.circuit?.name === circuitName)
+      .filter((item) => circuitGroupKey(item.exercise.circuit) === circuitKey)
       .sort((a, b) => {
         const orderA = a.exercise.circuit?.order ?? a.index
         const orderB = b.exercise.circuit?.order ?? b.index
@@ -1242,12 +1293,12 @@ const App = () => {
     return stateList
   }, [])
 
-  const getNextPendingCircuitExercise = useCallback((circuitName: string): WorkoutExercise | null => {
+  const getNextPendingCircuitExercise = useCallback((circuitKey: string): WorkoutExercise | null => {
     let nextExercise: WorkoutExercise | null = null
     let nextRoundIndex = Number.POSITIVE_INFINITY
     let nextOrder = Number.POSITIVE_INFINITY
 
-    getCircuitItems(circuitName).forEach(({ exercise }, order) => {
+    getCircuitItems(circuitKey).forEach(({ exercise }, order) => {
       const stateList = setLogsRef.current[exercise.id] ?? []
       const nextSetIndex = exercise.sets.findIndex((_, index) => !stateList[index]?.done)
       if (nextSetIndex === -1) return
@@ -1636,6 +1687,7 @@ const App = () => {
     weekSetLogsRef.current = nextLogs
     selectedDayIndexRef.current = safeIndex
     setSelectedDayIndex(safeIndex)
+    weekPlanRef.current = activePlan
     setWeekPlan(activePlan)
     syncDayRefs(activePlan, safeIndex)
     const nextSelectedDay = activePlan.days[safeIndex]
@@ -1656,6 +1708,12 @@ const App = () => {
     }
     bumpData()
   }, [bumpData, hideWorkoutDetail, profile.language, syncDayRefs, todayId, weekStartDayIndex])
+
+  // Mirror every plan that reaches state (including functional writers) so
+  // same-tick saved-session merges never rebuild from an older week.
+  useEffect(() => {
+    weekPlanRef.current = weekPlan
+  }, [weekPlan])
 
   const handleSelectDay = useCallback((index: number, dateId?: string) => {
     const normalizedDateId = normalizeDateId(dateId)
@@ -1803,7 +1861,7 @@ const App = () => {
     let stateList = ensureExerciseStateList(exercise)
     let nextIndex = exercise.sets.findIndex((_, index) => !stateList[index]?.done)
     if (nextIndex === -1 && exercise.circuit?.name) {
-      const pendingExercise = getNextPendingCircuitExercise(exercise.circuit.name)
+      const pendingExercise = getNextPendingCircuitExercise(circuitGroupKey(exercise.circuit) ?? exercise.circuit.name)
       if (pendingExercise && pendingExercise.id !== exercise.id) {
         exercise = pendingExercise
         stateList = ensureExerciseStateList(exercise)
@@ -1853,7 +1911,7 @@ const App = () => {
     }
 
     if (circuitName) {
-      const circuitItems = getCircuitItems(circuitName)
+      const circuitItems = getCircuitItems(circuitGroupKey(exercise.circuit) ?? circuitName)
       const circuitExercises = circuitItems.map((item) => item.exercise)
       if (circuitExercises.length) {
         const getWorkSetIndex = (sets: Array<{ isWarmup?: boolean }>, workIndex: number) => {
@@ -2227,6 +2285,45 @@ const App = () => {
     }
   }, [getPrivyAuthHeaders, modelControl, modelOptions, modelSelectionPending, refreshModelControl])
 
+  const refreshMiniModelControl = useCallback(async () => {
+    if (!privyReady || !privyAuthenticated) {
+      setMiniModelControl(null)
+      return
+    }
+    const response = await apiFetch(`${API_BASE_URL}/chat/models?scope=${MINI_CHAT_SCOPE}`, {
+      headers: await getPrivyAuthHeaders(),
+    })
+    if (!response.ok) throw new Error(`Failed to load mini-chat Ez models (${response.status})`)
+    setMiniModelControl(await response.json() as ModelControl)
+  }, [getPrivyAuthHeaders, privyAuthenticated, privyReady])
+
+  const handleMiniModelSelection = useCallback(async (value: string) => {
+    const option = miniModelOptions.find((item) => item.value === value)
+    if (!option || !miniModelControl || miniModelSelectionPending) return
+    setMiniModelSelectionPending(true)
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/chat/models`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...await getPrivyAuthHeaders() },
+        body: JSON.stringify({
+          expected_session: miniModelControl.active_session_id,
+          scope: MINI_CHAT_SCOPE,
+          cli: option.cli,
+          provider: option.provider,
+          model: option.model,
+          effort: option.effort,
+        }),
+      })
+      if (!response.ok) throw new Error(`Failed to select mini-chat Ez model (${response.status})`)
+      setMiniModelControl(await response.json() as ModelControl)
+    } catch (error) {
+      console.error('Mini-chat model selection failed:', error)
+      await refreshMiniModelControl().catch(() => undefined)
+    } finally {
+      setMiniModelSelectionPending(false)
+    }
+  }, [getPrivyAuthHeaders, miniModelControl, miniModelOptions, miniModelSelectionPending, refreshMiniModelControl])
+
   const handleAiReply = useCallback(async (reply: string, messageId?: string | null, modelLabel?: string) => {
     const displayMessage = reply.trim()
 
@@ -2319,8 +2416,18 @@ const App = () => {
     const sessions = workouts
       .filter((workout) => requestedDates.has(workout.date))
       .map((workout) => backendWorkoutToSession(workout, currentUserId))
+      .filter((session) => {
+        // Drop pre-delete snapshots: the record they describe is gone and
+        // applying them would resurrect a cleared day.
+        const tombstone = clearedWorkoutAtRef.current[session.date]
+        return !tombstone || (session.updated_at ? session.updated_at > tombstone : false)
+      })
     sessions.forEach((session) => {
       const ownerKey = `${currentUserId}:${session.date}`
+      // Never resurrect refs for a deleted record either; newer sessions
+      // already passed the tombstone filter above.
+      const tombstone = clearedWorkoutAtRef.current[session.date]
+      if (tombstone && !(session.updated_at && session.updated_at > tombstone)) return
       if (session.session_id) workoutIdByOwnerDateRef.current[ownerKey] = session.session_id
       if (!session.revision) return
       workoutRevisionByOwnerDateRef.current[ownerKey] = session.revision
@@ -2341,7 +2448,7 @@ const App = () => {
   ) => {
     if (sessions.length === 0) return false
 
-    let nextDays = weekPlan.days
+    let nextDays = weekPlanRef.current.days
     const nextLogs: WeekSetLogs = { ...weekSetLogsRef.current }
     const appliedDates: string[] = []
     const ownerId = coachActAsOwnerId ?? currentUserId
@@ -2408,7 +2515,7 @@ const App = () => {
     try {
       applyWeekPlan(
         {
-          weekStart: weekPlan.weekStart || appliedDates[0],
+          weekStart: weekPlanRef.current.weekStart || appliedDates[0],
           days: nextDays,
         },
         {
@@ -2462,7 +2569,7 @@ const App = () => {
         if (cancelled || savedWorkoutHydrationInFlightKeyRef.current !== key) return
         savedWorkoutHydrationAttemptedKeysRef.current.add(key)
 
-        let nextDays = weekPlan.days
+        let nextDays = weekPlanRef.current.days
         const nextLogs: WeekSetLogs = { ...weekSetLogsRef.current }
         let changed = false
 
@@ -2532,7 +2639,7 @@ const App = () => {
         try {
           applyWeekPlan(
             {
-              weekStart: weekPlan.weekStart || nextDays[0]?.date || todayId,
+              weekStart: weekPlanRef.current.weekStart || nextDays[0]?.date || todayId,
               days: nextDays,
             },
             {
@@ -2594,6 +2701,31 @@ const App = () => {
     todayId,
     weekStartDayIndex,
   ])
+
+  // Agent-side changes (new blueprint revision, override) arrive with no
+  // push signal, and the initial hydration runs once per session. Revalidate
+  // the visible strip when the app regains focus so an externally published
+  // revision replaces the stale snapshot. Cooldown keeps background tab
+  // churn to one cheap range fetch per minute at most.
+  const lastFocusRefreshRef = useRef(0)
+  useEffect(() => {
+    if (!currentUserId || !canQuerySavedWorkoutSessions || !isBackendHealthy) return
+    const revalidate = () => {
+      const now = Date.now()
+      if (now - lastFocusRefreshRef.current < 60_000) return
+      lastFocusRefreshRef.current = now
+      void refreshVisibleWorkoutSessions().catch(() => {})
+    }
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') revalidate()
+    }
+    window.addEventListener('focus', revalidate)
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      window.removeEventListener('focus', revalidate)
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
+  }, [currentUserId, canQuerySavedWorkoutSessions, isBackendHealthy, refreshVisibleWorkoutSessions])
 
   const restoreSetState = useCallback((exerciseId: string, index: number, previous?: SetSyncRevert | null) => {
     const currentList = setLogsRef.current[exerciseId]
@@ -3037,7 +3169,9 @@ const App = () => {
       console.error('Chat Error:', error)
       const message = error instanceof Error && error.message.includes('Async chat endpoint unavailable')
         ? 'Backend needs a restart for async chat. /chat/async is not available yet.'
-        : t('messages.networkError')
+        : error instanceof TypeError || !(error instanceof Error) || !error.message
+          ? t('messages.networkError')
+          : error.message
       await addMessage(message, 'ai')
     }
   }, [
@@ -3054,7 +3188,7 @@ const App = () => {
     todayId,
   ])
 
-  const handleFastGenerateDayWorkout = useCallback(async (mode: 'recommended' | 'jev') => {
+  const handleFastGenerateDayWorkout = useCallback(async () => {
     if (!canGenerateWorkoutSelectedDay || !canQuerySavedWorkoutSessions || !isBackendHealthy) return
     const targetDate = selectedDay?.date ?? todayId
     if (pendingWorkoutDatesRef.current.has(targetDate)) return
@@ -3066,7 +3200,7 @@ const App = () => {
         headers,
         body: JSON.stringify({
           date: targetDate,
-          source: mode === 'jev' ? 'jev' : 'default',
+          source: 'default',
           request_id: crypto.randomUUID(),
         }),
       })
@@ -3106,11 +3240,7 @@ const App = () => {
   ])
 
   const handleGenerateDayWorkout = useCallback(() => {
-    void handleFastGenerateDayWorkout('recommended')
-  }, [handleFastGenerateDayWorkout])
-
-  const handleVaryDayWorkout = useCallback(() => {
-    void handleFastGenerateDayWorkout('jev')
+    void handleFastGenerateDayWorkout()
   }, [handleFastGenerateDayWorkout])
 
   const handleCopyLastWeek = useCallback(async () => {
@@ -3221,6 +3351,9 @@ const App = () => {
         // the just-deleted workout.
         delete workoutIdByOwnerDateRef.current[ownerKey]
         delete workoutRevisionByOwnerDateRef.current[ownerKey]
+        // Stamp the delete so any pre-clear fetch resolving late cannot
+        // resurrect the day: its snapshot predates this timestamp.
+        clearedWorkoutAtRef.current[targetDate] = (receipt as unknown as { updated_at?: string }).updated_at ?? new Date().toISOString()
         const clearedDay: WeekPlanDay = {
           ...(selectedDay ?? { date: targetDate, label: selectedDayLabel, exercises: [], extras: [], isRest: true, planNotes: '', notes: '' }),
           date: targetDate,
@@ -3232,7 +3365,10 @@ const App = () => {
           notes: '',
         }
         applyWeekPlan(
-          { weekStart: weekPlan.weekStart, days: weekPlan.days.map((day) => (day.date === targetDate ? clearedDay : day)) },
+          {
+            weekStart: weekPlanRef.current.weekStart,
+            days: weekPlanRef.current.days.map((day) => (day.date === targetDate ? clearedDay : day)),
+          },
           { selectedDate: targetDate, logsByDay: { ...weekSetLogsRef.current, [targetDate]: {} } },
         )
       }
@@ -3289,7 +3425,7 @@ const App = () => {
     ensureWorkoutSession()
     const scopeId = getCoachScopeId(exerciseId)
     addCoachMessage(scopeId, trimmed, 'user')
-    const thinkingId = addCoachThinkingMessage(scopeId, selectedModelLabel)
+    const thinkingId = addCoachThinkingMessage(scopeId, miniSelectedModelLabel)
 
     const exercise = getExercise(exerciseId)
     if (!exercise) {
@@ -3298,15 +3434,20 @@ const App = () => {
       return
     }
 
+    const ownerWorkoutKey = `${currentUserId}:${selectedDay?.date ?? todayId}`
+    const ownerWorkoutId = workoutIdByOwnerDateRef.current[ownerWorkoutKey]
     const payload = {
       user_id: currentUserId,
       request_id: crypto.randomUUID(),
       message: trimmed,
+      scope: MINI_CHAT_SCOPE,
       scope_id: scopeId,
       reference_date: selectedDay?.date ?? todayId,
       exercise_id: exercise.id,
-      ...(workoutRevisionByOwnerDateRef.current[`${currentUserId}:${selectedDay?.date ?? todayId}`]
-        ? { expected_revision: workoutRevisionByOwnerDateRef.current[`${currentUserId}:${selectedDay?.date ?? todayId}`] }
+      ...(ownerWorkoutId ? { workout_id: ownerWorkoutId } : {}),
+      exercise_instance_id: exercise.id,
+      ...(workoutRevisionByOwnerDateRef.current[ownerWorkoutKey]
+        ? { expected_revision: workoutRevisionByOwnerDateRef.current[ownerWorkoutKey] }
         : {}),
     }
 
@@ -3317,7 +3458,9 @@ const App = () => {
       removeCoachMessage(scopeId, thinkingId)
       const responseMessage = error instanceof Error && error.message.includes('Async chat endpoint unavailable')
         ? 'Backend needs a restart for async chat. /chat/async is not available yet.'
-        : t('messages.coachNetworkError')
+        : error instanceof TypeError || !(error instanceof Error) || !error.message
+          ? t('messages.coachNetworkError')
+          : error.message
       addCoachMessage(scopeId, responseMessage, 'ai')
     }
   }, [
@@ -3329,11 +3472,118 @@ const App = () => {
     fetchCoachReply,
     getCoachScopeId,
     getExercise,
+    miniSelectedModelLabel,
     removeCoachMessage,
     selectedDay?.date,
-    selectedModelLabel,
     t,
     todayId,
+  ])
+
+  const handleCloseSwap = useCallback(() => {
+    swapExerciseIdRef.current = null
+    swapResponseRef.current = null
+    setSwapOpen(false)
+    setSwapLoading(false)
+    setSwapError(null)
+    setSwapCandidates([])
+    setSwappingCandidateId(null)
+  }, [])
+
+  const handleOpenSwap = useCallback(async (exerciseId: string) => {
+    if (!canQuerySavedWorkoutSessions || !coachCanEditPrograms || !isBackendHealthy) return
+    const targetDate = selectedDay?.date ?? todayId
+    const workoutId = workoutIdByOwnerDateRef.current[`${coachActAsOwnerId ?? currentUserId}:${targetDate}`]
+    if (!workoutId) return
+    swapExerciseIdRef.current = exerciseId
+    swapResponseRef.current = null
+    setSwapOpen(true)
+    setSwapLoading(true)
+    setSwapError(null)
+    setSwapCandidates([])
+    setSwappingCandidateId(null)
+    try {
+      const headers = await getPrivyAuthHeaders()
+      const result = await fetchSwapCandidates({
+        apiBaseUrl: API_BASE_URL,
+        getHeaders: async () => headers,
+        workoutId,
+        exerciseInstanceId: exerciseId,
+        actAsLinkId: coachActAsLinkId,
+      })
+      if (swapExerciseIdRef.current !== exerciseId) return
+      swapResponseRef.current = result
+      setSwapCandidates(result.candidates)
+    } catch (error) {
+      if (swapExerciseIdRef.current !== exerciseId) return
+      const code = error instanceof SwapCandidatesError ? error.code : null
+      setSwapError(t(`workout.${swapErrorKey(code)}`))
+    } finally {
+      if (swapExerciseIdRef.current === exerciseId) setSwapLoading(false)
+    }
+  }, [
+    canQuerySavedWorkoutSessions,
+    coachActAsLinkId,
+    coachActAsOwnerId,
+    coachCanEditPrograms,
+    currentUserId,
+    getPrivyAuthHeaders,
+    isBackendHealthy,
+    selectedDay?.date,
+    t,
+    todayId,
+  ])
+
+  const handleSelectSwapCandidate = useCallback(async (candidate: SwapCandidate) => {
+    const response = swapResponseRef.current
+    if (!response || swappingCandidateId) return
+    setSwappingCandidateId(candidate.candidate_id)
+    try {
+      const headers = { 'Content-Type': 'application/json', ...await getPrivyAuthHeaders() }
+      const result = await apiFetch(withCoachActAs(
+        `${API_BASE_URL}/v1/workouts/${response.workout_id}/exercises/${response.exercise_instance_id}/swap`,
+      ), {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          source: 'jev',
+          reason: `Picked ${candidate.name} from the MiniChat alternatives.`,
+          target_candidate_id: candidate.candidate_id,
+          expected_revision: response.workout_revision,
+          expected_blueprint_revision: response.blueprint_revision,
+          request_id: crypto.randomUUID(),
+        }),
+      })
+      if (!result.ok) {
+        throw readApiError(await result.json().catch(() => null), result.status, t('workout.swapFailed'))
+      }
+      const receipt = await result.json() as BackendWorkoutReceipt
+      if (!receipt.workout) throw new Error(t('workout.swapFailed'))
+      applySavedWorkoutSessionToWeek(backendWorkoutToSession(receipt.workout, currentUserId))
+      handleCloseSwap()
+      try {
+        await refreshVisibleWorkoutSessions()
+      } catch {
+        // The swap receipt above already reflects the canonical record.
+      }
+    } catch (error) {
+      console.warn('Swap exercise failed:', error)
+      const code = error instanceof SwapCandidatesError ? error.code : null
+      const key = swapErrorKey(code)
+      setSwapError(key === 'swapFailed'
+        ? (error instanceof Error && error.message ? error.message : t('workout.swapFailed'))
+        : t(`workout.${key}`))
+    } finally {
+      setSwappingCandidateId(null)
+    }
+  }, [
+    applySavedWorkoutSessionToWeek,
+    currentUserId,
+    getPrivyAuthHeaders,
+    handleCloseSwap,
+    refreshVisibleWorkoutSessions,
+    swappingCandidateId,
+    t,
+    withCoachActAs,
   ])
 
   const handleClearChat = useCallback(async () => {
@@ -3500,10 +3750,12 @@ const App = () => {
   useEffect(() => {
     if (!isBackendHealthy || !privyReady || !privyAuthenticated) {
       setModelControl(null)
+      setMiniModelControl(null)
       return
     }
     const load = () => {
       refreshModelControl().catch((error) => console.warn('Ez model controls unavailable:', error))
+      refreshMiniModelControl().catch((error) => console.warn('Mini-chat model controls unavailable:', error))
     }
     load()
     const onVisible = () => {
@@ -3515,7 +3767,7 @@ const App = () => {
       document.removeEventListener('visibilitychange', onVisible)
       window.removeEventListener('focus', onVisible)
     }
-  }, [isBackendHealthy, privyAuthenticated, privyReady, refreshModelControl])
+  }, [isBackendHealthy, privyAuthenticated, privyReady, refreshModelControl, refreshMiniModelControl])
 
   const handleAuthClick = useCallback(async () => {
     if (!privyReady) return
@@ -4014,6 +4266,10 @@ const App = () => {
             holdTimer={holdTimer}
             coachMessages={activeCoachMessages}
             showModelLabels
+            miniModelOptions={miniModelOptions}
+            miniSelectedModel={miniSelectedModelValue}
+            miniModelSelectionDisabled={miniModelSelectionPending}
+            onMiniModelChange={handleMiniModelSelection}
             onSelectEntry={handleSelectEntry}
             onSelectDay={handleSelectDay}
             onBack={hideWorkoutDetail}
@@ -4078,6 +4334,14 @@ const App = () => {
             onSaveDayNote={handleSaveDayNote}
             onSaveExerciseFeedback={handleSaveExerciseFeedback}
             onCoachSend={handleCoachSend}
+            swapOpen={swapOpen}
+            swapLoading={swapLoading}
+            swappingCandidateId={swappingCandidateId}
+            swapError={swapError}
+            swapCandidates={swapCandidates}
+            onOpenSwap={handleOpenSwap}
+            onSelectSwapCandidate={handleSelectSwapCandidate}
+            onCloseSwap={handleCloseSwap}
             actAsLinkId={coachActAsLinkId}
           />
           <ProfileView
@@ -4113,7 +4377,6 @@ const App = () => {
               canCopyLastWeek={canGenerateWorkoutSelectedDay && canQuerySavedWorkoutSessions && isBackendHealthy}
               canClearWorkout={canClearSelectedDay && isBackendHealthy}
               onGenerateWorkout={handleGenerateDayWorkout}
-              onVaryWorkout={handleVaryDayWorkout}
               onGenerateWithCoach={handleGenerateDayWorkoutWithCoach}
               onCopyLastWeek={handleCopyLastWeek}
               onClearWorkout={handleClearWorkoutDay}

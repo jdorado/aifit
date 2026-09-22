@@ -47,6 +47,7 @@ def blueprint() -> dict:
                 "segment_id": "seg_main",
                 "order": 1,
                 "kind": "straight_sets",
+                "title": "Pull Main",
                 "rounds": 3,
                 "rest_after_round_seconds": 90,
                 "slots": [{

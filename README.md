@@ -38,7 +38,7 @@ Run the API and frontend with the external environment files:
 
 ```sh
 (cd api && uv run uvicorn --env-file "$AIFIT_CONFIG_DIR/api.env" \
-  aifit_api.main:app --host 127.0.0.1 --port 8100)
+  aifit_api.main:app --host 0.0.0.0 --port 8100)
 
 (cd web && AIFIT_WEB_ENV_FILE="$AIFIT_CONFIG_DIR/web.env" pnpm dev)
 ```

@@ -67,7 +67,8 @@ origins = [item.strip() for item in os.getenv(
     "CORS_ORIGINS",
     "http://localhost:5175,http://127.0.0.1:5175,http://[::1]:5175,http://localhost:5176,http://127.0.0.1:5176",
 ).split(",") if item.strip()]
-app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["*"], allow_headers=["Authorization", "Content-Type"])
+origin_regex = os.getenv("CORS_ORIGIN_REGEX", "").strip() or None
+app.add_middleware(CORSMiddleware, allow_origins=origins, allow_origin_regex=origin_regex, allow_credentials=True, allow_methods=["*"], allow_headers=["Authorization", "Content-Type"])
 
 
 @app.exception_handler(WorkoutDomainError)
@@ -148,11 +149,17 @@ def agent_run_context(account: dict[str, Any], request_id: str) -> dict[str, Any
     }}}
 
 
+OWNER_CHAT_SCOPE = "owner-chat"
+MINI_CHAT_SCOPE = "owner-minichat"
+ChatScope = Literal["owner-chat", "owner-minichat"]
+
+
 class ChatInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     user_id: str
     request_id: UUID
     message: str = Field(min_length=1, max_length=16_000)
+    scope: ChatScope = OWNER_CHAT_SCOPE
     scope_id: str | None = Field(default=None, max_length=200)
     reference_date: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
     exercise_id: str | None = Field(default=None, min_length=1, max_length=200)
@@ -164,6 +171,7 @@ class ChatInput(BaseModel):
 class ModelSelectionInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     expected_session: str | None = None
+    scope: ChatScope = OWNER_CHAT_SCOPE
     cli: str = Field(min_length=1, max_length=80)
     provider: str | None = Field(default=None, min_length=1, max_length=80)
     model: str | None = Field(default=None, min_length=1, max_length=160)
@@ -227,6 +235,7 @@ class AgentWorkoutSwapInput(BaseModel):
     exercise_instance_id: str = Field(pattern=r"^wex_[a-f0-9]{32}$")
     reason: str = Field(min_length=1, max_length=500)
     source: Literal["default", "jev"] = "jev"
+    target_candidate_id: str | None = Field(default=None, pattern=r"^cand_[a-z0-9_]{3,120}$")
     expected_revision: str = Field(pattern=r"^rev_[a-f0-9]{32}$")
     expected_blueprint_revision: str = Field(pattern=r"^rev_[a-f0-9]{32}$")
     request_id: str = Field(min_length=1, max_length=160, pattern=r"^[A-Za-z0-9_.:-]+$")
@@ -479,9 +488,20 @@ async def configure_telegram_bot(body: TelegramBotInput, identity: Identity = De
 
 
 @app.get("/chat/models")
-async def chat_models(identity: Identity = Depends(require_identity)) -> dict:
+async def chat_models(identity: Identity = Depends(require_identity),
+                      scope: ChatScope = OWNER_CHAT_SCOPE) -> dict:
+    """Shared owner control, or one private scope's control for mini-chat.
+
+    The owner scope uses the shared Ez control; any other admitted chat scope
+    uses its own scope-control, so mini-chat can run a faster model while the
+    main chat keeps a planning model. Neither operation changes the other.
+    """
     account = await account_for(identity)
     binding = await verified_binding(account["account_id"])
+    if scope != OWNER_CHAT_SCOPE:
+        control = public_model_control(await ez_call(
+            binding, "GET", f"/v1/scope-control?scope={quote(scope, safe='')}"))
+        return await lock_control(binding, identity, control)
     return await lock_control(binding, identity)
 
 
@@ -497,6 +517,10 @@ async def select_chat_model(body: ModelSelectionInput, identity: Identity = Depe
         selection["model"] = body.model
     if body.effort is not None:
         selection["effort"] = body.effort
+    if body.scope != OWNER_CHAT_SCOPE:
+        control = public_model_control(await ez_call(
+            binding, "POST", f"/v1/scope-control?scope={quote(body.scope, safe='')}", selection))
+        return await lock_control(binding, identity, control)
     control = public_model_control(await ez_call(binding, "POST", "/v1/control", selection))
     return await lock_control(binding, identity, control)
 
@@ -572,6 +596,9 @@ async def enqueue_chat(body: ChatInput, identity: Identity = Depends(require_ide
 
     No domain resolution, no history lookup, no text mutation, no turn store.
     Idempotency is owned by Ez via requestId (409 on conflicting reuse).
+    The owner scope follows the shared native conversation; any other
+    admitted chat scope (mini-chat) runs in its own native session with its
+    own model selection, so the two surfaces never change each other's AI.
     """
     account = await owned_account(identity, body.user_id)
     binding = await verified_binding(account["account_id"])
@@ -580,7 +607,9 @@ async def enqueue_chat(body: ChatInput, identity: Identity = Depends(require_ide
                                                  "exerciseId": body.exercise_id, "workoutId": body.workout_id,
                                                  "exerciseInstanceId": body.exercise_instance_id,
                                                  "expectedRevision": body.expected_revision}.items() if value is not None}
-    admission: dict[str, Any] = {"requestId": request_id, "scope": "owner-chat", "text": body.message, "followOwner": True}
+    admission: dict[str, Any] = {"requestId": request_id, "scope": body.scope, "text": body.message}
+    if body.scope == OWNER_CHAT_SCOPE:
+        admission["followOwner"] = True
     context = dict(references)
     plugin_context = agent_run_context(account, request_id)
     if plugin_context:
@@ -696,6 +725,12 @@ async def exercise_history_v1(exercise_id: str, before: str | None = None, limit
     return await workouts().history(account["account_id"], exercise_id, before, limit)
 
 
+@app.get("/v1/exercises/{exercise_id}/related-history")
+async def exercise_related_history_v1(exercise_id: str, limit: int = 20,
+                                      account: dict = Depends(require_view_account)) -> dict:
+    return await workouts().related_history(account["account_id"], exercise_id, limit)
+
+
 @app.get("/v1/exercises/{exercise_id}")
 async def get_exercise_v1(exercise_id: str, revision: str | None = None,
                           account: dict = Depends(require_view_account)) -> dict:
@@ -791,6 +826,12 @@ async def update_workout_exercise_notes_v1(workout_id: str, exercise_instance_id
     return await workouts().update_exercise_notes(account["account_id"], workout_id, exercise_instance_id, body)
 
 
+@app.get("/v1/workouts/{workout_id}/exercises/{exercise_instance_id}/swap-candidates")
+async def swap_candidates_v1(workout_id: str, exercise_instance_id: str,
+                             account: dict = Depends(require_view_account)) -> dict:
+    return await workouts().swap_candidates(account["account_id"], workout_id, exercise_instance_id)
+
+
 @app.post("/v1/workouts/{workout_id}/exercises/{exercise_instance_id}/swap")
 async def swap_workout_exercise_v1(workout_id: str, exercise_instance_id: str, body: SwapInput,
                                    account: dict = Depends(require_edit_account)) -> dict:
@@ -858,6 +899,16 @@ async def agent_exercise_history_v1(
     return await workouts().history(capability.account_id, exercise_id, before, limit)
 
 
+@app.get("/v1/agent/exercises/{exercise_id}/related-history")
+async def agent_exercise_related_history_v1(
+    exercise_id: str,
+    limit: int = 20,
+    capability: AgentCapability = Depends(require_agent_capability),
+) -> dict:
+    require_agent_permission(capability, AGENT_READ)
+    return await workouts().related_history(capability.account_id, exercise_id, limit)
+
+
 @app.post("/v1/agent/blueprints/draft")
 async def agent_draft_blueprint_v1(
     body: BlueprintDraftInput,
@@ -922,6 +973,7 @@ async def agent_swap_v1(
         SwapInput(
             source=body.source,
             reason=body.reason,
+            target_candidate_id=body.target_candidate_id,
             expected_revision=body.expected_revision,
             expected_blueprint_revision=body.expected_blueprint_revision,
             request_id=body.request_id,

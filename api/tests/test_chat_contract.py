@@ -79,6 +79,33 @@ async def test_enqueue_sends_untouched_text_and_slim_scope_only(monkeypatch, ide
 
 
 @pytest.mark.asyncio
+async def test_enqueue_forwards_canonical_workout_and_instance_refs(monkeypatch, identity):
+    monkeypatch.setattr(main, "owned_account", lambda *_args: async_value({
+        "account_id": "acc_1", "tenant_id": "ten_1",
+    }))
+    monkeypatch.setattr(main, "verified_binding", lambda *_args: async_value({"bindingId": "binding_1"}))
+    submitted = []
+
+    async def ez_call(_binding, method, path, body=None):
+        submitted.append((method, path, body))
+        if method == "POST":
+            return {"id": "run_1"}
+        return {"id": "run_1", "status": "completed", "messages": [{"id": "msg_1", "text": "ok"}]}
+
+    monkeypatch.setattr(main, "ez_call", ez_call)
+    await main.enqueue_chat(main.ChatInput(
+        user_id=identity.subject, request_id=uuid4(), message="explain form",
+        scope="owner-minichat", scope_id="coach:session:wex_1",
+        workout_id="wrk_0123456789abcdef0123456789abcdef",
+        exercise_instance_id="wex_0123456789abcdef0123456789abcdef",
+    ), identity)
+    admission = submitted[0][2]
+    assert admission["scope"] == "owner-minichat"
+    assert admission["context"]["workoutId"] == "wrk_0123456789abcdef0123456789abcdef"
+    assert admission["context"]["exerciseInstanceId"] == "wex_0123456789abcdef0123456789abcdef"
+
+
+@pytest.mark.asyncio
 async def test_enqueue_propagates_ez_request_key_conflict(monkeypatch, identity):
     monkeypatch.setattr(main, "owned_account", lambda *_args: async_value({
         "account_id": "acc_1", "tenant_id": "ten_1",
@@ -354,6 +381,79 @@ async def test_binding_verification_requires_owner_and_receipt(monkeypatch):
     with pytest.raises(HTTPException) as error:
         await ez.verified_binding("acc_1")
     assert error.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_mini_chat_enqueue_uses_its_own_scope_without_follow_owner(monkeypatch, identity):
+    monkeypatch.setattr(main, "owned_account", lambda *_args: async_value({
+        "account_id": "acc_1", "tenant_id": "ten_1",
+    }))
+    monkeypatch.setattr(main, "verified_binding", lambda *_args: async_value({"bindingId": "binding_1"}))
+    submitted = []
+
+    async def ez_call(_binding, method, path, body=None):
+        submitted.append((method, path, body))
+        if method == "POST":
+            return {"id": "run_mini"}
+        return {"id": "run_mini", "status": "completed", "messages": [{"id": "msg_1", "text": "ok"}]}
+
+    monkeypatch.setattr(main, "ez_call", ez_call)
+    result = await main.enqueue_chat(main.ChatInput(
+        user_id=identity.subject, request_id=uuid4(), message="swap this",
+        scope="owner-minichat", scope_id="coach:session:wex_1",
+    ), identity)
+    assert [item[1] for item in submitted] == ["/v1/runs", "/v1/runs/run_mini"]
+    admission = submitted[0][2]
+    assert admission["scope"] == "owner-minichat"
+    assert "followOwner" not in admission
+    assert admission["text"] == "swap this"
+    assert admission["context"]["scopeId"] == "coach:session:wex_1"
+    assert result["job_id"] == "run_mini"
+
+
+def test_unknown_chat_scope_is_rejected():
+    with pytest.raises(ValidationError):
+        main.ChatInput(user_id="owner", request_id=uuid4(), message="hi", scope="owner-other")
+    with pytest.raises(ValidationError):
+        main.ModelSelectionInput(expected_session="s", scope="owner-other", cli="codex")
+
+
+@pytest.mark.asyncio
+async def test_mini_chat_models_use_scope_control(monkeypatch, identity):
+    calls = []
+
+    async def ez_call(_binding, method, path, body=None):
+        calls.append((method, path, body))
+        return ez_control("deepseek", [DEEPSEEK_PRESET], CATALOG[:2], "session_mini")
+
+    monkeypatch.setattr(main, "account_for", lambda *_args: async_value({"account_id": "acc_1", "tenant_id": "ten_1"}))
+    monkeypatch.setattr(main, "verified_binding", lambda *_args: async_value({"bindingId": "binding_1"}))
+    monkeypatch.setattr(main, "ez_call", ez_call)
+    result = await main.chat_models(identity, scope="owner-minichat")
+    assert calls == [("GET", "/v1/scope-control?scope=owner-minichat", None)]
+    assert result["active_session_id"] == "session_mini"
+
+
+@pytest.mark.asyncio
+async def test_mini_chat_model_selection_uses_scope_control(tmp_path, monkeypatch, identity):
+    configure_policy(tmp_path, monkeypatch)
+    calls = []
+
+    async def ez_call(_binding, method, path, body=None):
+        calls.append((method, path, body))
+        return ez_control("deepseek", [DEEPSEEK_PRESET], CATALOG[:2], "session_mini")
+
+    monkeypatch.setattr(main, "account_for", lambda *_args: async_value({"account_id": "acc_1", "tenant_id": "ten_1"}))
+    monkeypatch.setattr(main, "verified_binding", lambda *_args: async_value({"bindingId": "binding_1"}))
+    monkeypatch.setattr(main, "ez_call", ez_call)
+    await main.select_chat_model(main.ModelSelectionInput(
+        expected_session="session_old", scope="owner-minichat",
+        cli=DEEPSEEK["cli"], model=DEEPSEEK["model"], effort=DEEPSEEK["effort"],
+    ), identity)
+    assert calls == [("POST", "/v1/scope-control?scope=owner-minichat", {
+        "action": "model", "expectedSession": "session_old", "cli": "codex",
+        "model": DEEPSEEK["model"], "effort": "max",
+    })]
 
 
 def async_value(value):

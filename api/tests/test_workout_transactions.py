@@ -1,4 +1,5 @@
 from copy import deepcopy
+import re
 
 import pytest
 from pymongo.errors import OperationFailure
@@ -18,6 +19,22 @@ class DeleteResult:
         self.deleted_count = deleted_count
 
 
+class FakeCursor:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def sort(self, key, direction=1):
+        self.rows.sort(key=lambda row: row.get(key), reverse=direction < 0)
+        return self
+
+    def limit(self, count):
+        self.rows = self.rows[:count]
+        return self
+
+    async def to_list(self, length=None):
+        return [deepcopy(row) for row in self.rows]
+
+
 class FakeCollection:
     def __init__(self, database, name):
         self.database = database
@@ -29,6 +46,9 @@ class FakeCollection:
 
     async def find_one(self, query, **_kwargs):
         return next((deepcopy(row) for row in self.documents if matches(row, query)), None)
+
+    def find(self, query, **_kwargs):
+        return FakeCursor([row for row in self.documents if matches(row, query)])
 
     async def insert_one(self, document, **_kwargs):
         self.documents.append(deepcopy(document))
@@ -135,11 +155,48 @@ class StandaloneDatabase(FakeDatabase):
 
 def matches(document, query):
     for key, value in query.items():
-        if isinstance(value, dict) and "$exists" in value:
-            if (key in document) != value["$exists"]:
+        if key == "$or":
+            if not any(matches(document, clause) for clause in value):
                 return False
             continue
-        if document.get(key) != value:
+        if isinstance(value, dict):
+            if "$exists" in value:
+                if (key in document) != value["$exists"]:
+                    return False
+                continue
+            if "$regex" in value:
+                field = document.get(key)
+                if not isinstance(field, str) or re.search(value["$regex"], field) is None:
+                    return False
+                continue
+            if "$ne" in value:
+                if document.get(key) == value["$ne"]:
+                    return False
+                continue
+            if "$in" in value:
+                field = document.get(key)
+                candidates = value["$in"]
+                if isinstance(field, list):
+                    if not any(item in candidates for item in field):
+                        return False
+                elif field not in candidates:
+                    return False
+                continue
+            if "$nin" in value:
+                field = document.get(key)
+                excluded = value["$nin"]
+                if isinstance(field, list):
+                    if any(item in excluded for item in field):
+                        return False
+                elif field in excluded:
+                    return False
+                continue
+        field = document.get(key)
+        if isinstance(field, list):
+            if value not in field:
+                return False
+            continue
+        if field != value:
             return False
     return True
 

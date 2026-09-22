@@ -28,6 +28,7 @@ function usage() {
 Read:
   aifit exercise show EXERCISE_ID [--revision REV]
   aifit exercise history EXERCISE_ID [--before DATE] [--limit N]
+  aifit exercise related-history EXERCISE_ID [--limit N]
   aifit blueprint active [--date DATE]
   aifit workout show WORKOUT_ID
   aifit workout list --start DATE --end DATE
@@ -39,21 +40,25 @@ Write (all require --request-id):
   aifit workout generate --date DATE [--source default|jev]
   aifit workout log-set WORKOUT_ID SET_ID --input FILE|- --expected-revision REV
   aifit workout override --input FILE|- [--expected-revision REV]
-  aifit workout swap --input FILE|- --expected-revision REV [--source default|jev]
+  aifit workout swap --input FILE|- --expected-revision REV [--source default|jev] [--target-candidate CAND]
 
 Artifacts (full typed schema and rules are in the installed aifit skill):
   exercise definition: exercise_id, name, movement_pattern, primary_muscles,
     secondary_muscles, equipment_kind, laterality, load_basis, metrics,
     instructions_md
   blueprint: schema_version=1, timezone, start_date, end_date, hard_constraints,
-    days[{day_id,date,kind,title,intent_md,segments[{segment_id,order,kind,rounds,
+    days[{day_id,date,kind,title,intent_md,segments[{segment_id,order,kind,title,rounds,
     rest_after_round_seconds,slots[{slot_id,order,role,selection_count,candidates[
     {candidate_id,exercise_id,exercise_revision,priority,rationale_md,
     equipment_profile_id,prescription{metric,target{reps|duration_seconds,load,rpe},
     rest_seconds,tempo},progression}]}]}]}]
+  Every training-day and override segment needs a short title (1-80 chars,
+  e.g. "Chest + Back", "Warm-up Flow") naming its focus.
   override: date, title, reason_md, segments (every slot exactly one candidate)
   set actual: status, reps, duration_seconds, load, rpe, completed_at
   swap: workout_id, exercise_instance_id, expected_blueprint_revision, reason
+    (pass --target-candidate CAND when the user already picked a slot candidate,
+    e.g. a mini-chat top-3 choice; otherwise the API selects via --source)
 
 Reads print canonical JSON records. Writes print one receipt. Use stdin
 (--input -) because Ez runs the plugin in an isolated container.
@@ -195,6 +200,12 @@ async function main() {
       before: optional(values, '--before') ? date(values['--before'], '--before') : undefined,
       limit: optional(values, '--limit') ? positiveInteger(values['--limit'], '--limit') : undefined,
     });
+  } else if (area === 'exercise' && action === 'related-history') {
+    const { values, positional } = parseArgs(rest, new Set(['--limit']));
+    const [exerciseId] = exactly(positional, 1, 'exercise related-history EXERCISE_ID');
+    result = await call(context, 'GET', `/exercises/${exerciseId}/related-history`, undefined, {
+      limit: optional(values, '--limit') ? positiveInteger(values['--limit'], '--limit') : undefined,
+    });
   } else if (area === 'exercise' && action === 'create') {
     const { values } = parseArgs(rest, new Set(['--input', '--expected-revision', '--request-id']));
     result = await call(context, 'POST', '/exercises', {
@@ -256,12 +267,17 @@ async function main() {
       request_id: required(values, '--request-id'),
     });
   } else if (area === 'workout' && action === 'swap') {
-    const { values } = parseArgs(rest, new Set(['--input', '--expected-revision', '--request-id', '--source']));
+    const { values } = parseArgs(rest, new Set(['--input', '--expected-revision', '--request-id', '--source', '--target-candidate']));
+    const targetCandidate = optional(values, '--target-candidate');
+    if (targetCandidate !== undefined && !/^cand_[a-z0-9_]{3,120}$/.test(targetCandidate)) {
+      throw new Error('--target-candidate must match ^cand_[a-z0-9_]{3,120}$');
+    }
     result = await call(context, 'POST', '/workouts/swap', {
-      ...await jsonFile(required(values, '--input'), jsonShape('swap intent', ['expected_revision', 'request_id', 'source'])),
+      ...await jsonFile(required(values, '--input'), jsonShape('swap intent', ['expected_revision', 'request_id', 'source', 'target_candidate_id'])),
       expected_revision: required(values, '--expected-revision'),
       request_id: required(values, '--request-id'),
       source: optional(values, '--source') ? oneOf(values['--source'], '--source', ['default', 'jev']) : 'jev',
+      ...(targetCandidate === undefined ? {} : { target_candidate_id: targetCandidate }),
     });
   } else {
     throw new Error('Unknown AIFit command. Run aifit --help.');

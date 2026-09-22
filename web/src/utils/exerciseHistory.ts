@@ -7,6 +7,8 @@ export type ExerciseHistorySet = {
   set_id: string
   workout_id: string
   exercise_instance_id: string
+  exercise_id: string | null
+  exercise_name: string | null
   date: string
   completed_at: string
   load: ExerciseHistoryLoad | null
@@ -18,9 +20,18 @@ export type ExerciseHistorySet = {
 export type ExerciseHistorySession = {
   workoutId: string
   date: string
+  exerciseName: string | null
   sets: ExerciseHistorySet[]
   topSet: ExerciseHistorySet | null
   volumeKg: number | null
+}
+
+export type ExerciseHistoryRelated = {
+  exerciseId: string
+  movementPattern: string | null
+  primaryMuscle: string | null
+  family: ExerciseHistorySession[]
+  muscle: ExerciseHistorySession[]
 }
 
 type ExerciseHistoryFetch = {
@@ -66,6 +77,8 @@ const normalizeSet = (value: unknown): ExerciseHistorySet | null => {
     set_id: setId,
     workout_id: workoutId,
     exercise_instance_id: asString(row.exercise_instance_id) ?? '',
+    exercise_id: asString(row.exercise_id),
+    exercise_name: asString(row.exercise_name),
     date,
     completed_at: asString(row.completed_at) ?? '',
     load: normalizeLoad(row.load),
@@ -107,6 +120,34 @@ export const fetchExerciseHistory = async ({
     .filter((row): row is ExerciseHistorySet => row !== null)
 }
 
+/**
+ * The API returns set rows newest-first. Walk older pages until the legacy
+ * session window (10 exposures, ~84 days) is covered or history runs out, so
+ * the sheet does not stop at the most recent handful of sessions.
+ */
+export const fetchExerciseHistoryWindow = async (
+  options: ExerciseHistoryFetch & { minSessions?: number; pageSize?: number; maxPages?: number },
+): Promise<ExerciseHistorySet[]> => {
+  const { minSessions = 10, pageSize = 50, maxPages = 4, ...fetchOptions } = options
+  const rows: ExerciseHistorySet[] = []
+  const seen = new Set<string>()
+  let before = fetchOptions.before
+
+  for (let page = 0; page < maxPages; page += 1) {
+    const pageRows = await fetchExerciseHistory({ ...fetchOptions, before, limit: pageSize })
+    const fresh = pageRows.filter((row) => !seen.has(row.set_id))
+    fresh.forEach((row) => seen.add(row.set_id))
+    rows.push(...fresh)
+    if (pageRows.length < pageSize || fresh.length === 0) break
+    if (groupExerciseHistory(rows).length >= minSessions) break
+    const oldest = pageRows[pageRows.length - 1]?.date
+    if (!oldest) break
+    before = oldest
+  }
+
+  return rows
+}
+
 const setVolumeKg = (set: ExerciseHistorySet): number | null => {
   const load = loadInKg(set.load)
   if (load === null || set.reps === null) return null
@@ -140,10 +181,46 @@ export const groupExerciseHistory = (sets: ExerciseHistorySet[]): ExerciseHistor
       return {
         workoutId,
         date: ordered[0]?.date ?? '',
+        exerciseName: ordered[0]?.exercise_name ?? null,
         sets: ordered,
         topSet: [...sessionSets].sort((left, right) => topSetRank(right) - topSetRank(left))[0] ?? null,
         volumeKg: hasVolume ? volumeKg : null,
       }
     })
     .sort((left, right) => right.date.localeCompare(left.date))
+}
+
+const normalizeRows = (value: unknown): ExerciseHistorySet[] => (
+  Array.isArray(value)
+    ? value.map(normalizeSet).filter((row): row is ExerciseHistorySet => row !== null)
+    : []
+)
+
+export const fetchRelatedExerciseHistory = async ({
+  apiBaseUrl,
+  getHeaders,
+  exerciseId,
+  limit = 20,
+  actAsLinkId = null,
+}: ExerciseHistoryFetch): Promise<ExerciseHistoryRelated> => {
+  const params = new URLSearchParams({ limit: String(limit) })
+  if (actAsLinkId) params.set('act_as_link_id', actAsLinkId)
+  const response = await fetch(
+    `${apiBaseUrl}/v1/exercises/${encodeURIComponent(exerciseId)}/related-history?${params.toString()}`,
+    { headers: await getHeaders() },
+  )
+  if (!response.ok) {
+    throw new Error(`Failed to load related exercise history (${response.status})`)
+  }
+  const payload = asRecord(await response.json())
+  if (!payload) {
+    throw new Error('Invalid related exercise history payload')
+  }
+  return {
+    exerciseId,
+    movementPattern: asString(payload.movement_pattern),
+    primaryMuscle: asString(payload.primary_muscle),
+    family: groupExerciseHistory(normalizeRows(payload.family)),
+    muscle: groupExerciseHistory(normalizeRows(payload.muscle)),
+  }
 }

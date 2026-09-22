@@ -240,6 +240,32 @@ test('exercise, log-set, generate, and swap transport their typed payloads', asy
       request_id: 'swap-test',
       source: 'default',
     });
+
+    const picked = await runCli([
+      'workout', 'swap', '--input', '-', '--request-id', 'swap-pick-test',
+      '--expected-revision', 'rev_0123456789abcdef0123456789abcdef',
+      '--target-candidate', 'cand_row_cable',
+    ], {
+      context: scopedContext,
+      fetchOutput,
+      input: JSON.stringify({
+        workout_id: 'wrk_0123456789abcdef0123456789abcdef',
+        exercise_instance_id: 'wex_0123456789abcdef0123456789abcdef',
+        expected_blueprint_revision: 'rev_abcdef0123456789abcdef0123456789',
+        reason: 'The user picked the cable alternative.',
+      }),
+    });
+    assert.equal(picked.code, 0, picked.stderr);
+    assert.deepEqual((await fetchRequest(fetchOutput)).body, {
+      workout_id: 'wrk_0123456789abcdef0123456789abcdef',
+      exercise_instance_id: 'wex_0123456789abcdef0123456789abcdef',
+      expected_blueprint_revision: 'rev_abcdef0123456789abcdef0123456789',
+      reason: 'The user picked the cable alternative.',
+      expected_revision: 'rev_0123456789abcdef0123456789abcdef',
+      request_id: 'swap-pick-test',
+      source: 'jev',
+      target_candidate_id: 'cand_row_cable',
+    });
   });
 });
 
@@ -248,6 +274,7 @@ test('artifact inputs cannot smuggle CLI metadata into the API payload', async (
     ['blueprint', 'request_id', ['blueprint', 'solidify', '--input', '-', '--request-id', 'blueprint-test'], { title: 'invalid', request_id: 'smuggled' }],
     ['override', 'expected_revision', ['workout', 'override', '--input', '-', '--request-id', 'override-test'], { date: '2026-09-21', expected_revision: 'smuggled' }],
     ['swap', 'source', ['workout', 'swap', '--input', '-', '--request-id', 'swap-test', '--expected-revision', 'rev_0123456789abcdef0123456789abcdef'], { source: 'default' }],
+    ['swap', 'target_candidate_id', ['workout', 'swap', '--input', '-', '--request-id', 'swap-test', '--expected-revision', 'rev_0123456789abcdef0123456789abcdef'], { target_candidate_id: 'cand_smuggled' }],
     ['set actual', 'request_id', ['workout', 'log-set', 'wrk_x', 'wst_x', '--input', '-', '--expected-revision', 'rev_x', '--request-id', 'set-test'], { status: 'completed', request_id: 'smuggled' }],
     ['exercise definition', 'expected_revision', ['exercise', 'create', '--input', '-', '--request-id', 'exercise-test'], { exercise_id: 'ex_x', expected_revision: 'smuggled' }],
   ]) {

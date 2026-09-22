@@ -4,36 +4,49 @@ import type { FC, KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { useI18n } from '../../i18n'
 import type { ChatMessage } from '../../types/app'
 import ThinkingCounter, { ReplyElapsed } from '../chat/ThinkingCounter'
+import { useAutoGrowTextarea } from '../../utils/autoGrowTextarea'
 
 type CoachChatProps = {
   open: boolean
   disabled?: boolean
   messages: ChatMessage[]
   showModelLabels?: boolean
+  modelOptions?: Array<{ value: string, label: string }>
+  selectedModel?: string
+  modelSelectionDisabled?: boolean
+  onModelChange?: (value: string) => void
+  subtitle?: string
   draft: string
   onToggle: () => void
   onDraftChange: (value: string) => void
   onSend: () => void
   onQuickPrompt: (message: string) => void
+  onSwap?: () => void
 }
 
-const QUICK_PROMPT_KEYS = ['quickLastTime', 'quickSuggestWeight', 'quickRestTime'] as const
+const QUICK_PROMPT_KEYS = ['quickExplainForm', 'quickSuggestWeight', 'quickMakeEasier'] as const
 
 const CoachChat: FC<CoachChatProps> = ({
   open,
   disabled = false,
   messages,
   showModelLabels = false,
+  modelOptions = [],
+  selectedModel = '',
+  modelSelectionDisabled = false,
+  onModelChange,
+  subtitle,
   draft,
   onToggle,
   onDraftChange,
   onSend,
   onQuickPrompt,
+  onSwap,
 }) => {
   const { t } = useI18n()
   const hasDraft = !disabled && draft.trim().length > 0
   const messagesRef = useRef<HTMLDivElement>(null)
-  const inputRef = useRef<HTMLTextAreaElement>(null)
+  const inputRef = useAutoGrowTextarea(draft, open)
   const scrollFrameRef = useRef<number | null>(null)
   const focusFrameRef = useRef<number | null>(null)
   const [isMobileViewport, setIsMobileViewport] = useState(() => (
@@ -175,8 +188,25 @@ const CoachChat: FC<CoachChatProps> = ({
           <span className="coach-chat-dot" aria-hidden="true"></span>
           <span className="coach-chat-text">
             <span className="coach-chat-title">{t('workout.askCoach')}</span>
-            <span className="coach-chat-subtitle">{t('workout.coachSheetHint')}</span>
+            <span className="coach-chat-subtitle">{subtitle || t('workout.coachSheetHint')}</span>
           </span>
+          {modelOptions.length > 1 && onModelChange ? (
+            <label className="coach-chat-model-select">
+              <select
+                value={selectedModel}
+                onChange={(event) => onModelChange(event.target.value)}
+                aria-label="AI model"
+                disabled={disabled || modelSelectionDisabled}
+              >
+                {modelOptions.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+              <svg viewBox="0 0 12 8" aria-hidden="true">
+                <path d="m1 1 5 5 5-5" />
+              </svg>
+            </label>
+          ) : null}
           <button
             type="button"
             className="coach-chat-close"
@@ -225,6 +255,15 @@ const CoachChat: FC<CoachChatProps> = ({
             })}
           </div>
           <div className="coach-chat-prompts" role="group" aria-label={t('workout.quickPromptsLabel')}>
+            {onSwap ? (
+              <button
+                type="button"
+                disabled={disabled}
+                onClick={onSwap}
+              >
+                {t('workout.quickSwap')}
+              </button>
+            ) : null}
             {QUICK_PROMPT_KEYS.map((key) => (
               <button
                 type="button"

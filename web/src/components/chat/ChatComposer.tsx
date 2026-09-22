@@ -1,6 +1,7 @@
 import { useRef } from 'react'
 import type { FC, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from 'react'
 import { useI18n } from '../../i18n'
+import { useAutoGrowTextarea } from '../../utils/autoGrowTextarea'
 
 type ChatComposerProps = {
   value: string
@@ -17,6 +18,7 @@ const ChatComposer: FC<ChatComposerProps> = ({
 }) => {
   const { t } = useI18n()
   const sentOnTouchRef = useRef(false)
+  const textareaRef = useAutoGrowTextarea(value)
   const canSend = !disabled && value.trim().length > 0
 
   const handleKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
@@ -52,6 +54,7 @@ const ChatComposer: FC<ChatComposerProps> = ({
   return (
     <div className="chat-input">
       <textarea
+        ref={textareaRef}
         placeholder={disabled ? t('coach.chatPermissionRequired') : t('chat.placeholder')}
         value={value}
         disabled={disabled}

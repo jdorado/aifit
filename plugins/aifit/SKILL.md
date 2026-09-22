@@ -16,6 +16,7 @@ uncertain result.
 ```sh
 aifit exercise show EXERCISE_ID [--revision REV]
 aifit exercise history EXERCISE_ID [--before DATE] [--limit N]
+aifit exercise related-history EXERCISE_ID [--limit N]
 aifit blueprint active [--date DATE]
 aifit workout show WORKOUT_ID
 aifit workout list --start DATE --end DATE
@@ -25,6 +26,31 @@ Reads print the canonical JSON record the app renders. Use them whenever the
 user asks about what the app shows, today's session, a past workout, a load, or
 a current revision. Answer from the record, never from a workspace plan
 template.
+
+## Mini-chat scope
+
+A mini-chat turn is always about one workout exercise instance. The references
+are not in the prompt; read the current run first:
+
+```sh
+ezenciel-agents-schedule context
+```
+
+Its `run.application.context` carries only these references:
+
+- `workoutId`: the `wrk_...` record holding the instance
+- `exerciseInstanceId`: the `wex_...` target item inside that record
+- `scopeId`: the app's opaque thread key for this exercise, not an ID to parse
+- `referenceDate`: the `YYYY-MM-DD` training day
+- `expectedRevision`: the current workout revision for revision-guarded writes
+
+Read `workout show WORKOUT_ID`, find the item whose `exercise_instance_id`
+equals `exerciseInstanceId`, and answer from that item (prescription, cues,
+history via `exercise history` with the item's catalog exercise ID). For a
+blueprint question about that exercise, follow the item's `slot_id` into
+`blueprint active --date referenceDate` and use that slot's candidates. Never
+ask which exercise the user means; the references name it. If a reference is
+absent, stop with structured feedback instead of inventing one.
 
 ## Writes
 
@@ -46,7 +72,7 @@ aifit workout override --input FILE|- --request-id KEY \
   [--expected-revision REV]
 
 aifit workout swap --input FILE|- --request-id KEY \
-  --expected-revision REV [--source default|jev]
+  --expected-revision REV [--source default|jev] [--target-candidate CAND]
 ```
 
 Use stdin (`--input -` or `--markdown -`) because Ez runs the plugin in an
@@ -105,6 +131,7 @@ Revise an existing exercise by passing the same `exercise_id` with
           "segment_id": "seg_main",
           "order": 1,
           "kind": "straight_sets",
+          "title": "Pull Main",
           "rounds": 3,
           "rest_after_round_seconds": 90,
           "slots": [
@@ -165,6 +192,10 @@ Rules:
 - IDs and `order` values are unique inside their collection; every day date is
   inside the declared period; one exercise cannot appear twice in a day.
 - A training day has at least one segment; a rest day has none.
+- Every training-day and override segment carries a short `title` (1-80
+  chars) naming its focus, e.g. `"Warm-up Flow"`, `"Chest + Back"`,
+  `"Arms"`. The app shows this title; untitled history falls back to the
+  kind label.
 - Segment `kind` is one of `warmup`, `straight_sets`, `superset`, `circuit`,
   `interval`, `mobility`, `cooldown`; `rounds` is 1-10.
 - A blueprint slot needs more candidates than `selection_count`, so one
@@ -192,7 +223,7 @@ Rules:
   "date": "2026-09-21",
   "title": "Upper A (busy gym)",
   "reason_md": "Machine occupied.",
-  "segments": [{"segment_id": "seg_main", "order": 1, "kind": "straight_sets", "rounds": 3,
+  "segments": [{"segment_id": "seg_main", "order": 1, "kind": "straight_sets", "title": "Press Main", "rounds": 3,
     "rest_after_round_seconds": 90, "slots": [{"slot_id": "slot_press", "order": 1, "role": "horizontal_push",
       "selection_count": 1, "candidates": [{"candidate_id": "cand_press", "exercise_id": "ex_dumbbell_press",
         "exercise_revision": "rev_0123456789abcdef0123456789abcdef", "priority": 1, "rationale_md": "Resolved for today.",
@@ -234,10 +265,19 @@ a completed duration set needs `duration_seconds`; `load` is optional
 ```
 
 `--expected-revision` is the current workout revision. Use swap (not override)
-for in-blueprint changes. Logged sets are immutable: the backend keeps them
+for in-blueprint changes. When the user already picked one slot alternative
+(mini-chat top-3 choice), pass its `candidate_id` as `--target-candidate`;
+the backend validates it stays inside the same blueprint slot and applies it
+directly. Otherwise omit it and the backend selects via `--source` (JEV
+unless `--source default` is passed explicitly). Logged sets are immutable: the backend keeps them
 under the original exercise and swaps only the sets that are still open, so a
 partially logged exercise can still be swapped. Only an exercise whose every
-set is logged returns `completed_exercise_locked`. If the required workout or
+set is logged returns `completed_exercise_locked`. An item kept verbatim from
+outside the blueprint (legacy import, copied day, or override remainder) has
+no blueprint slot and returns `blueprint_slot_missing`: do not retry it —
+regenerate the day from the active blueprint first (clear the unlogged
+remainder, then generate) so every item maps to a slot with alternatives.
+If the required workout or
 blueprint context is absent, stop with structured feedback; never invent a
 candidate or turn a swap into an exception day.
 

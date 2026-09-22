@@ -17,6 +17,11 @@ the aifit skill; `ez tools list --details`):
 - `ez aifit workout show WORKOUT_ID`, `ez aifit workout list --start DATE --end DATE` — materialized days
 - `ez aifit exercise show EXERCISE_ID`, `ez aifit exercise history EXERCISE_ID` — exercise records and logged performance
 
+In a mini-chat turn the app already knows which exercise the user sees: read
+the turn references first with `ezenciel-agents-schedule context`
+(`run.application.context` holds `workoutId`, `exerciseInstanceId`, and the
+rest), then answer from those records. Never ask which exercise is meant.
+
 Never present a workspace plan template as the app's session; answer from the
 record you read. If the record is absent, say the app has no record for that
 date and offer the correct action.
