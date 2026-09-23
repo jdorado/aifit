@@ -73,7 +73,7 @@ type BackendSegment = {
   segment_id: string
   order: number
   kind: 'warmup' | 'straight_sets' | 'superset' | 'circuit' | 'interval' | 'mobility' | 'cooldown'
-  title?: string
+  title?: string | null
   rounds: number
   rest_after_round_seconds: number
   items: BackendWorkoutItem[]
@@ -215,8 +215,8 @@ const toExercise = (segment: BackendSegment, item: BackendWorkoutItem): WorkoutE
     .split(/\r?\n/)
     .map((cue) => cue.trim())
     .filter(Boolean)
-  // Imported legacy days carry their original circuit/section name; generated
-  // days fall back to the kind label. Distinct names keep circuits separate.
+  // Imported legacy days keep their section name. New titles are agent-authored;
+  // missing history falls back to the kind label. Grouping uses circuit.key.
   const label = segment.title?.trim() || sectionLabel(segment.kind)
 
   return {
