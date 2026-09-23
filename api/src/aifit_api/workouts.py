@@ -371,6 +371,28 @@ class SetUnlogInput(StrictModel):
     request_id: str = Field(min_length=1, max_length=160, pattern=r"^[A-Za-z0-9_.:-]+$")
 
 
+class SetAddInput(StrictModel):
+    expected_revision: str = Field(pattern=r"^rev_[a-f0-9]{32}$")
+    request_id: str = Field(min_length=1, max_length=160, pattern=r"^[A-Za-z0-9_.:-]+$")
+
+
+class SetRemoveInput(StrictModel):
+    expected_revision: str = Field(pattern=r"^rev_[a-f0-9]{32}$")
+    request_id: str = Field(min_length=1, max_length=160, pattern=r"^[A-Za-z0-9_.:-]+$")
+
+
+class SetTargetInput(StrictModel):
+    target: Target
+    apply_to_remaining: bool = False
+    expected_revision: str = Field(pattern=r"^rev_[a-f0-9]{32}$")
+    request_id: str = Field(min_length=1, max_length=160, pattern=r"^[A-Za-z0-9_.:-]+$")
+
+
+class PlanEntryRemoveInput(StrictModel):
+    expected_revision: str = Field(pattern=r"^rev_[a-f0-9]{32}$")
+    request_id: str = Field(min_length=1, max_length=160, pattern=r"^[A-Za-z0-9_.:-]+$")
+
+
 class WorkoutNotesInput(StrictModel):
     notes: str = Field(max_length=4_000)
     expected_revision: str = Field(pattern=r"^rev_[a-f0-9]{32}$")
@@ -1007,6 +1029,204 @@ class WorkoutService:
                     "completed_at": actual["completed_at"], "load": load, "reps": actual.get("reps"), "duration_seconds": actual.get("duration_seconds"),
                     "rpe": actual.get("rpe")}
         await self.db.performance_index.replace_one({"account_id": account_id, "workout_id": workout["workout_id"], "set_id": set_row["set_id"]}, document, upsert=True)
+
+    async def _editable_workout(self, account_id: str, workout_id: str, expected_revision: str) -> dict[str, Any]:
+        """Load the live workout and enforce the optimistic revision guard."""
+        workout = await self.db.workouts.find_one({"account_id": account_id, "workout_id": workout_id, "deleted_at": {"$exists": False}})
+        if not workout:
+            raise WorkoutDomainError("workout_not_found", "Workout was not found.", 404)
+        if workout["revision"] != expected_revision:
+            raise WorkoutDomainError("stale_revision", "Workout changed. Pull the current revision before editing.")
+        return workout
+
+    @staticmethod
+    def _find_set(workout: dict[str, Any], set_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
+        for segment in workout["segments"]:
+            for item in segment["items"]:
+                for set_row in item["sets"]:
+                    if set_row["set_id"] == set_id:
+                        return item, set_row
+        raise WorkoutDomainError("set_not_found", "Workout set was not found.", 404)
+
+    @staticmethod
+    def _renumber_workout(workout: dict[str, Any]) -> None:
+        """Keep segment and item order canonical (1-based, contiguous)."""
+        for segment_index, segment in enumerate(workout["segments"], start=1):
+            segment["order"] = segment_index
+            for item_index, item in enumerate(segment["items"], start=1):
+                item["order"] = item_index
+
+    async def _replace_or_delete_workout(
+        self,
+        account_id: str,
+        workout_id: str,
+        expected_revision: str,
+        request_id: str,
+        fingerprint: str,
+        effect: str,
+        workout: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Persist a plan edit; delete the record when no logged content remains."""
+        if not workout["segments"]:
+            deleted = await self.db.workouts.delete_one(
+                {"account_id": account_id, "workout_id": workout_id, "revision": expected_revision},
+            )
+            if not deleted.deleted_count:
+                raise WorkoutDomainError("stale_revision", "Workout changed. Pull the current revision before editing.")
+            response = self.receipt("workout", workout_id, expected_revision, request_id, effect)
+            response["workout"] = None
+            return await self._save_receipt(account_id, request_id, fingerprint, response)
+        self._renumber_workout(workout)
+        workout["status"] = self._workout_status(workout)
+        workout["revision"], workout["updated_at"] = new_revision(), utc_now()
+        replaced = await self.db.workouts.replace_one(
+            {"account_id": account_id, "workout_id": workout_id, "revision": expected_revision}, workout,
+        )
+        if not replaced.modified_count:
+            raise WorkoutDomainError("stale_revision", "Workout changed. Pull the current revision before editing.")
+        response = self.receipt("workout", workout_id, workout["revision"], request_id, effect)
+        response["workout"] = self._public(workout, ("account_id", "_id"))
+        return await self._save_receipt(account_id, request_id, fingerprint, response)
+
+    @transactional_mutation
+    async def add_set(self, account_id: str, workout_id: str, exercise_instance_id: str, input: SetAddInput) -> dict[str, Any]:
+        """Append one unlogged set, copying the target of the last non-warmup set."""
+        fingerprint = _fingerprint({"workout_id": workout_id, "exercise_instance_id": exercise_instance_id, **input.model_dump(mode="json")})
+        prior = await self._receipt(account_id, input.request_id, fingerprint)
+        if prior:
+            return prior
+        workout = await self._editable_workout(account_id, workout_id, input.expected_revision)
+        item: dict[str, Any] | None = None
+        for segment in workout["segments"]:
+            for candidate in segment["items"]:
+                if candidate["exercise_instance_id"] == exercise_instance_id:
+                    item = candidate
+                    break
+        if item is None:
+            raise WorkoutDomainError("exercise_instance_not_found", "Workout exercise was not found.", 404)
+        source = next((set_row for set_row in reversed(item["sets"]) if set_row.get("kind") != "warmup"), None)
+        if source is None and item["sets"]:
+            source = item["sets"][-1]
+        if source is None:
+            raise WorkoutDomainError("set_source_missing", "This exercise has no set left to copy a target from.")
+        new_set: dict[str, Any] = {"set_id": new_id("set"), "kind": source.get("kind", "work"),
+                                  "target": deepcopy(source["target"]), "actual": None}
+        if source.get("round") is not None:
+            new_set["round"] = source["round"] + 1
+        item["sets"].append(new_set)
+        workout["status"] = self._workout_status(workout)
+        workout["revision"], workout["updated_at"] = new_revision(), utc_now()
+        replaced = await self.db.workouts.replace_one(
+            {"account_id": account_id, "workout_id": workout_id, "revision": input.expected_revision}, workout,
+        )
+        if not replaced.modified_count:
+            raise WorkoutDomainError("stale_revision", "Workout changed. Pull the current revision before editing.")
+        response = self.receipt("workout", workout_id, workout["revision"], input.request_id, "set_added")
+        response["workout"] = self._public(workout, ("account_id", "_id"))
+        return await self._save_receipt(account_id, input.request_id, fingerprint, response)
+
+    @transactional_mutation
+    async def remove_set(self, account_id: str, workout_id: str, set_id: str, input: SetRemoveInput) -> dict[str, Any]:
+        """Remove one unlogged set; a logged set is immutable history."""
+        fingerprint = _fingerprint({"workout_id": workout_id, "set_id": set_id, **input.model_dump(mode="json")})
+        prior = await self._receipt(account_id, input.request_id, fingerprint)
+        if prior:
+            return prior
+        workout = await self._editable_workout(account_id, workout_id, input.expected_revision)
+        item, set_row = self._find_set(workout, set_id)
+        if set_row.get("actual") is not None:
+            raise WorkoutDomainError("set_is_logged", "This set is logged and cannot be removed. Unlog it first.")
+        item["sets"].remove(set_row)
+        workout["status"] = self._workout_status(workout)
+        workout["revision"], workout["updated_at"] = new_revision(), utc_now()
+        replaced = await self.db.workouts.replace_one(
+            {"account_id": account_id, "workout_id": workout_id, "revision": input.expected_revision}, workout,
+        )
+        if not replaced.modified_count:
+            raise WorkoutDomainError("stale_revision", "Workout changed. Pull the current revision before editing.")
+        response = self.receipt("workout", workout_id, workout["revision"], input.request_id, "set_removed")
+        response["workout"] = self._public(workout, ("account_id", "_id"))
+        return await self._save_receipt(account_id, input.request_id, fingerprint, response)
+
+    @transactional_mutation
+    async def update_set_target(self, account_id: str, workout_id: str, set_id: str, input: SetTargetInput) -> dict[str, Any]:
+        """Replace one set target; optionally propagate it to later unlogged sets."""
+        fingerprint = _fingerprint({"workout_id": workout_id, "set_id": set_id, **input.model_dump(mode="json")})
+        prior = await self._receipt(account_id, input.request_id, fingerprint)
+        if prior:
+            return prior
+        workout = await self._editable_workout(account_id, workout_id, input.expected_revision)
+        item, set_row = self._find_set(workout, set_id)
+        if set_row.get("actual") is not None:
+            raise WorkoutDomainError("set_is_logged", "This set is logged and its target cannot change. Unlog it first.")
+        target = input.target.model_dump(mode="json", exclude_none=True)
+        set_row["target"] = target
+        if input.apply_to_remaining:
+            index = item["sets"].index(set_row)
+            for later in item["sets"][index + 1:]:
+                if later.get("actual") is None:
+                    later["target"] = deepcopy(target)
+        workout["status"] = self._workout_status(workout)
+        workout["revision"], workout["updated_at"] = new_revision(), utc_now()
+        replaced = await self.db.workouts.replace_one(
+            {"account_id": account_id, "workout_id": workout_id, "revision": input.expected_revision}, workout,
+        )
+        if not replaced.modified_count:
+            raise WorkoutDomainError("stale_revision", "Workout changed. Pull the current revision before editing.")
+        response = self.receipt("workout", workout_id, workout["revision"], input.request_id, "set_target_updated")
+        response["workout"] = self._public(workout, ("account_id", "_id"))
+        return await self._save_receipt(account_id, input.request_id, fingerprint, response)
+
+    @transactional_mutation
+    async def remove_exercise(self, account_id: str, workout_id: str, exercise_instance_id: str, input: PlanEntryRemoveInput) -> dict[str, Any]:
+        """Drop an instance's unlogged sets, keeping logged sets verbatim."""
+        fingerprint = _fingerprint({"workout_id": workout_id, "exercise_instance_id": exercise_instance_id, **input.model_dump(mode="json")})
+        prior = await self._receipt(account_id, input.request_id, fingerprint)
+        if prior:
+            return prior
+        workout = await self._editable_workout(account_id, workout_id, input.expected_revision)
+        target_segment: dict[str, Any] | None = None
+        target_item: dict[str, Any] | None = None
+        for segment in workout["segments"]:
+            for item in segment["items"]:
+                if item["exercise_instance_id"] == exercise_instance_id:
+                    target_segment = segment
+                    target_item = item
+                    break
+        if target_item is None or target_segment is None:
+            raise WorkoutDomainError("exercise_instance_not_found", "Workout exercise was not found.", 404)
+        target_item["sets"] = [set_row for set_row in target_item["sets"] if set_row.get("actual") is not None]
+        if not target_item["sets"]:
+            target_segment["items"].remove(target_item)
+        if not target_segment["items"]:
+            workout["segments"].remove(target_segment)
+        return await self._replace_or_delete_workout(
+            account_id, workout_id, input.expected_revision, input.request_id, fingerprint, "exercise_removed", workout,
+        )
+
+    @transactional_mutation
+    async def remove_segment(self, account_id: str, workout_id: str, segment_id: str, input: PlanEntryRemoveInput) -> dict[str, Any]:
+        """Apply the exercise rule to every item in a segment."""
+        fingerprint = _fingerprint({"workout_id": workout_id, "segment_id": segment_id, **input.model_dump(mode="json")})
+        prior = await self._receipt(account_id, input.request_id, fingerprint)
+        if prior:
+            return prior
+        workout = await self._editable_workout(account_id, workout_id, input.expected_revision)
+        target_segment: dict[str, Any] | None = None
+        for segment in workout["segments"]:
+            if segment["segment_id"] == segment_id:
+                target_segment = segment
+                break
+        if target_segment is None:
+            raise WorkoutDomainError("segment_not_found", "Workout segment was not found.", 404)
+        for item in target_segment["items"]:
+            item["sets"] = [set_row for set_row in item["sets"] if set_row.get("actual") is not None]
+        target_segment["items"] = [item for item in target_segment["items"] if item["sets"]]
+        if not target_segment["items"]:
+            workout["segments"].remove(target_segment)
+        return await self._replace_or_delete_workout(
+            account_id, workout_id, input.expected_revision, input.request_id, fingerprint, "segment_removed", workout,
+        )
 
     @transactional_mutation
     async def update_notes(self, account_id: str, workout_id: str, input: WorkoutNotesInput) -> dict[str, Any]:

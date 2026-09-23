@@ -40,9 +40,13 @@ from .workouts import (
     ExerciseDefinitionInput,
     ExerciseNoteInput,
     GenerateInput,
+    PlanEntryRemoveInput,
     PlanInput,
     PublishInput,
+    SetAddInput,
     SetLogInput,
+    SetRemoveInput,
+    SetTargetInput,
     SetUnlogInput,
     SwapInput,
     WorkoutDomainError,
@@ -812,6 +816,36 @@ async def log_workout_set_v1(workout_id: str, set_id: str, body: SetLogInput,
 async def unlog_workout_set_v1(workout_id: str, set_id: str, body: SetUnlogInput,
                                account: dict = Depends(require_edit_account)) -> dict:
     return await workouts().unlog_set(account["account_id"], workout_id, set_id, body)
+
+
+@app.post("/v1/workouts/{workout_id}/exercises/{exercise_instance_id}/sets")
+async def add_workout_set_v1(workout_id: str, exercise_instance_id: str, body: SetAddInput,
+                             account: dict = Depends(require_edit_account)) -> dict:
+    return await workouts().add_set(account["account_id"], workout_id, exercise_instance_id, body)
+
+
+@app.post("/v1/workouts/{workout_id}/sets/{set_id}/remove")
+async def remove_workout_set_v1(workout_id: str, set_id: str, body: SetRemoveInput,
+                                account: dict = Depends(require_edit_account)) -> dict:
+    return await workouts().remove_set(account["account_id"], workout_id, set_id, body)
+
+
+@app.patch("/v1/workouts/{workout_id}/sets/{set_id}/target")
+async def update_workout_set_target_v1(workout_id: str, set_id: str, body: SetTargetInput,
+                                       account: dict = Depends(require_edit_account)) -> dict:
+    return await workouts().update_set_target(account["account_id"], workout_id, set_id, body)
+
+
+@app.post("/v1/workouts/{workout_id}/exercises/{exercise_instance_id}/remove")
+async def remove_workout_exercise_v1(workout_id: str, exercise_instance_id: str, body: PlanEntryRemoveInput,
+                                     account: dict = Depends(require_edit_account)) -> dict:
+    return await workouts().remove_exercise(account["account_id"], workout_id, exercise_instance_id, body)
+
+
+@app.post("/v1/workouts/{workout_id}/segments/{segment_id}/remove")
+async def remove_workout_segment_v1(workout_id: str, segment_id: str, body: PlanEntryRemoveInput,
+                                    account: dict = Depends(require_edit_account)) -> dict:
+    return await workouts().remove_segment(account["account_id"], workout_id, segment_id, body)
 
 
 @app.patch("/v1/workouts/{workout_id}/notes")
