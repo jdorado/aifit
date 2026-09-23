@@ -22,5 +22,3 @@ data/
 !web/src/data/**
 uploads/
 secrets/
-/deploy/
-.vercel
