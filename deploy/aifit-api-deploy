@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+exec 9>/run/lock/aifit-api-deploy.lock
+if ! flock -n 9; then
+  echo "AIFit API deployment is already running" >&2
+  exit 1
+fi
+
+readonly CHECKOUT=/opt/aifit-api-prod-v2
+readonly REPOSITORY=https://github.com/jdorado/aifit.git
+readonly COMPOSE_FILE="$CHECKOUT/deploy/compose.prod.yml"
+readonly IMAGE=aifit-api:prod
+
+if [[ ! -d "$CHECKOUT/.git" ]]; then
+  if [[ -e "$CHECKOUT" ]]; then
+    echo "Deployment path exists but is not a Git checkout" >&2
+    exit 1
+  fi
+  install -d -o root -g root -m 0755 "$(dirname "$CHECKOUT")"
+  git clone --quiet --depth 1 --branch main "$REPOSITORY" "$CHECKOUT"
+else
+  if [[ "$(git -C "$CHECKOUT" remote get-url origin)" != "$REPOSITORY" ]]; then
+    echo "Deployment checkout origin does not match the public AIFit repository" >&2
+    exit 1
+  fi
+  git -C "$CHECKOUT" fetch --quiet --depth 1 origin main
+  git -C "$CHECKOUT" reset --hard origin/main
+fi
+
+for file in \
+  /etc/aifit/aifit-api.env \
+  /etc/aifit/aifit-api-bindings.json \
+  /etc/aifit/aifit-application-token; do
+  if [[ ! -f "$file" || -L "$file" ]]; then
+    echo "Required regular secret/config file is missing: $file" >&2
+    exit 1
+  fi
+done
+
+if [[ ! -f "$COMPOSE_FILE" || ! -f "$CHECKOUT/api/Dockerfile" ]]; then
+  echo "The main checkout does not contain the AIFit API deployment files" >&2
+  exit 1
+fi
+
+compose=(docker compose --project-directory "$CHECKOUT" --file "$COMPOSE_FILE")
+previous_image="$(docker image inspect --format '{{.Id}}' "$IMAGE" 2>/dev/null || true)"
+if [[ -n "$previous_image" ]]; then
+  docker image tag "$previous_image" aifit-api:rollback
+fi
+
+release="$(git -C "$CHECKOUT" rev-parse --short HEAD)"
+echo "Building AIFit API release $release"
+"${compose[@]}" build --pull aifit-api
+
+if ! "${compose[@]}" up -d --no-build --wait --wait-timeout 150 aifit-api; then
+  if [[ -n "$previous_image" ]]; then
+    echo "New API did not become healthy; restoring the previous image" >&2
+    docker image tag "$previous_image" "$IMAGE"
+    "${compose[@]}" up -d --no-build --force-recreate --wait --wait-timeout 150 aifit-api || true
+  fi
+  exit 1
+fi
+
+install -o root -g root -m 0755 "$CHECKOUT/deploy/aifit-api-deploy" /usr/local/sbin/aifit-api-deploy
+echo "AIFit API release $release is healthy on 127.0.0.1:18182"

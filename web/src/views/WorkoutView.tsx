@@ -1,18 +1,30 @@
 import type { FC } from 'react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useI18n } from '../i18n'
 import CoachChat from '../components/workout/CoachChat'
+import ExerciseFeedback from '../components/workout/ExerciseFeedback'
+import ExerciseHistorySheet from '../components/workout/ExerciseHistorySheet'
+import SwapCandidateSheet from '../components/workout/SwapCandidateSheet'
 import ExerciseSetList from '../components/workout/ExerciseSetList'
+import VideoGallery from '../components/workout/VideoGallery'
 import WeekStrip from '../components/workout/WeekStrip'
 import WorkoutMiniBar from '../components/workout/WorkoutMiniBar'
 import WorkoutPlanList from '../components/workout/WorkoutPlanList'
-import type { WorkoutExercise, WorkoutExtra } from '../data/testWorkout'
+import type { WorkoutExercise, WorkoutExtra, WorkoutFeedbackPreset } from '../data/testWorkout'
 import { circuitGroupKey } from '../data/testWorkout'
 import type { ActiveEntryType, ChatMessage, HoldTimerState, SetState } from '../types/app'
+import {
+  fetchExerciseHistoryWindow,
+  fetchRelatedExerciseHistory,
+  groupExerciseHistory,
+  type ExerciseHistoryRelated,
+  type ExerciseHistorySession,
+} from '../utils/exerciseHistory'
 import {
   formatCircuitTarget,
   parseDurationToSeconds,
 } from '../utils/workoutDisplay'
+import type { SwapCandidate } from '../utils/swapCandidates'
 
 type WeekDaySummary = {
   index: number
@@ -45,6 +57,9 @@ type WorkoutViewProps = {
   active: boolean
   canLogDay: boolean
   coachChatEnabled: boolean
+  apiBaseUrl: string
+  getAuthHeaders: () => Promise<Record<string, string>>
+  actAsLinkId?: string | null
   weekDays: WeekDaySummary[]
   selectedDayLabel: string
   hasWeekWorkouts: boolean
@@ -53,16 +68,24 @@ type WorkoutViewProps = {
   extras: WorkoutExtra[]
   setLogs: Record<string, SetState[]>
   planNotes: string
+  savingDayNote: boolean
+  savingExerciseFeedback: boolean
   activeEntryId: string | null
   activeEntryType: ActiveEntryType
   editingSet: { exerciseId: string, index: number } | null
   holdTimer: HoldTimerState
   coachMessages: ChatMessage[]
   showModelLabels?: boolean
+  miniModelOptions?: Array<{ value: string, label: string }>
+  miniSelectedModel?: string
+  miniModelSelectionDisabled?: boolean
+  onMiniModelChange?: (value: string) => void
   onSelectEntry: (id: string, type: ActiveEntryType) => void
   onSelectDay: (index: number, date: string) => void
   onBack: () => void
   onLogSet: (exerciseId?: string) => void
+  onSkipSet: (exerciseId: string, index: number) => void
+  onUnlogSet: (exerciseId: string, index: number) => void
   onStartEditingSet: (exerciseId: string, index: number) => void
   onSaveEditingSet: () => void
   onCancelEditingSet: () => void
@@ -75,7 +98,17 @@ type WorkoutViewProps = {
     options?: { sideIndex?: number, sideCount?: number },
   ) => void
   onLogHoldTimerSet: () => void
+  onSaveDayNote: (notes: string) => Promise<boolean>
+  onSaveExerciseFeedback: (exerciseId: string, note: string, preset: WorkoutFeedbackPreset | null) => Promise<boolean>
   onCoachSend: (exerciseId: string, message: string) => void
+  swapOpen: boolean
+  swapLoading: boolean
+  swappingCandidateId: string | null
+  swapError: string | null
+  swapCandidates: SwapCandidate[]
+  onOpenSwap: (exerciseId: string) => void
+  onSelectSwapCandidate: (candidate: SwapCandidate) => void
+  onCloseSwap: () => void
 }
 
 const getSectionToneFromText = (rawHaystack: string): SectionTone => {
@@ -95,6 +128,9 @@ const WorkoutView: FC<WorkoutViewProps> = ({
   active,
   canLogDay,
   coachChatEnabled,
+  apiBaseUrl,
+  getAuthHeaders,
+  actAsLinkId = null,
   weekDays,
   selectedDayLabel,
   hasWeekWorkouts,
@@ -103,27 +139,51 @@ const WorkoutView: FC<WorkoutViewProps> = ({
   extras,
   setLogs,
   planNotes,
+  savingDayNote,
+  savingExerciseFeedback,
   activeEntryId,
   activeEntryType,
   editingSet,
   holdTimer,
   coachMessages,
   showModelLabels = false,
+  miniModelOptions = [],
+  miniSelectedModel = '',
+  miniModelSelectionDisabled = false,
+  onMiniModelChange,
   onSelectEntry,
   onSelectDay,
   onBack,
   onLogSet,
+  onSkipSet,
+  onUnlogSet,
   onStartEditingSet,
   onSaveEditingSet,
   onCancelEditingSet,
   onUpdateSetField,
   onStartHoldTimer,
   onLogHoldTimerSet,
+  onSaveDayNote,
+  onSaveExerciseFeedback,
   onCoachSend,
+  swapOpen,
+  swapLoading,
+  swappingCandidateId,
+  swapError,
+  swapCandidates,
+  onOpenSwap,
+  onSelectSwapCandidate,
+  onCloseSwap,
 }) => {
   const { t } = useI18n()
   const [coachChatOpen, setCoachChatOpen] = useState(false)
   const [coachDraft, setCoachDraft] = useState('')
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const [historyLoading, setHistoryLoading] = useState(false)
+  const [historyError, setHistoryError] = useState(false)
+  const [historySessions, setHistorySessions] = useState<ExerciseHistorySession[]>([])
+  const [historyRelated, setHistoryRelated] = useState<ExerciseHistoryRelated | null>(null)
+  const historyRequestRef = useRef(0)
 
   useEffect(() => {
     if (!coachChatEnabled) {
@@ -301,7 +361,43 @@ const WorkoutView: FC<WorkoutViewProps> = ({
   useEffect(() => {
     setCoachChatOpen(false)
     setCoachDraft('')
+    setHistoryOpen(false)
+    onCloseSwap()
   }, [activeExercise?.id])
+
+  const openExerciseHistory = useCallback(() => {
+    const exerciseId = activeExercise?.exerciseKey
+    if (!exerciseId) return
+    setCoachChatOpen(false)
+    setHistoryOpen(true)
+    setHistoryLoading(true)
+    setHistoryError(false)
+    setHistoryRelated(null)
+    const requestId = historyRequestRef.current + 1
+    historyRequestRef.current = requestId
+    fetchExerciseHistoryWindow({ apiBaseUrl, getHeaders: getAuthHeaders, exerciseId, minSessions: 10, pageSize: 50, actAsLinkId })
+      .then((rows) => {
+        if (historyRequestRef.current !== requestId) return
+        setHistorySessions(groupExerciseHistory(rows))
+      })
+      .catch(() => {
+        if (historyRequestRef.current !== requestId) return
+        setHistorySessions([])
+        setHistoryError(true)
+      })
+      .finally(() => {
+        if (historyRequestRef.current === requestId) setHistoryLoading(false)
+      })
+    fetchRelatedExerciseHistory({ apiBaseUrl, getHeaders: getAuthHeaders, exerciseId, limit: 20, actAsLinkId })
+      .then((related) => {
+        if (historyRequestRef.current !== requestId) return
+        setHistoryRelated(related)
+      })
+      .catch(() => {
+        if (historyRequestRef.current !== requestId) return
+        setHistoryRelated({ exerciseId, movementPattern: null, primaryMuscle: null, family: [], muscle: [] })
+      })
+  }, [activeExercise?.exerciseKey, actAsLinkId, apiBaseUrl, getAuthHeaders])
 
   const renderDetailContent = () => {
     if (activeExtra) {
@@ -342,6 +438,14 @@ const WorkoutView: FC<WorkoutViewProps> = ({
           <p className="card-label">{isSkipped ? `${activeExercise.section} • ${t('workout.skipped')}` : t('workout.targetLabel')}</p>
           {isSkipped ? null : <p className="card-sub">{activeExercise.summary}</p>}
         </div>
+        {activeExercise.exerciseKey ? (
+          <VideoGallery
+            exerciseKey={activeExercise.exerciseKey}
+            exerciseName={activeExercise.name}
+            apiBaseUrl={apiBaseUrl}
+            getAuthHeaders={getAuthHeaders}
+          />
+        ) : null}
         {exerciseCues.length > 0 ? (
           <div className="detail-cues">
             <div className="detail-cues-large">
@@ -378,12 +482,22 @@ const WorkoutView: FC<WorkoutViewProps> = ({
           holdTargetSec={holdTargetSec}
           holdPrepSec={holdPrepSec}
           canLogDay={canLogDay}
+          onSkipSet={onSkipSet}
+          onUnlogSet={onUnlogSet}
           onStartEditingSet={onStartEditingSet}
           onSaveEditingSet={onSaveEditingSet}
           onCancelEditingSet={onCancelEditingSet}
           onUpdateSetField={onUpdateSetField}
           onStartHoldTimer={onStartHoldTimer}
           onLogHoldTimerSet={onLogHoldTimerSet}
+        />
+        <ExerciseFeedback
+          key={activeExercise.id}
+          note={activeExercise.notes ?? ''}
+          preset={activeExercise.feedbackPreset ?? null}
+          canEdit={canLogDay}
+          saving={savingExerciseFeedback}
+          onSave={(note, preset) => onSaveExerciseFeedback(activeExercise.id, note, preset)}
         />
         {activeCircuit ? (
           <div className="circuit-card">
@@ -458,6 +572,9 @@ const WorkoutView: FC<WorkoutViewProps> = ({
         extras={extras}
         setLogs={setLogs}
         planNotes={planNotes}
+        canEditPlanNotes={canLogDay}
+        savingPlanNotes={savingDayNote}
+        onSavePlanNotes={onSaveDayNote}
         circuitGroups={circuitGroups}
         getNextCircuitExercise={getNextCircuitExercise}
         onSelectEntry={onSelectEntry}
@@ -473,13 +590,30 @@ const WorkoutView: FC<WorkoutViewProps> = ({
           </div>
           {activeExercise ? (
             <div className="detail-header-actions">
+              {activeExercise.exerciseKey ? (
+                <button
+                  type="button"
+                  className={`detail-history-btn${historyOpen ? ' active' : ''}`}
+                  aria-label={t('workout.historyTitle')}
+                  aria-expanded={historyOpen}
+                  onClick={openExerciseHistory}
+                >
+                  <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                    <path d="M3 12a9 9 0 1 0 3-6.7L3 8" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                    <path d="M3 3v5h5M12 7v5l3 2" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </button>
+              ) : null}
               <button
                 type="button"
                 className={`detail-coach-btn${coachChatOpen ? ' active' : ''}`}
                 aria-label={t('workout.askCoach')}
                 aria-expanded={coachChatOpen}
                 disabled={!coachChatEnabled}
-                onClick={() => setCoachChatOpen((current) => !current)}
+                onClick={() => {
+                  setHistoryOpen(false)
+                  setCoachChatOpen((current) => !current)
+                }}
               >
                 <svg className="detail-coach-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
                   <path
@@ -521,11 +655,28 @@ const WorkoutView: FC<WorkoutViewProps> = ({
         </div>
 
         {activeExercise ? (
+          <ExerciseHistorySheet
+            open={historyOpen}
+            loading={historyLoading}
+            error={historyError ? t('workout.historyError') : null}
+            exerciseName={activeExercise.name}
+            sessions={historySessions}
+            related={historyRelated}
+            onClose={() => setHistoryOpen(false)}
+          />
+        ) : null}
+
+        {activeExercise ? (
           <CoachChat
             open={coachChatOpen}
             disabled={!coachChatEnabled}
             messages={coachMessages}
             showModelLabels={showModelLabels}
+            subtitle={detailTitle || undefined}
+            modelOptions={miniModelOptions}
+            selectedModel={miniSelectedModel}
+            modelSelectionDisabled={miniModelSelectionDisabled || coachMessages.some((message) => message.thinking)}
+            onModelChange={onMiniModelChange}
             draft={coachDraft}
             onToggle={() => setCoachChatOpen((current) => !current)}
             onDraftChange={setCoachDraft}
@@ -535,6 +686,28 @@ const WorkoutView: FC<WorkoutViewProps> = ({
               onCoachSend(activeExercise.id, text)
               setCoachDraft('')
             }}
+            onQuickPrompt={(message) => {
+              if (activeExercise) onCoachSend(activeExercise.id, message)
+            }}
+            onSwap={() => {
+              if (activeExercise) {
+                setCoachChatOpen(false)
+                onOpenSwap(activeExercise.id)
+              }
+            }}
+          />
+        ) : null}
+
+        {activeExercise ? (
+          <SwapCandidateSheet
+            open={swapOpen}
+            loading={swapLoading}
+            swappingId={swappingCandidateId}
+            error={swapError}
+            exerciseName={activeExercise.name}
+            candidates={swapCandidates}
+            onSelect={onSelectSwapCandidate}
+            onClose={onCloseSwap}
           />
         ) : null}
       </section>

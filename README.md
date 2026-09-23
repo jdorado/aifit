@@ -38,7 +38,7 @@ Run the API and frontend with the external environment files:
 
 ```sh
 (cd api && uv run uvicorn --env-file "$AIFIT_CONFIG_DIR/api.env" \
-  aifit_api.main:app --host 127.0.0.1 --port 8100)
+  aifit_api.main:app --host 0.0.0.0 --port 8100)
 
 (cd web && AIFIT_WEB_ENV_FILE="$AIFIT_CONFIG_DIR/web.env" pnpm dev)
 ```
@@ -47,8 +47,12 @@ Chat and agent-authored workout writes require an Ez deployment and server-side
 binding that you operate separately. This repository does not contain a
 provider-specific provisioning command or deployment manifest for that service.
 The web release reads canonical workout records and can request typed day
-generation; arbitrary plan rewrites, coach impersonation, and provider-specific
-video/history helpers stay disabled until their own typed public contracts exist.
+generation. Exercise history and YouTube demo videos have typed public
+contracts (`GET /v1/exercises/{exercise_id}/history`, `GET /v1/videos`). Coach
+sharing has a typed public contract too: `POST/GET/PATCH /v1/coach-links` plus
+the `act_as_link_id` parameter on the canonical `/v1` routes, re-checked on
+every request. Arbitrary plan rewrites stay disabled until their own typed
+public contract exists.
 
 ## Testing
 

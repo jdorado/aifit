@@ -154,7 +154,7 @@ module.exports = (_env, argv) => {
       allowedHosts: ['localhost', '127.0.0.1'],
       historyApiFallback: true,
       port: 5175,
-      host: '127.0.0.1',
+      host: '0.0.0.0',
       hot: true,
       client: {
         overlay: { errors: true, warnings: false },

@@ -1,4 +1,4 @@
-import type { WorkoutExercise, WorkoutExtra } from '../data/testWorkout'
+import type { WorkoutExercise, WorkoutExtra, WorkoutFeedbackPreset } from '../data/testWorkout'
 import type { WorkoutSession, WorkoutSessionExerciseSummary } from '../types/workoutSession'
 import type { SetState } from '../types/app'
 import { normalizeEquipmentType, normalizeMuscleGroup } from './workoutSafety'
@@ -52,6 +52,12 @@ type BackendExerciseSnapshot = {
   equipment_profile_id?: string | null
 }
 
+export type BackendExerciseFeedback = {
+  note: string
+  preset: WorkoutFeedbackPreset | null
+  updated_at?: string
+}
+
 type BackendWorkoutItem = {
   exercise_instance_id: string
   slot_id: string
@@ -60,6 +66,7 @@ type BackendWorkoutItem = {
   exercise_snapshot: BackendExerciseSnapshot
   sets: BackendWorkoutSet[]
   cues_md?: string
+  notes?: BackendExerciseFeedback | null
 }
 
 type BackendSegment = {
@@ -79,9 +86,10 @@ export type BackendWorkout = {
   timezone: string
   status: string
   title: string
+  notes?: string | null
   segments: BackendSegment[]
   lineage?: {
-    source?: 'default' | 'jev' | 'agent_override'
+    source?: 'default' | 'jev' | 'agent_override' | 'copy_last_week' | 'legacy_import'
     blueprint_id?: string
     blueprint_revision?: string
     day_id?: string
@@ -112,16 +120,22 @@ const loadInKg = (load: BackendLoad | undefined) => {
   return load.unit === 'lb' ? load.value * 0.45359237 : load.value
 }
 
-const actualToSetState = (actual: BackendWorkoutSet['actual']): SetState => ({
-  weight: actual?.load ? formatLoad(actual.load) ?? '' : '',
-  metric: actual?.reps !== undefined
-    ? String(actual.reps)
-    : actual?.duration_seconds !== undefined
-      ? String(actual.duration_seconds)
-      : '',
-  done: Boolean(actual),
-  ...(actual ? { value_source: 'user_entered' as const } : {}),
-})
+const actualToSetState = (actual: BackendWorkoutSet['actual']): SetState => {
+  if (!actual) return { weight: '', metric: '', done: false }
+  if (actual.status === 'skipped') {
+    return { weight: '', metric: '', done: true, skipped: true }
+  }
+  return {
+    weight: actual.load ? formatLoad(actual.load) ?? '' : '',
+    metric: actual.reps !== undefined
+      ? String(actual.reps)
+      : actual.duration_seconds !== undefined
+        ? String(actual.duration_seconds)
+        : '',
+    done: true,
+    value_source: 'user_entered',
+  }
+}
 
 const sectionLabel = (kind: BackendSegment['kind']) => {
   switch (kind) {
@@ -201,9 +215,8 @@ const toExercise = (segment: BackendSegment, item: BackendWorkoutItem): WorkoutE
     .split(/\r?\n/)
     .map((cue) => cue.trim())
     .filter(Boolean)
-  // Segment titles are agent-authored (required on write); untitled history
-  // falls back to the kind label. Grouping never uses this display string —
-  // see circuit.key / circuitGroupKey().
+  // Imported legacy days keep their section name. New titles are agent-authored;
+  // missing history falls back to the kind label. Grouping uses circuit.key.
   const label = segment.title?.trim() || sectionLabel(segment.kind)
 
   return {
@@ -218,6 +231,7 @@ const toExercise = (segment: BackendSegment, item: BackendWorkoutItem): WorkoutE
     metric,
     sets: item.sets.map(targetToSet),
     cues,
+    ...(item.notes ? { notes: item.notes.note, feedbackPreset: item.notes.preset } : {}),
     category: exerciseCategory(segment.kind),
     primaryMuscle: normalizeMuscleGroup(snapshot.primary_muscles[0]),
     secondaryMuscles: snapshot.secondary_muscles
@@ -271,7 +285,7 @@ export const backendWorkoutToSession = (
     date: workout.date,
     timezone: workout.timezone,
     label: workout.title,
-    notes: null,
+    notes: typeof workout.notes === 'string' ? workout.notes : null,
     workout: {
       exercises,
       extras: [] as WorkoutExtra[],

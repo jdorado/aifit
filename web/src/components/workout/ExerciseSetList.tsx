@@ -33,6 +33,8 @@ type ExerciseSetListProps = {
   onStartEditingSet: (exerciseId: string, index: number) => void
   onSaveEditingSet: () => void
   onCancelEditingSet: () => void
+  onSkipSet: (exerciseId: string, index: number) => void
+  onUnlogSet: (exerciseId: string, index: number) => void
   onUpdateSetField: (exerciseId: string, index: number, field: 'weight' | 'metric', value: string) => void
   onStartHoldTimer: (
     exerciseId: string,
@@ -58,6 +60,8 @@ const ExerciseSetList: FC<ExerciseSetListProps> = ({
   onStartEditingSet,
   onSaveEditingSet,
   onCancelEditingSet,
+  onSkipSet,
+  onUnlogSet,
   onUpdateSetField,
   onStartHoldTimer,
   onLogHoldTimerSet,
@@ -192,6 +196,20 @@ const ExerciseSetList: FC<ExerciseSetListProps> = ({
                         </>
                       )}
                     </span>
+                    <button
+                      className="hero-skip-btn"
+                      type="button"
+                      data-set-action="skip"
+                      title={t('workout.skipSet')}
+                      aria-label={t('workout.skipSet')}
+                      disabled={!canLogDay}
+                      onClick={canLogDay ? () => onSkipSet(exercise.id, index) : undefined}
+                    >
+                      <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M18 6 6 18" />
+                        <path d="m6 6 12 12" />
+                      </svg>
+                    </button>
                   </div>
 
                   {hasDropSet ? (
@@ -281,7 +299,8 @@ const ExerciseSetList: FC<ExerciseSetListProps> = ({
               )
             }
 
-            const statusClass = currentState.done ? 'done' : 'queued'
+            const isSkipped = currentState.skipped === true
+            const statusClass = currentState.done ? (isSkipped ? 'skipped' : 'done') : 'queued'
             const targetSet = exercise.sets[index]
             const targetWeightValue = normalizeWeightTarget(targetSet?.targetWeight)
             const dropSetInfo = normalizeDropSet(targetSet?.targetDropSet)
@@ -347,7 +366,9 @@ const ExerciseSetList: FC<ExerciseSetListProps> = ({
             }
 
             let resultText = ''
-            if (currentState.done) {
+            if (isSkipped) {
+              resultText = t('workout.skipped')
+            } else if (currentState.done) {
               const metricResult = formatMetricDisplay(exercise, currentState.metric || '-')
               const weightResult = hasActualWeight ? formatWeightDisplay(exercise, currentState.weight) : ''
               resultText = hasActualWeight
@@ -357,7 +378,7 @@ const ExerciseSetList: FC<ExerciseSetListProps> = ({
               resultText = t('workout.pending')
             }
 
-            const actionsCount = currentState.done ? 1 : 0
+            const actionsCount = currentState.done ? (isSkipped ? 1 : 2) : 1
 
             return (
               <div
@@ -377,10 +398,10 @@ const ExerciseSetList: FC<ExerciseSetListProps> = ({
                       <span className="set-drop-set">{t('workout.dropSetWithValue', { value: dropSetInfo.label })}</span>
                     ) : null}
                   </div>
-                  <span className="set-status">{currentState.done ? '✓' : ''}</span>
+                  <span className="set-status">{isSkipped ? '–' : currentState.done ? '✓' : ''}</span>
                 </div>
                 <div className="set-row-actions">
-                  {currentState.done ? (
+                  {currentState.done && !isSkipped ? (
                     <button
                       className="set-row-action"
                       type="button"
@@ -396,6 +417,37 @@ const ExerciseSetList: FC<ExerciseSetListProps> = ({
                       </svg>
                     </button>
                   ) : null}
+                  {currentState.done ? (
+                    <button
+                      className="set-row-action"
+                      type="button"
+                      data-set-action="undo"
+                      title={t('workout.undoSet')}
+                      aria-label={t('workout.undoSet')}
+                      disabled={!canLogDay}
+                      onClick={canLogDay ? () => onUnlogSet(exercise.id, index) : undefined}
+                    >
+                      <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M3 7v6h6" />
+                        <path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13" />
+                      </svg>
+                    </button>
+                  ) : (
+                    <button
+                      className="set-row-action"
+                      type="button"
+                      data-set-action="skip"
+                      title={t('workout.skipSet')}
+                      aria-label={t('workout.skipSet')}
+                      disabled={!canLogDay}
+                      onClick={canLogDay ? () => onSkipSet(exercise.id, index) : undefined}
+                    >
+                      <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M18 6 6 18" />
+                        <path d="m6 6 12 12" />
+                      </svg>
+                    </button>
+                  )}
                 </div>
               </div>
             )

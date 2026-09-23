@@ -13,6 +13,9 @@ const env = {
     deps = nextDeps
     return memo
   },
+  useEffect() {},
+  weekPlan: { weekStart: '2026-09-07', days: [] },
+  weekPlanRef: { current: { weekStart: '2026-09-07', days: [] } },
   activeEntryId: null, activeEntryType: null,
   activeEntryRef: { current: { id: null, type: null } },
   weekSetLogsRef: { current: {} }, weekBaseCountsRef: { current: {} },

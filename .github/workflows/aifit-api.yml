@@ -1,0 +1,70 @@
+name: AIFit API CI/CD
+
+on:
+  pull_request:
+    paths:
+      - "api/**"
+      - "deploy/compose.prod.yml"
+      - "deploy/aifit-api-deploy"
+      - "deploy/known_hosts"
+      - ".github/workflows/aifit-api.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "api/**"
+      - "deploy/compose.prod.yml"
+      - "deploy/aifit-api-deploy"
+      - "deploy/known_hosts"
+      - ".github/workflows/aifit-api.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aifit-api-production
+  cancel-in-progress: false
+
+jobs:
+  api-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: api/uv.lock
+      - run: uv sync --locked --extra test
+        working-directory: api
+      - run: uv run --frozen pytest -q
+        working-directory: api
+
+  deploy-production:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: api-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure the restricted SSH key
+        env:
+          AIFIT_DEPLOY_SSH_KEY: ${{ secrets.AIFIT_DEPLOY_SSH_KEY }}
+        run: |
+          test -n "$AIFIT_DEPLOY_SSH_KEY"
+          install -m 700 -d "$HOME/.ssh"
+          printf '%s\n' "$AIFIT_DEPLOY_SSH_KEY" > "$HOME/.ssh/aifit_deploy"
+          chmod 600 "$HOME/.ssh/aifit_deploy"
+          install -m 600 deploy/known_hosts "$HOME/.ssh/known_hosts"
+      - name: Deploy from main
+        run: >-
+          ssh -i "$HOME/.ssh/aifit_deploy"
+          -o IdentitiesOnly=yes
+          -o BatchMode=yes
+          -o ConnectTimeout=20
+          -o ServerAliveInterval=15
+          -o ServerAliveCountMax=2
+          -o StrictHostKeyChecking=yes
+          -o UserKnownHostsFile="$HOME/.ssh/known_hosts"
+          aifit-deploy@dev.ezenciel.com

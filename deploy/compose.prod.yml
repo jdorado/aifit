@@ -1,0 +1,49 @@
+name: aifit-api-prod-v2
+
+services:
+  aifit-api:
+    image: aifit-api:prod
+    build:
+      context: ../api
+      dockerfile: Dockerfile
+    container_name: aifit-api-v2
+    init: true
+    network_mode: host
+    restart: unless-stopped
+    stop_grace_period: 30s
+    user: "10001:10001"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=128m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    env_file:
+      - /etc/aifit/aifit-api.env
+    environment:
+      MONGO_DB: aifit_dev
+      EZ_BINDINGS_FILE: /run/secrets/aifit-api-bindings.json
+      AIFIT_AGENT_API_BASE_URL: ${AIFIT_AGENT_API_BASE_URL:-http://127.0.0.1:18182}
+      PORT: "18182"
+    volumes:
+      - /etc/aifit/aifit-api-bindings.json:/run/secrets/aifit-api-bindings.json:ro
+      - /etc/aifit/aifit-application-token:/run/secrets/aifit-application-token:ro
+    command:
+      - uvicorn
+      - aifit_api.main:app
+      - --host
+      - 127.0.0.1
+      - --port
+      - "18182"
+      - --proxy-headers
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:18182/health', timeout=3)
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 45s

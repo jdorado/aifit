@@ -31,6 +31,7 @@ def test_plugin_agent_surface_covers_the_canonical_reads_and_writes():
         "/v1/agent/exercises",
         "/v1/agent/exercises/{exercise_id}",
         "/v1/agent/exercises/{exercise_id}/history",
+        "/v1/agent/exercises/{exercise_id}/related-history",
         "/v1/agent/blueprints/draft",
         "/v1/agent/blueprints/active",
         "/v1/agent/blueprints/solidify",
@@ -68,6 +69,17 @@ def test_agent_swap_intent_requires_blueprint_revision_and_selects_the_source():
     )
     assert intent.expected_blueprint_revision == "rev_abcdef0123456789abcdef0123456789"
     assert intent.source == "jev"
+    assert intent.target_candidate_id is None
+    assert main.AgentWorkoutSwapInput(
+        workout_id=intent.workout_id,
+        exercise_instance_id=intent.exercise_instance_id,
+        reason=intent.reason,
+        source="default",
+        target_candidate_id="cand_row_cable",
+        expected_revision=intent.expected_revision,
+        expected_blueprint_revision=intent.expected_blueprint_revision,
+        request_id=intent.request_id,
+    ).target_candidate_id == "cand_row_cable"
     assert main.AgentWorkoutSwapInput(
         workout_id=intent.workout_id,
         exercise_instance_id=intent.exercise_instance_id,

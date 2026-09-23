@@ -23,7 +23,7 @@ aifit blueprint solidify --input FILE|- --request-id KEY [--blueprint-id ID --ex
 aifit workout generate --date DATE [--source default|jev] --request-id KEY
 aifit workout log-set WORKOUT_ID SET_ID --input FILE|- --expected-revision REV --request-id KEY
 aifit workout override --input FILE|- --request-id KEY [--expected-revision REV]
-aifit workout swap --input FILE|- --request-id KEY --expected-revision REV [--source default|jev]
+aifit workout swap --input FILE|- --request-id KEY --expected-revision REV [--source default|jev] [--target-candidate CAND]
 ```
 
 `--input -` and `--markdown -` are the normal Ez form: the agent reads the
@@ -151,11 +151,18 @@ sends this small intent through the plugin:
 ```
 
 The CLI adds the request ID and current workout revision. The agent route
-selects with JEV unless `--source default` is passed explicitly. The backend
+selects with JEV unless `--source default` is passed explicitly. When the
+user already picked one slot alternative (mini-chat top-3 choice), the agent
+passes its `candidate_id` as `--target-candidate`; the backend validates the
+choice stays inside the same blueprint slot and is not used elsewhere in the
+day, then applies it directly instead of selecting via `source`. The backend
 verifies the expected active blueprint revision
 and the workout's blueprint lineage, then selects an unused candidate from the
 same blueprint slot, preserves every other workout item, and records the active
-blueprint ID/revision in the swap receipt. Logged sets are immutable: they stay
+blueprint ID/revision in the swap receipt. An item kept verbatim from outside
+the blueprint (legacy import, copied day, or override remainder) has no slot
+and returns `blueprint_slot_missing`; the day must be regenerated from the
+active blueprint before its items can be swapped. Logged sets are immutable: they stay
 under the original exercise and the swap materializes the open sets under the
 new candidate as a new exercise instance, so a partially logged exercise can
 still be swapped. It rejects a stale workout, returns `no_eligible_swap` when
@@ -289,10 +296,28 @@ GET  /v1/blueprints/active?date=YYYY-MM-DD
 POST /v1/workouts/generate
 GET  /v1/workouts?start=YYYY-MM-DD&end=YYYY-MM-DD
 GET  /v1/workouts/{workout_id}
+GET  /v1/workouts/{workout_id}/exercises/{exercise_instance_id}/swap-candidates
+POST /v1/workouts/{workout_id}/exercises/{exercise_instance_id}/swap
+PATCH /v1/workouts/{workout_id}/notes
+PATCH /v1/workouts/{workout_id}/exercises/{exercise_instance_id}/notes
 ```
+
+The MiniChat swap picker is a direct frontend read plus a direct write:
+`swap-candidates` lists the eligible in-slot alternatives from the active
+blueprint revision in priority order (instant, no agent round-trip), and the
+user's tap calls `swap` with that `candidate_id` as `target_candidate_id`.
+The agent chat path stays as the fallback for advice and for swaps the user
+describes in words.
 
 The frontend calls these authenticated backend routes. It never invokes the
 plugin, reads `EZ_PLUGIN_CONTEXT`, or treats a working JSON file as canonical.
+
+The workout record carries an optional day note (`notes`, empty by default) and
+each workout exercise instance can carry one feedback note
+(`notes: {note, preset, updated_at}` with `preset` one of `pain`, `hard`,
+`easy`, `form`, or null). Both are typed, revision-guarded writes with the same
+receipt and request-id idempotency as the other backend mutations; logged sets,
+swaps, and agent overrides keep them consistent with the canonical record.
 
 Generation input is deliberately small:
 

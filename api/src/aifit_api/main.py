@@ -7,7 +7,7 @@ from typing import Any, Literal
 from urllib.parse import parse_qsl, quote, urlparse
 from uuid import UUID
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -23,17 +23,30 @@ from .auth import (
     require_identity,
 )
 from . import telegram_admit
+from . import videos
+from .coach_links import (
+    CoachLinkAcceptInput,
+    CoachLinkInviteInput,
+    CoachLinkRole,
+    CoachLinkService,
+    CoachLinkUpdateInput,
+)
 from .ez import call as ez_call, provision_telegram, telegram_provisioning_configured, verified_binding
 from .model_policy import filter_control, require_allowed
 from .workouts import (
     BlueprintInput,
+    ClearWorkoutInput,
+    CopyLastWeekInput,
     ExerciseDefinitionInput,
+    ExerciseNoteInput,
     GenerateInput,
     PlanInput,
     PublishInput,
     SetLogInput,
+    SetUnlogInput,
     SwapInput,
     WorkoutDomainError,
+    WorkoutNotesInput,
     WorkoutOverrideInput,
     WorkoutService,
 )
@@ -49,12 +62,13 @@ def stable_id(prefix: str, value: str) -> str:
 
 mongo = AsyncMongoClient(os.getenv("MONGO_URL", "mongodb://localhost:27017"))
 db = mongo[os.getenv("MONGO_DB", "aifit_dev")]
-app = FastAPI(title="AIFit API", version="0.1.0")
+app = FastAPI(title="AIFit API", version="0.1.0-beta.1")
 origins = [item.strip() for item in os.getenv(
     "CORS_ORIGINS",
     "http://localhost:5175,http://127.0.0.1:5175,http://[::1]:5175,http://localhost:5176,http://127.0.0.1:5176",
 ).split(",") if item.strip()]
-app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["*"], allow_headers=["Authorization", "Content-Type"])
+origin_regex = os.getenv("CORS_ORIGIN_REGEX", "").strip() or None
+app.add_middleware(CORSMiddleware, allow_origins=origins, allow_origin_regex=origin_regex, allow_credentials=True, allow_methods=["*"], allow_headers=["Authorization", "Content-Type"])
 
 
 @app.exception_handler(WorkoutDomainError)
@@ -104,6 +118,10 @@ def workouts() -> WorkoutService:
     return WorkoutService(db)
 
 
+def coach_links() -> CoachLinkService:
+    return CoachLinkService(db)
+
+
 def agent_actor(capability: AgentCapability) -> dict[str, str]:
     return {"kind": "agent", "job_id": capability.job_id}
 
@@ -131,11 +149,17 @@ def agent_run_context(account: dict[str, Any], request_id: str) -> dict[str, Any
     }}}
 
 
+OWNER_CHAT_SCOPE = "owner-chat"
+MINI_CHAT_SCOPE = "owner-minichat"
+ChatScope = Literal["owner-chat", "owner-minichat"]
+
+
 class ChatInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     user_id: str
     request_id: UUID
     message: str = Field(min_length=1, max_length=16_000)
+    scope: ChatScope = OWNER_CHAT_SCOPE
     scope_id: str | None = Field(default=None, max_length=200)
     reference_date: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
     exercise_id: str | None = Field(default=None, min_length=1, max_length=200)
@@ -147,6 +171,7 @@ class ChatInput(BaseModel):
 class ModelSelectionInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     expected_session: str | None = None
+    scope: ChatScope = OWNER_CHAT_SCOPE
     cli: str = Field(min_length=1, max_length=80)
     provider: str | None = Field(default=None, min_length=1, max_length=80)
     model: str | None = Field(default=None, min_length=1, max_length=160)
@@ -210,6 +235,7 @@ class AgentWorkoutSwapInput(BaseModel):
     exercise_instance_id: str = Field(pattern=r"^wex_[a-f0-9]{32}$")
     reason: str = Field(min_length=1, max_length=500)
     source: Literal["default", "jev"] = "jev"
+    target_candidate_id: str | None = Field(default=None, pattern=r"^cand_[a-z0-9_]{3,120}$")
     expected_revision: str = Field(pattern=r"^rev_[a-f0-9]{32}$")
     expected_blueprint_revision: str = Field(pattern=r"^rev_[a-f0-9]{32}$")
     request_id: str = Field(min_length=1, max_length=160, pattern=r"^[A-Za-z0-9_.:-]+$")
@@ -380,6 +406,7 @@ async def indexes() -> None:
     await db.accounts.create_index([("privy_subject", ASCENDING)], unique=True)
     await db.accounts.create_index([("account_id", ASCENDING)], unique=True)
     await workouts().ensure_indexes()
+    await coach_links().ensure_indexes()
     global _telegram_admit_task, _telegram_admit_stop
     if telegram_admit.admit_enabled() and _telegram_admit_task is None:
         _telegram_admit_stop = asyncio.Event()
@@ -461,9 +488,20 @@ async def configure_telegram_bot(body: TelegramBotInput, identity: Identity = De
 
 
 @app.get("/chat/models")
-async def chat_models(identity: Identity = Depends(require_identity)) -> dict:
+async def chat_models(identity: Identity = Depends(require_identity),
+                      scope: ChatScope = OWNER_CHAT_SCOPE) -> dict:
+    """Shared owner control, or one private scope's control for mini-chat.
+
+    The owner scope uses the shared Ez control; any other admitted chat scope
+    uses its own scope-control, so mini-chat can run a faster model while the
+    main chat keeps a planning model. Neither operation changes the other.
+    """
     account = await account_for(identity)
     binding = await verified_binding(account["account_id"])
+    if scope != OWNER_CHAT_SCOPE:
+        control = public_model_control(await ez_call(
+            binding, "GET", f"/v1/scope-control?scope={quote(scope, safe='')}"))
+        return await lock_control(binding, identity, control)
     return await lock_control(binding, identity)
 
 
@@ -479,6 +517,10 @@ async def select_chat_model(body: ModelSelectionInput, identity: Identity = Depe
         selection["model"] = body.model
     if body.effort is not None:
         selection["effort"] = body.effort
+    if body.scope != OWNER_CHAT_SCOPE:
+        control = public_model_control(await ez_call(
+            binding, "POST", f"/v1/scope-control?scope={quote(body.scope, safe='')}", selection))
+        return await lock_control(binding, identity, control)
     control = public_model_control(await ez_call(binding, "POST", "/v1/control", selection))
     return await lock_control(binding, identity, control)
 
@@ -554,6 +596,9 @@ async def enqueue_chat(body: ChatInput, identity: Identity = Depends(require_ide
 
     No domain resolution, no history lookup, no text mutation, no turn store.
     Idempotency is owned by Ez via requestId (409 on conflicting reuse).
+    The owner scope follows the shared native conversation; any other
+    admitted chat scope (mini-chat) runs in its own native session with its
+    own model selection, so the two surfaces never change each other's AI.
     """
     account = await owned_account(identity, body.user_id)
     binding = await verified_binding(account["account_id"])
@@ -562,7 +607,9 @@ async def enqueue_chat(body: ChatInput, identity: Identity = Depends(require_ide
                                                  "exerciseId": body.exercise_id, "workoutId": body.workout_id,
                                                  "exerciseInstanceId": body.exercise_instance_id,
                                                  "expectedRevision": body.expected_revision}.items() if value is not None}
-    admission: dict[str, Any] = {"requestId": request_id, "scope": "owner-chat", "text": body.message, "followOwner": True}
+    admission: dict[str, Any] = {"requestId": request_id, "scope": body.scope, "text": body.message}
+    if body.scope == OWNER_CHAT_SCOPE:
+        admission["followOwner"] = True
     context = dict(references)
     plugin_context = agent_run_context(account, request_id)
     if plugin_context:
@@ -617,25 +664,85 @@ async def browser_account(identity: Identity) -> dict[str, Any]:
     return await account_for(identity)
 
 
-@app.post("/v1/exercises")
-async def create_exercise_v1(body: ExerciseMutationInput, identity: Identity = Depends(require_identity)) -> dict:
+def canonical_account(permission: str):
+    """Resolve the canonical account for the browser /v1 surface.
+
+    Without ``act_as_link_id`` this is the signed-in account. With it, the
+    server re-reads the stored coach link on every request, requires the caller
+    to be its coach, and derives the trainee account; a browser-supplied owner
+    or account id is never trusted.
+    """
+    async def dependency(
+        act_as_link_id: str | None = Query(default=None, max_length=200),
+        identity: Identity = Depends(require_identity),
+    ) -> dict[str, Any]:
+        account = await browser_account(identity)
+        if act_as_link_id is None:
+            return account
+        return await coach_links().resolve_act_as(account["account_id"], act_as_link_id, permission)
+    return dependency
+
+
+require_view_account = canonical_account("view_progress")
+require_edit_account = canonical_account("edit_programs")
+
+
+@app.post("/v1/coach-links")
+async def create_coach_link_v1(body: CoachLinkInviteInput, identity: Identity = Depends(require_identity)) -> dict:
     account = await browser_account(identity)
+    return await coach_links().create_invite(account, body)
+
+
+@app.post("/v1/coach-links/accept")
+async def accept_coach_link_v1(body: CoachLinkAcceptInput, identity: Identity = Depends(require_identity)) -> dict:
+    account = await browser_account(identity)
+    return await coach_links().accept(account, body)
+
+
+@app.get("/v1/coach-links")
+async def list_coach_links_v1(role: CoachLinkRole = Query(default="all"),
+                              identity: Identity = Depends(require_identity)) -> list[dict]:
+    account = await browser_account(identity)
+    return await coach_links().list_for(account, role)
+
+
+@app.patch("/v1/coach-links/{link_id}")
+async def update_coach_link_v1(link_id: str, body: CoachLinkUpdateInput,
+                               identity: Identity = Depends(require_identity)) -> dict:
+    account = await browser_account(identity)
+    return await coach_links().update(account, link_id, body)
+
+
+@app.post("/v1/exercises")
+async def create_exercise_v1(body: ExerciseMutationInput, account: dict = Depends(require_edit_account)) -> dict:
     return await workouts().create_exercise(account["account_id"], body.definition, body.request_id,
                                             {"kind": "browser", "account_id": account["account_id"]}, body.expected_revision)
 
 
 @app.get("/v1/exercises/{exercise_id}/history")
 async def exercise_history_v1(exercise_id: str, before: str | None = None, limit: int = 10,
-                              identity: Identity = Depends(require_identity)) -> list[dict]:
-    account = await browser_account(identity)
+                              account: dict = Depends(require_view_account)) -> list[dict]:
     return await workouts().history(account["account_id"], exercise_id, before, limit)
+
+
+@app.get("/v1/exercises/{exercise_id}/related-history")
+async def exercise_related_history_v1(exercise_id: str, limit: int = 20,
+                                      account: dict = Depends(require_view_account)) -> dict:
+    return await workouts().related_history(account["account_id"], exercise_id, limit)
 
 
 @app.get("/v1/exercises/{exercise_id}")
 async def get_exercise_v1(exercise_id: str, revision: str | None = None,
-                          identity: Identity = Depends(require_identity)) -> dict:
-    account = await browser_account(identity)
+                          account: dict = Depends(require_view_account)) -> dict:
     return await workouts().exercise(account["account_id"], exercise_id, revision)
+
+
+@app.get("/v1/videos")
+async def search_videos_v1(q: str = Query(min_length=1, max_length=200),
+                           limit: int = Query(default=20, ge=1, le=40),
+                           identity: Identity = Depends(require_identity)) -> dict:
+    await browser_account(identity)
+    return await videos.search_videos(q, limit)
 
 
 @app.post("/v1/plans/draft")
@@ -666,40 +773,68 @@ async def active_program_v1(date: str | None = None, identity: Identity = Depend
 
 
 @app.get("/v1/blueprints/active")
-async def active_blueprint_v1(date: str | None = None, identity: Identity = Depends(require_identity)) -> dict:
-    account = await browser_account(identity)
+async def active_blueprint_v1(date: str | None = None, account: dict = Depends(require_view_account)) -> dict:
     return await workouts().active_blueprint(account["account_id"], date)
 
 
 @app.post("/v1/workouts/generate")
-async def generate_workout_v1(body: GenerateInput, identity: Identity = Depends(require_identity)) -> dict:
-    account = await browser_account(identity)
+async def generate_workout_v1(body: GenerateInput, account: dict = Depends(require_edit_account)) -> dict:
     return await workouts().generate(account["account_id"], body)
 
 
+@app.post("/v1/workouts/copy-last-week")
+async def copy_last_week_v1(body: CopyLastWeekInput, account: dict = Depends(require_edit_account)) -> dict:
+    return await workouts().copy_last_week(account["account_id"], body)
+
+
+@app.post("/v1/workouts/{workout_id}/clear")
+async def clear_workout_v1(workout_id: str, body: ClearWorkoutInput, account: dict = Depends(require_edit_account)) -> dict:
+    return await workouts().clear_workout(account["account_id"], workout_id, body)
+
+
 @app.get("/v1/workouts")
-async def list_workouts_v1(start: str, end: str, identity: Identity = Depends(require_identity)) -> list[dict]:
-    account = await browser_account(identity)
+async def list_workouts_v1(start: str, end: str, account: dict = Depends(require_view_account)) -> list[dict]:
     return await workouts().workouts(account["account_id"], start, end)
 
 
 @app.get("/v1/workouts/{workout_id}")
-async def get_workout_v1(workout_id: str, identity: Identity = Depends(require_identity)) -> dict:
-    account = await browser_account(identity)
+async def get_workout_v1(workout_id: str, account: dict = Depends(require_view_account)) -> dict:
     return await workouts().workout(account["account_id"], workout_id)
 
 
 @app.patch("/v1/workouts/{workout_id}/sets/{set_id}")
 async def log_workout_set_v1(workout_id: str, set_id: str, body: SetLogInput,
-                             identity: Identity = Depends(require_identity)) -> dict:
-    account = await browser_account(identity)
+                             account: dict = Depends(require_edit_account)) -> dict:
     return await workouts().log_set(account["account_id"], workout_id, set_id, body)
+
+
+@app.post("/v1/workouts/{workout_id}/sets/{set_id}/unlog")
+async def unlog_workout_set_v1(workout_id: str, set_id: str, body: SetUnlogInput,
+                               account: dict = Depends(require_edit_account)) -> dict:
+    return await workouts().unlog_set(account["account_id"], workout_id, set_id, body)
+
+
+@app.patch("/v1/workouts/{workout_id}/notes")
+async def update_workout_notes_v1(workout_id: str, body: WorkoutNotesInput,
+                                  account: dict = Depends(require_edit_account)) -> dict:
+    return await workouts().update_notes(account["account_id"], workout_id, body)
+
+
+@app.patch("/v1/workouts/{workout_id}/exercises/{exercise_instance_id}/notes")
+async def update_workout_exercise_notes_v1(workout_id: str, exercise_instance_id: str, body: ExerciseNoteInput,
+                                           account: dict = Depends(require_edit_account)) -> dict:
+    return await workouts().update_exercise_notes(account["account_id"], workout_id, exercise_instance_id, body)
+
+
+@app.get("/v1/workouts/{workout_id}/exercises/{exercise_instance_id}/swap-candidates")
+async def swap_candidates_v1(workout_id: str, exercise_instance_id: str,
+                             account: dict = Depends(require_view_account)) -> dict:
+    return await workouts().swap_candidates(account["account_id"], workout_id, exercise_instance_id)
 
 
 @app.post("/v1/workouts/{workout_id}/exercises/{exercise_instance_id}/swap")
 async def swap_workout_exercise_v1(workout_id: str, exercise_instance_id: str, body: SwapInput,
-                                   identity: Identity = Depends(require_identity)) -> dict:
-    account = await browser_account(identity)
+                                   account: dict = Depends(require_edit_account)) -> dict:
     return await workouts().swap(account["account_id"], workout_id, exercise_instance_id, body)
 
 
@@ -762,6 +897,16 @@ async def agent_exercise_history_v1(
 ) -> list[dict]:
     require_agent_permission(capability, AGENT_READ)
     return await workouts().history(capability.account_id, exercise_id, before, limit)
+
+
+@app.get("/v1/agent/exercises/{exercise_id}/related-history")
+async def agent_exercise_related_history_v1(
+    exercise_id: str,
+    limit: int = 20,
+    capability: AgentCapability = Depends(require_agent_capability),
+) -> dict:
+    require_agent_permission(capability, AGENT_READ)
+    return await workouts().related_history(capability.account_id, exercise_id, limit)
 
 
 @app.post("/v1/agent/blueprints/draft")
@@ -828,6 +973,7 @@ async def agent_swap_v1(
         SwapInput(
             source=body.source,
             reason=body.reason,
+            target_candidate_id=body.target_candidate_id,
             expected_revision=body.expected_revision,
             expected_blueprint_revision=body.expected_blueprint_revision,
             request_id=body.request_id,

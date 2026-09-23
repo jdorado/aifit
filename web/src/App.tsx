@@ -2,9 +2,10 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { usePrivy } from '@privy-io/react-auth'
 import { marked } from 'marked'
 import { formatDurationForDisplay, normalizeWorkoutTargetText } from './utils/workoutDisplay'
-import type { WorkoutExercise, WorkoutExtra } from './data/testWorkout'
+import type { WorkoutExercise, WorkoutExtra, WorkoutFeedbackPreset } from './data/testWorkout'
 import { circuitGroupKey } from './data/testWorkout'
 import { backendWorkoutToSession, type BackendWorkoutReceipt } from './utils/backendWorkoutAdapter'
+import { fetchSwapCandidates, readApiError, swapErrorKey, SwapCandidatesError, type SwapCandidate, type SwapCandidates } from './utils/swapCandidates'
 import { I18nProvider, createI18n } from './i18n'
 import { normalizeLanguage, type Language } from './i18n/strings'
 import TabBar from './components/TabBar'
@@ -12,7 +13,7 @@ import RestOverlay from './components/RestOverlay'
 import MiniTimer from './components/MiniTimer'
 import ChatView from './views/ChatView'
 import WorkoutView from './views/WorkoutView'
-import ProfileView from './views/ProfileView'
+import ProfileView, { type CoachActAsTarget, type CoachPermissions } from './views/ProfileView'
 import TelegramLink from './components/profile/TelegramLink'
 import WorkoutOverflowMenu from './components/workout/WorkoutOverflowMenu'
 import ChatOverflowMenu from './components/chat/ChatOverflowMenu'
@@ -85,6 +86,54 @@ const presetLabel = (preset: EzPreset | undefined, models: EzModel[] = []) => {
     : preset.name
 }
 
+type ModelOption = {
+  value: string
+  label: string
+  cli: string
+  provider?: string
+  model?: string
+  effort?: string
+}
+
+const MINI_CHAT_SCOPE = 'owner-minichat'
+
+const buildModelOptions = (control: ModelControl | null): ModelOption[] => {
+  const options = (control?.models ?? []).flatMap((model) => {
+    const efforts = model.efforts.length > 0 ? model.efforts : [undefined]
+    return efforts.map((effort) => ({
+      value: JSON.stringify([model.cli, model.provider ?? null, model.model ?? null, effort ?? null]),
+      label: `${modelDisplayName(model)}${effort ? ` ${titleCase(effort)}` : ''}${providerLabel(model.provider) ? ` · ${providerLabel(model.provider)}` : ''}`,
+      cli: model.cli,
+      provider: model.provider,
+      model: model.model,
+      effort,
+    }))
+  })
+  const optionKeys = new Set(options.map((option) => option.value))
+  for (const preset of control?.presets ?? []) {
+    if (!preset.model || !preset.effort) continue
+    const value = JSON.stringify([preset.cli, preset.provider ?? null, preset.model, preset.effort])
+    if (optionKeys.has(value)) continue
+    optionKeys.add(value)
+    options.push({
+      value,
+      label: presetLabel(preset, control?.models) ?? preset.name,
+      cli: preset.cli,
+      provider: preset.provider,
+      model: preset.model,
+      effort: preset.effort,
+    })
+  }
+  return options
+}
+
+const selectedModelValueFor = (control: ModelControl | null): string => {
+  const preset = control?.presets.find((item) => item.id === control.selected_id)
+  return preset
+    ? JSON.stringify([preset.cli, preset.provider ?? null, preset.model ?? null, preset.effort ?? null])
+    : ''
+}
+
 const isProd = (process.env.NODE_ENV || '').trim() === 'production'
 
 const getLocalRuntimeApiBaseUrl = () => {
@@ -134,6 +183,14 @@ type ProfileState = {
   fontScale: number
 }
 
+type SetSyncRevert = {
+  weight: string
+  metric: string
+  done: boolean
+  skipped?: boolean
+  value_source?: SetState['value_source']
+}
+
 type PersistedMessage = {
   variant: 'user' | 'ai'
   text: string
@@ -145,9 +202,12 @@ type ChatRequestPayload = {
   user_id: string
   request_id: string
   message: string
+  scope?: string
   scope_id?: string
   reference_date?: string
   exercise_id?: string
+  workout_id?: string
+  exercise_instance_id?: string
   expected_revision?: string
 }
 
@@ -790,6 +850,8 @@ const App = () => {
   const [activeEntryType, setActiveEntryType] = useState<ActiveEntryType>(null)
   const activeEntryRef = useRef<{ id: string | null, type: ActiveEntryType }>({ id: null, type: null })
   const [editingSet, setEditingSet] = useState<{ exerciseId: string, index: number } | null>(null)
+  const [dayNoteSaving, setDayNoteSaving] = useState(false)
+  const [exerciseFeedbackSaving, setExerciseFeedbackSaving] = useState(false)
   const [editingSetSnapshot, setEditingSetSnapshot] = useState<{
     weight: string
     metric: string
@@ -801,7 +863,16 @@ const App = () => {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [modelControl, setModelControl] = useState<ModelControl | null>(null)
   const [modelSelectionPending, setModelSelectionPending] = useState(false)
+  const [miniModelControl, setMiniModelControl] = useState<ModelControl | null>(null)
+  const [miniModelSelectionPending, setMiniModelSelectionPending] = useState(false)
   const [coachMessagesByScope, setCoachMessagesByScope] = useState<Record<string, ChatMessage[]>>({})
+  const [swapOpen, setSwapOpen] = useState(false)
+  const [swapLoading, setSwapLoading] = useState(false)
+  const [swapError, setSwapError] = useState<string | null>(null)
+  const [swapCandidates, setSwapCandidates] = useState<SwapCandidate[]>([])
+  const [swappingCandidateId, setSwappingCandidateId] = useState<string | null>(null)
+  const swapResponseRef = useRef<SwapCandidates | null>(null)
+  const swapExerciseIdRef = useRef<string | null>(null)
   const [chatInput, setChatInput] = useState('')
   const [showChatScrollToBottom, setShowChatScrollToBottom] = useState(false)
   const [restState, setRestState] = useState<RestState>({
@@ -835,7 +906,20 @@ const App = () => {
   const [currentUserEmail, setCurrentUserEmail] = useState<string | null>(null)
   const [currentUserId, setCurrentUserId] = useState('')
   const [privyAuthError, setPrivyAuthError] = useState<string | null>(null)
-  const coachActAsOwnerId: string | null = null
+  const [coachActAsLinkId, setCoachActAsLinkId] = useState<string | null>(null)
+  const [coachActAsLabel, setCoachActAsLabel] = useState('')
+  const [coachActAsPermissions, setCoachActAsPermissions] = useState<CoachPermissions | null>(null)
+  const coachActAsOwnerId = coachActAsLinkId
+  const coachCanEditPrograms = !coachActAsLinkId || coachActAsPermissions?.edit_programs === true
+  const coachActAsLinkIdRef = useRef<string | null>(null)
+  coachActAsLinkIdRef.current = coachActAsLinkId
+  // Canonical /v1 calls carry the act-as link as a query parameter; the server
+  // re-checks the stored link on every request, so no trust is cached here.
+  const withCoachActAs = useCallback((url: string) => {
+    const linkId = coachActAsLinkIdRef.current
+    if (!linkId) return url
+    return `${url}${url.includes('?') ? '&' : '?'}act_as_link_id=${encodeURIComponent(linkId)}`
+  }, [])
   const [privySubjectId, setPrivySubjectId] = useState<string | null>(null)
   const privyAuth = usePrivy()
   const {
@@ -859,48 +943,37 @@ const App = () => {
   )
   const i18n = useMemo(() => createI18n(profile.language), [profile.language])
   const { t } = i18n
-  const coachChatEnabled = true
+  const coachChatEnabled = !coachActAsLinkId
   const selectedModelPreset = modelControl?.presets.find((preset) => preset.id === modelControl.selected_id)
   const selectedModelLabel = presetLabel(selectedModelPreset, modelControl?.models)
-  const modelOptions = (modelControl?.models ?? []).flatMap((model) => {
-    const efforts = model.efforts.length > 0 ? model.efforts : [undefined]
-    return efforts.map((effort) => ({
-      value: JSON.stringify([model.cli, model.provider ?? null, model.model ?? null, effort ?? null]),
-      label: `${modelDisplayName(model)}${effort ? ` ${titleCase(effort)}` : ''}${providerLabel(model.provider) ? ` · ${providerLabel(model.provider)}` : ''}`,
-      cli: model.cli,
-      provider: model.provider,
-      model: model.model,
-      effort,
-    }))
-  })
-  const modelOptionKeys = new Set(modelOptions.map((option) => option.value))
-  for (const preset of modelControl?.presets ?? []) {
-    if (!preset.model || !preset.effort) continue
-    const value = JSON.stringify([preset.cli, preset.provider ?? null, preset.model, preset.effort])
-    if (modelOptionKeys.has(value)) continue
-    modelOptionKeys.add(value)
-    modelOptions.push({
-      value,
-      label: presetLabel(preset, modelControl?.models) ?? preset.name,
-      cli: preset.cli,
-      provider: preset.provider,
-      model: preset.model,
-      effort: preset.effort,
-    })
-  }
-  const selectedModelValue = selectedModelPreset
-    ? JSON.stringify([selectedModelPreset.cli, selectedModelPreset.provider ?? null, selectedModelPreset.model ?? null, selectedModelPreset.effort ?? null])
-    : ''
+  const modelOptions = useMemo(() => buildModelOptions(modelControl), [modelControl])
+  const selectedModelValue = useMemo(() => selectedModelValueFor(modelControl), [modelControl])
+  const miniSelectedModelPreset = miniModelControl?.presets.find((preset) => preset.id === miniModelControl.selected_id)
+  const miniSelectedModelLabel = presetLabel(miniSelectedModelPreset, miniModelControl?.models)
+  const miniModelOptions = useMemo(() => buildModelOptions(miniModelControl), [miniModelControl])
+  const miniSelectedModelValue = useMemo(() => selectedModelValueFor(miniModelControl), [miniModelControl])
   const chatBodyRef = useRef<HTMLDivElement>(null)
   const chatBottomFrameRef = useRef<number | null>(null)
   const chatBottomTimeoutRef = useRef<number | null>(null)
   const layoutViewportHeightRef = useRef(0)
   const workoutRevisionByOwnerDateRef = useRef<Record<string, string>>({})
   const workoutIdByOwnerDateRef = useRef<Record<string, string>>({})
-  const syncedSetKeysRef = useRef(new Set<string>())
+  const syncedSetKeysRef = useRef(new Map<string, string>())
   const pendingSetSyncsByDateRef = useRef<Record<string, number>>({})
-  const syncLoggedSetRef = useRef<((exerciseId: string, index: number) => void) | null>(null)
+  const syncLoggedSetRef = useRef<((exerciseId: string, index: number, previous?: SetSyncRevert | null) => void) | null>(null)
   const pendingWorkoutDatesRef = useRef(new Set<string>())
+  // Delete tombstones: date -> server timestamp of a clear that removed the
+  // record. Any fetched session at or before that time is pre-delete state
+  // and must never resurrect the day, no matter which stale closure applies
+  // it. Sessions created after the clear carry a newer server timestamp and
+  // pass through untouched.
+  const clearedWorkoutAtRef = useRef<Record<string, string>>({})
+  // Latest applied plan for same-tick merges. React state read inside a
+  // callback created before a re-render is stale, so a saved-session merge
+  // that follows a clear in the same tick would rebuild the week from the
+  // pre-clear day and write it back. Every plan written to state is mirrored
+  // here so merges always start from the plan the user is looking at.
+  const weekPlanRef = useRef<WeekPlan>(weekPlan)
   const sessionLoadKeyRef = useRef<string | null>(null)
   const sessionReadyRef = useRef(false)
   const sessionHydrationInProgressRef = useRef(false)
@@ -1075,12 +1148,13 @@ const App = () => {
   }, [])
 
   const handleActiveViewChange = useCallback((view: 'home' | 'workout' | 'profile') => {
+    if (view === 'home' && coachActAsLinkId) return
     dismissKeyboard()
     setActiveView(view)
     resetAppViewportScroll()
     requestAnimationFrame(resetAppViewportScroll)
     window.setTimeout(resetAppViewportScroll, 250)
-  }, [dismissKeyboard, resetAppViewportScroll])
+  }, [coachActAsLinkId, dismissKeyboard, resetAppViewportScroll])
 
   const isPlanEditableDate = useCallback((dateId?: string | null) => {
     if (!dateId) return false
@@ -1110,15 +1184,35 @@ const App = () => {
   // The public v1 API supports canonical reads, generation, and per-set
   // actual logging. Arbitrary plan/set rewrites have no browser contract.
   const canGenerateWorkoutSelectedDay = useMemo(() => (
-    isPlanEditableDate(selectedDay?.date ?? todayId)
-  ), [isPlanEditableDate, selectedDay?.date, todayId])
+    isPlanEditableDate(selectedDay?.date ?? todayId) && coachCanEditPrograms
+  ), [coachCanEditPrograms, isPlanEditableDate, selectedDay?.date, todayId])
 
   const canLogSelectedDay = useMemo(() => {
-    if (!canQuerySavedWorkoutSessions) return false
+    if (!canQuerySavedWorkoutSessions || !coachCanEditPrograms) return false
     const ownerId = coachActAsOwnerId ?? currentUserId
     const key = `${ownerId}:${selectedDay?.date ?? todayId}`
     return Boolean(workoutIdByOwnerDateRef.current[key] && workoutRevisionByOwnerDateRef.current[key])
-  }, [canQuerySavedWorkoutSessions, coachActAsOwnerId, currentUserId, selectedDay?.date, todayId, dataVersion])
+  }, [canQuerySavedWorkoutSessions, coachActAsOwnerId, coachCanEditPrograms, currentUserId, selectedDay?.date, todayId, dataVersion])
+
+  // Clear day acts on a canonical workout and is offered while something
+  // unlogged remains to remove; fully logged history has nothing to clear.
+  const canClearSelectedDay = useMemo(() => {
+    if (!canQuerySavedWorkoutSessions || !coachCanEditPrograms) return false
+    const targetDate = selectedDay?.date ?? todayId
+    const ownerId = coachActAsOwnerId ?? currentUserId
+    if (!workoutIdByOwnerDateRef.current[`${ownerId}:${targetDate}`]) return false
+    const day = selectedDay
+    if (!day) return false
+    const logsForDay = weekSetLogsRef.current[targetDate] ?? {}
+    const hasLogged = day.exercises.some((exercise) => (
+      (logsForDay[exercise.id] ?? []).some((set) => set.done)
+    ))
+    const hasUnlogged = day.exercises.some((exercise) => {
+      const states = logsForDay[exercise.id] ?? []
+      return exercise.sets.some((_, index) => !states[index]?.done)
+    }) || day.extras.length > 0
+    return hasLogged ? hasUnlogged : (day.exercises.length > 0 || day.extras.length > 0)
+  }, [canQuerySavedWorkoutSessions, coachActAsOwnerId, coachCanEditPrograms, currentUserId, dataVersion, selectedDay, todayId])
 
   const hasWeekWorkouts = useMemo(() => (
     weekPlan.days.some((day) => day.exercises.length > 0 || day.extras.length > 0)
@@ -1593,6 +1687,7 @@ const App = () => {
     weekSetLogsRef.current = nextLogs
     selectedDayIndexRef.current = safeIndex
     setSelectedDayIndex(safeIndex)
+    weekPlanRef.current = activePlan
     setWeekPlan(activePlan)
     syncDayRefs(activePlan, safeIndex)
     const nextSelectedDay = activePlan.days[safeIndex]
@@ -1613,6 +1708,12 @@ const App = () => {
     }
     bumpData()
   }, [bumpData, hideWorkoutDetail, profile.language, syncDayRefs, todayId, weekStartDayIndex])
+
+  // Mirror every plan that reaches state (including functional writers) so
+  // same-tick saved-session merges never rebuild from an older week.
+  useEffect(() => {
+    weekPlanRef.current = weekPlan
+  }, [weekPlan])
 
   const handleSelectDay = useCallback((index: number, dateId?: string) => {
     const normalizedDateId = normalizeDateId(dateId)
@@ -2184,6 +2285,45 @@ const App = () => {
     }
   }, [getPrivyAuthHeaders, modelControl, modelOptions, modelSelectionPending, refreshModelControl])
 
+  const refreshMiniModelControl = useCallback(async () => {
+    if (!privyReady || !privyAuthenticated) {
+      setMiniModelControl(null)
+      return
+    }
+    const response = await apiFetch(`${API_BASE_URL}/chat/models?scope=${MINI_CHAT_SCOPE}`, {
+      headers: await getPrivyAuthHeaders(),
+    })
+    if (!response.ok) throw new Error(`Failed to load mini-chat Ez models (${response.status})`)
+    setMiniModelControl(await response.json() as ModelControl)
+  }, [getPrivyAuthHeaders, privyAuthenticated, privyReady])
+
+  const handleMiniModelSelection = useCallback(async (value: string) => {
+    const option = miniModelOptions.find((item) => item.value === value)
+    if (!option || !miniModelControl || miniModelSelectionPending) return
+    setMiniModelSelectionPending(true)
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/chat/models`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...await getPrivyAuthHeaders() },
+        body: JSON.stringify({
+          expected_session: miniModelControl.active_session_id,
+          scope: MINI_CHAT_SCOPE,
+          cli: option.cli,
+          provider: option.provider,
+          model: option.model,
+          effort: option.effort,
+        }),
+      })
+      if (!response.ok) throw new Error(`Failed to select mini-chat Ez model (${response.status})`)
+      setMiniModelControl(await response.json() as ModelControl)
+    } catch (error) {
+      console.error('Mini-chat model selection failed:', error)
+      await refreshMiniModelControl().catch(() => undefined)
+    } finally {
+      setMiniModelSelectionPending(false)
+    }
+  }, [getPrivyAuthHeaders, miniModelControl, miniModelOptions, miniModelSelectionPending, refreshMiniModelControl])
+
   const handleAiReply = useCallback(async (reply: string, messageId?: string | null, modelLabel?: string) => {
     const displayMessage = reply.trim()
 
@@ -2267,7 +2407,7 @@ const App = () => {
       start: sortedDates[0],
       end: sortedDates[sortedDates.length - 1],
     })
-    const response = await apiFetch(`${API_BASE_URL}/v1/workouts?${params.toString()}`, { headers })
+    const response = await apiFetch(withCoachActAs(`${API_BASE_URL}/v1/workouts?${params.toString()}`), { headers })
     if (!response.ok) {
       throw new Error(`Failed to load workout sessions (${response.status})`)
     }
@@ -2276,8 +2416,18 @@ const App = () => {
     const sessions = workouts
       .filter((workout) => requestedDates.has(workout.date))
       .map((workout) => backendWorkoutToSession(workout, currentUserId))
+      .filter((session) => {
+        // Drop pre-delete snapshots: the record they describe is gone and
+        // applying them would resurrect a cleared day.
+        const tombstone = clearedWorkoutAtRef.current[session.date]
+        return !tombstone || (session.updated_at ? session.updated_at > tombstone : false)
+      })
     sessions.forEach((session) => {
       const ownerKey = `${currentUserId}:${session.date}`
+      // Never resurrect refs for a deleted record either; newer sessions
+      // already passed the tombstone filter above.
+      const tombstone = clearedWorkoutAtRef.current[session.date]
+      if (tombstone && !(session.updated_at && session.updated_at > tombstone)) return
       if (session.session_id) workoutIdByOwnerDateRef.current[ownerKey] = session.session_id
       if (!session.revision) return
       workoutRevisionByOwnerDateRef.current[ownerKey] = session.revision
@@ -2289,6 +2439,7 @@ const App = () => {
     getPrivyAuthHeaders,
     privyAuthenticated,
     privyReady,
+    withCoachActAs,
   ])
 
   const applySavedWorkoutSessionsToWeek = useCallback((
@@ -2297,7 +2448,7 @@ const App = () => {
   ) => {
     if (sessions.length === 0) return false
 
-    let nextDays = weekPlan.days
+    let nextDays = weekPlanRef.current.days
     const nextLogs: WeekSetLogs = { ...weekSetLogsRef.current }
     const appliedDates: string[] = []
     const ownerId = coachActAsOwnerId ?? currentUserId
@@ -2364,7 +2515,7 @@ const App = () => {
     try {
       applyWeekPlan(
         {
-          weekStart: weekPlan.weekStart || appliedDates[0],
+          weekStart: weekPlanRef.current.weekStart || appliedDates[0],
           days: nextDays,
         },
         {
@@ -2418,7 +2569,7 @@ const App = () => {
         if (cancelled || savedWorkoutHydrationInFlightKeyRef.current !== key) return
         savedWorkoutHydrationAttemptedKeysRef.current.add(key)
 
-        let nextDays = weekPlan.days
+        let nextDays = weekPlanRef.current.days
         const nextLogs: WeekSetLogs = { ...weekSetLogsRef.current }
         let changed = false
 
@@ -2488,7 +2639,7 @@ const App = () => {
         try {
           applyWeekPlan(
             {
-              weekStart: weekPlan.weekStart || nextDays[0]?.date || todayId,
+              weekStart: weekPlanRef.current.weekStart || nextDays[0]?.date || todayId,
               days: nextDays,
             },
             {
@@ -2576,16 +2727,29 @@ const App = () => {
     }
   }, [currentUserId, canQuerySavedWorkoutSessions, isBackendHealthy, refreshVisibleWorkoutSessions])
 
-  const syncLoggedSet = useCallback(async (exerciseId: string, index: number) => {
+  const restoreSetState = useCallback((exerciseId: string, index: number, previous?: SetSyncRevert | null) => {
+    const currentList = setLogsRef.current[exerciseId]
+    const currentItem = currentList?.[index]
+    if (!currentItem) return
+    if (previous) {
+      currentItem.weight = previous.weight
+      currentItem.metric = previous.metric
+      currentItem.done = previous.done
+      currentItem.skipped = previous.skipped
+      currentItem.value_source = previous.value_source
+    } else if (currentItem.done) {
+      currentItem.done = false
+      currentItem.skipped = undefined
+    } else {
+      return
+    }
+    bumpData()
+  }, [bumpData])
+
+  const syncLoggedSet = useCallback(async (exerciseId: string, index: number, previous?: SetSyncRevert | null) => {
     // A set is only rendered as logged when its canonical actual lands. Any
     // local failure clears the optimistic done flag instead of diverging.
-    const revertLocal = () => {
-      const currentList = setLogsRef.current[exerciseId]
-      const currentItem = currentList?.[index]
-      if (!currentItem?.done) return
-      currentItem.done = false
-      bumpData()
-    }
+    const revertLocal = () => restoreSetState(exerciseId, index, previous)
     if (!canQuerySavedWorkoutSessions) { revertLocal(); return }
     const ownerId = coachActAsOwnerId ?? currentUserId
     const targetDate = selectedDay?.date ?? todayId
@@ -2598,25 +2762,28 @@ const App = () => {
     const setTarget = exercise?.sets[index]
     if (!workoutId || !revision || !exercise || !setItem || !setTarget?.setId || !setItem.done) { revertLocal(); return }
 
-    const load = parseActualLoad(setItem.weight)
-    const metric = parseActualMetric(exercise, setItem.metric)
-    if (!metric) { revertLocal(); return }
+    const skipped = setItem.skipped === true
+    const load = skipped ? null : parseActualLoad(setItem.weight)
+    const metric = skipped ? null : parseActualMetric(exercise, setItem.metric)
+    if (!skipped && !metric) { revertLocal(); return }
 
-    const fingerprint = JSON.stringify([workoutId, setTarget.setId, load, metric])
-    if (syncedSetKeysRef.current.has(fingerprint)) return
+    const setKey = `${workoutId}:${setTarget.setId}`
+    const fingerprint = JSON.stringify([skipped ? 'skipped' : metric, skipped ? null : load])
+    if (syncedSetKeysRef.current.get(setKey) === fingerprint) return
 
     const pending = pendingSetSyncsByDateRef.current
     pending[targetDate] = (pending[targetDate] ?? 0) + 1
     pendingWorkoutDatesRef.current.add(targetDate)
+    let refetchAfterSync = false
     try {
       const headers = { 'Content-Type': 'application/json', ...(await getPrivyAuthHeaders()) }
       const response = await apiFetch(
-        `${API_BASE_URL}/v1/workouts/${encodeURIComponent(workoutId)}/sets/${encodeURIComponent(setTarget.setId)}`,
+        withCoachActAs(`${API_BASE_URL}/v1/workouts/${encodeURIComponent(workoutId)}/sets/${encodeURIComponent(setTarget.setId)}`),
         {
           method: 'PATCH',
           headers,
           body: JSON.stringify({
-            actual: { status: 'completed', ...metric, ...(load ? { load } : {}) },
+            actual: skipped ? { status: 'skipped' } : { status: 'completed', ...metric, ...(load ? { load } : {}) },
             expected_revision: revision,
             request_id: crypto.randomUUID(),
           }),
@@ -2627,15 +2794,14 @@ const App = () => {
         // instead of retrying this write; if the pull fails, drop the
         // optimistic state so the UI never shows an unconfirmed actual.
         delete workoutRevisionByOwnerDateRef.current[ownerKey]
-        const refreshed = await refreshVisibleWorkoutSessions().catch(() => false)
-        if (!refreshed) revertLocal()
+        refetchAfterSync = true
         return
       }
       if (!response.ok) throw new Error(`Set log failed (${response.status})`)
       const receipt = await response.json() as BackendWorkoutReceipt
       const nextRevision = receipt.revision ?? receipt.workout?.revision
       if (nextRevision) workoutRevisionByOwnerDateRef.current[ownerKey] = nextRevision
-      syncedSetKeysRef.current.add(fingerprint)
+      syncedSetKeysRef.current.set(setKey, fingerprint)
     } catch (error) {
       console.warn('Canonical set log failed:', error)
       revertLocal()
@@ -2647,15 +2813,87 @@ const App = () => {
       } else {
         pending[targetDate] = remaining
       }
+      if (refetchAfterSync) {
+        const refreshed = await refreshVisibleWorkoutSessions().catch(() => false)
+        if (!refreshed) revertLocal()
+      }
     }
   }, [
-    bumpData,
     canQuerySavedWorkoutSessions,
     coachActAsOwnerId,
     currentUserId,
     getExercise,
     getPrivyAuthHeaders,
     refreshVisibleWorkoutSessions,
+    restoreSetState,
+    selectedDay?.date,
+    todayId,
+  ])
+
+  const unlogLoggedSet = useCallback(async (exerciseId: string, index: number, previous?: SetSyncRevert | null) => {
+    // Undo removes the canonical actual, then the local state returns to
+    // pending; a failed undo restores the logged state.
+    const revertLocal = () => restoreSetState(exerciseId, index, previous)
+    if (!canQuerySavedWorkoutSessions) { revertLocal(); return }
+    const ownerId = coachActAsOwnerId ?? currentUserId
+    const targetDate = selectedDay?.date ?? todayId
+    const ownerKey = `${ownerId}:${targetDate}`
+    const workoutId = workoutIdByOwnerDateRef.current[ownerKey]
+    const revision = workoutRevisionByOwnerDateRef.current[ownerKey]
+    const exercise = getExercise(exerciseId)
+    const stateList = setLogsRef.current[exerciseId]
+    const setItem = stateList?.[index]
+    const setTarget = exercise?.sets[index]
+    if (!workoutId || !revision || !exercise || !setItem || !setTarget?.setId) { revertLocal(); return }
+
+    const pending = pendingSetSyncsByDateRef.current
+    pending[targetDate] = (pending[targetDate] ?? 0) + 1
+    pendingWorkoutDatesRef.current.add(targetDate)
+    let refetchAfterSync = false
+    try {
+      const headers = { 'Content-Type': 'application/json', ...(await getPrivyAuthHeaders()) }
+      const response = await apiFetch(
+        withCoachActAs(`${API_BASE_URL}/v1/workouts/${encodeURIComponent(workoutId)}/sets/${encodeURIComponent(setTarget.setId)}/unlog`),
+        {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ expected_revision: revision, request_id: crypto.randomUUID() }),
+        },
+      )
+      if (response.status === 409) {
+        delete workoutRevisionByOwnerDateRef.current[ownerKey]
+        refetchAfterSync = true
+        return
+      }
+      if (!response.ok) throw new Error(`Set undo failed (${response.status})`)
+      const receipt = await response.json() as BackendWorkoutReceipt
+      const nextRevision = receipt.revision ?? receipt.workout?.revision
+      if (nextRevision) workoutRevisionByOwnerDateRef.current[ownerKey] = nextRevision
+      syncedSetKeysRef.current.delete(`${workoutId}:${setTarget.setId}`)
+    } catch (error) {
+      console.warn('Canonical set undo failed:', error)
+      revertLocal()
+    } finally {
+      const remaining = (pending[targetDate] ?? 1) - 1
+      if (remaining <= 0) {
+        delete pending[targetDate]
+        pendingWorkoutDatesRef.current.delete(targetDate)
+      } else {
+        pending[targetDate] = remaining
+      }
+      if (refetchAfterSync) {
+        const refreshed = await refreshVisibleWorkoutSessions().catch(() => false)
+        if (!refreshed) revertLocal()
+      }
+    }
+  }, [
+    canQuerySavedWorkoutSessions,
+    coachActAsOwnerId,
+    currentUserId,
+    getExercise,
+    getPrivyAuthHeaders,
+    refreshVisibleWorkoutSessions,
+    restoreSetState,
     selectedDay?.date,
     todayId,
   ])
@@ -2663,6 +2901,154 @@ const App = () => {
   useEffect(() => {
     syncLoggedSetRef.current = syncLoggedSet
   }, [syncLoggedSet])
+
+  const skipSet = useCallback((exerciseId: string, index: number) => {
+    if (!canLogSelectedDay) return
+    const exercise = getExercise(exerciseId)
+    const stateList = setLogsRef.current[exerciseId]
+    const setItem = stateList?.[index]
+    if (!exercise || !setItem || setItem.done) return
+    const previous: SetSyncRevert = { ...setItem }
+    setItem.weight = ''
+    setItem.metric = ''
+    setItem.value_source = undefined
+    setItem.done = true
+    setItem.skipped = true
+    bumpData()
+    void syncLoggedSetRef.current?.(exerciseId, index, previous)
+  }, [bumpData, canLogSelectedDay, getExercise])
+
+  const unlogSet = useCallback((exerciseId: string, index: number) => {
+    if (!canLogSelectedDay) return
+    const exercise = getExercise(exerciseId)
+    const stateList = setLogsRef.current[exerciseId]
+    const setItem = stateList?.[index]
+    if (!exercise || !setItem || !setItem.done) return
+    const previous: SetSyncRevert = { ...setItem }
+    setItem.weight = ''
+    setItem.metric = ''
+    setItem.value_source = undefined
+    setItem.done = false
+    setItem.skipped = undefined
+    bumpData()
+    void unlogLoggedSet(exerciseId, index, previous)
+  }, [bumpData, canLogSelectedDay, getExercise, unlogLoggedSet])
+
+  const handleSaveDayNote = useCallback(async (notes: string): Promise<boolean> => {
+    if (!canQuerySavedWorkoutSessions || !coachCanEditPrograms || dayNoteSaving) return false
+    const ownerId = coachActAsOwnerId ?? currentUserId
+    const targetDate = selectedDay?.date ?? todayId
+    const ownerKey = `${ownerId}:${targetDate}`
+    const workoutId = workoutIdByOwnerDateRef.current[ownerKey]
+    const revision = workoutRevisionByOwnerDateRef.current[ownerKey]
+    if (!workoutId || !revision) return false
+
+    setDayNoteSaving(true)
+    try {
+      const headers = { 'Content-Type': 'application/json', ...(await getPrivyAuthHeaders()) }
+      const response = await apiFetch(withCoachActAs(`${API_BASE_URL}/v1/workouts/${encodeURIComponent(workoutId)}/notes`), {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify({ notes, expected_revision: revision, request_id: crypto.randomUUID() }),
+      })
+      if (response.status === 409) {
+        // Canonical state moved on (agent edit or another tab). Pull it back in
+        // instead of retrying; the refreshed note is the canonical value.
+        delete workoutRevisionByOwnerDateRef.current[ownerKey]
+        await refreshVisibleWorkoutSessions().catch(() => false)
+        return false
+      }
+      if (!response.ok) throw new Error(`Day note save failed (${response.status})`)
+      const receipt = await response.json() as BackendWorkoutReceipt
+      const nextRevision = receipt.revision ?? receipt.workout?.revision
+      if (nextRevision) workoutRevisionByOwnerDateRef.current[ownerKey] = nextRevision
+      const savedNotes = typeof receipt.workout?.notes === 'string' ? receipt.workout.notes : notes
+      setWeekPlan((previous) => ({
+        ...previous,
+        days: previous.days.map((day) => (day.date === targetDate ? { ...day, planNotes: savedNotes } : day)),
+      }))
+      return true
+    } catch (error) {
+      console.warn('Day note save failed:', error)
+      return false
+    } finally {
+      setDayNoteSaving(false)
+    }
+  }, [
+    canQuerySavedWorkoutSessions,
+    coachActAsOwnerId,
+    coachCanEditPrograms,
+    currentUserId,
+    dayNoteSaving,
+    getPrivyAuthHeaders,
+    refreshVisibleWorkoutSessions,
+    selectedDay?.date,
+    todayId,
+    withCoachActAs,
+  ])
+
+  const handleSaveExerciseFeedback = useCallback(async (
+    exerciseId: string,
+    note: string,
+    preset: WorkoutFeedbackPreset | null,
+  ): Promise<boolean> => {
+    if (!canQuerySavedWorkoutSessions || !coachCanEditPrograms || exerciseFeedbackSaving) return false
+    const ownerId = coachActAsOwnerId ?? currentUserId
+    const targetDate = selectedDay?.date ?? todayId
+    const ownerKey = `${ownerId}:${targetDate}`
+    const workoutId = workoutIdByOwnerDateRef.current[ownerKey]
+    const revision = workoutRevisionByOwnerDateRef.current[ownerKey]
+    if (!workoutId || !revision) return false
+
+    setExerciseFeedbackSaving(true)
+    try {
+      const headers = { 'Content-Type': 'application/json', ...(await getPrivyAuthHeaders()) }
+      const response = await apiFetch(
+        withCoachActAs(`${API_BASE_URL}/v1/workouts/${encodeURIComponent(workoutId)}/exercises/${encodeURIComponent(exerciseId)}/notes`),
+        {
+          method: 'PATCH',
+          headers,
+          body: JSON.stringify({ note, preset, expected_revision: revision, request_id: crypto.randomUUID() }),
+        },
+      )
+      if (response.status === 409) {
+        delete workoutRevisionByOwnerDateRef.current[ownerKey]
+        await refreshVisibleWorkoutSessions().catch(() => false)
+        return false
+      }
+      if (!response.ok) throw new Error(`Exercise feedback save failed (${response.status})`)
+      const receipt = await response.json() as BackendWorkoutReceipt
+      const nextRevision = receipt.revision ?? receipt.workout?.revision
+      if (nextRevision) workoutRevisionByOwnerDateRef.current[ownerKey] = nextRevision
+      const savedItem = receipt.workout?.segments
+        .flatMap((segment) => segment.items)
+        .find((item) => item.exercise_instance_id === exerciseId)
+      const exercise = workoutExercisesRef.current.find((item) => item.id === exerciseId)
+      if (exercise) {
+        exercise.notes = savedItem?.notes?.note ?? note
+        exercise.feedbackPreset = savedItem ? (savedItem.notes?.preset ?? null) : preset
+        bumpData()
+      }
+      return true
+    } catch (error) {
+      console.warn('Exercise feedback save failed:', error)
+      return false
+    } finally {
+      setExerciseFeedbackSaving(false)
+    }
+  }, [
+    bumpData,
+    canQuerySavedWorkoutSessions,
+    coachActAsOwnerId,
+    coachCanEditPrograms,
+    currentUserId,
+    exerciseFeedbackSaving,
+    getPrivyAuthHeaders,
+    refreshVisibleWorkoutSessions,
+    selectedDay?.date,
+    todayId,
+    withCoachActAs,
+  ])
 
   const handleRefreshSession = useCallback(async () => {
     if (!currentUserId || !canQuerySavedWorkoutSessions) return false
@@ -2783,7 +3169,9 @@ const App = () => {
       console.error('Chat Error:', error)
       const message = error instanceof Error && error.message.includes('Async chat endpoint unavailable')
         ? 'Backend needs a restart for async chat. /chat/async is not available yet.'
-        : t('messages.networkError')
+        : error instanceof TypeError || !(error instanceof Error) || !error.message
+          ? t('messages.networkError')
+          : error.message
       await addMessage(message, 'ai')
     }
   }, [
@@ -2800,19 +3188,19 @@ const App = () => {
     todayId,
   ])
 
-  const handleFastGenerateDayWorkout = useCallback(async (mode: 'recommended' | 'jev') => {
+  const handleFastGenerateDayWorkout = useCallback(async () => {
     if (!canGenerateWorkoutSelectedDay || !canQuerySavedWorkoutSessions || !isBackendHealthy) return
     const targetDate = selectedDay?.date ?? todayId
     if (pendingWorkoutDatesRef.current.has(targetDate)) return
     pendingWorkoutDatesRef.current.add(targetDate)
     try {
       const headers = { 'Content-Type': 'application/json', ...await getPrivyAuthHeaders() }
-      const response = await apiFetch(`${API_BASE_URL}/v1/workouts/generate`, {
+      const response = await apiFetch(withCoachActAs(`${API_BASE_URL}/v1/workouts/generate`), {
         method: 'POST',
         headers,
         body: JSON.stringify({
           date: targetDate,
-          source: mode === 'jev' ? 'jev' : 'default',
+          source: 'default',
           request_id: crypto.randomUUID(),
         }),
       })
@@ -2848,15 +3236,187 @@ const App = () => {
     selectedDay?.date,
     t,
     todayId,
+    withCoachActAs,
   ])
 
   const handleGenerateDayWorkout = useCallback(() => {
-    void handleFastGenerateDayWorkout('recommended')
+    void handleFastGenerateDayWorkout()
   }, [handleFastGenerateDayWorkout])
 
-  const handleVaryDayWorkout = useCallback(() => {
-    void handleFastGenerateDayWorkout('jev')
-  }, [handleFastGenerateDayWorkout])
+  const handleCopyLastWeek = useCallback(async () => {
+    if (!canGenerateWorkoutSelectedDay || !canQuerySavedWorkoutSessions || !isBackendHealthy) return
+    const targetDate = selectedDay?.date ?? todayId
+    if (pendingWorkoutDatesRef.current.has(targetDate)) return
+    pendingWorkoutDatesRef.current.add(targetDate)
+    try {
+      const headers = { 'Content-Type': 'application/json', ...await getPrivyAuthHeaders() }
+      const ownerKey = `${coachActAsOwnerId ?? currentUserId}:${targetDate}`
+      const response = await apiFetch(withCoachActAs(`${API_BASE_URL}/v1/workouts/copy-last-week`), {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          date: targetDate,
+          expected_revision: workoutRevisionByOwnerDateRef.current[ownerKey] ?? null,
+          request_id: crypto.randomUUID(),
+        }),
+      })
+      if (!response.ok) {
+        const body = await response.json().catch(() => null) as { detail?: string | { code?: string, message?: string } } | null
+        const detail = body?.detail
+        const code = detail && typeof detail === 'object' ? detail.code : undefined
+        const detailMessage = typeof detail === 'string' ? detail : detail?.message
+        const message = code === 'workout_has_logged_sets'
+          ? t('workout.copyLastWeekLogged')
+          : code === 'copy_source_missing'
+            ? t('workout.copyLastWeekMissing', { date: shiftDateId(targetDate, -7) })
+            : detailMessage
+        throw new Error(message || t('workout.copyLastWeekFailed'))
+      }
+      const receipt = await response.json() as BackendWorkoutReceipt
+      if (receipt.workout) {
+        // The response is authoritative for this request; release the in-flight
+        // guard before hydration so the copied day is not dropped.
+        pendingWorkoutDatesRef.current.delete(targetDate)
+        applySavedWorkoutSessionToWeek(backendWorkoutToSession(receipt.workout, currentUserId))
+      }
+      try {
+        await refreshVisibleWorkoutSessions()
+      } catch {
+        // The next supported workout refresh reconciles this view.
+      }
+    } catch (error) {
+      console.warn('Copy last week failed:', error)
+      window.alert(error instanceof Error ? error.message : t('workout.copyLastWeekFailed'))
+    } finally {
+      pendingWorkoutDatesRef.current.delete(targetDate)
+    }
+  }, [
+    applySavedWorkoutSessionToWeek,
+    canGenerateWorkoutSelectedDay,
+    canQuerySavedWorkoutSessions,
+    coachActAsOwnerId,
+    currentUserId,
+    getPrivyAuthHeaders,
+    isBackendHealthy,
+    refreshVisibleWorkoutSessions,
+    selectedDay?.date,
+    t,
+    todayId,
+    withCoachActAs,
+  ])
+
+  const handleClearWorkoutDay = useCallback(async () => {
+    if (!canQuerySavedWorkoutSessions || !isBackendHealthy) return
+    const targetDate = selectedDay?.date ?? todayId
+    const ownerKey = `${coachActAsOwnerId ?? currentUserId}:${targetDate}`
+    const workoutId = workoutIdByOwnerDateRef.current[ownerKey]
+    const expectedRevision = workoutRevisionByOwnerDateRef.current[ownerKey]
+    if (!workoutId || !expectedRevision) return
+    if (pendingWorkoutDatesRef.current.has(targetDate)) return
+    const logsForDay = weekSetLogsRef.current[targetDate] ?? {}
+    const hasLoggedSets = (selectedDay?.exercises ?? []).some((exercise) => (
+      (logsForDay[exercise.id] ?? []).some((set) => set.done)
+    ))
+    const confirmLabel = hasLoggedSets
+      ? t('workout.clearUnloggedConfirm', { label: selectedDayLabel })
+      : t('workout.clearConfirm', { label: selectedDayLabel })
+    if (!window.confirm(confirmLabel)) return
+    pendingWorkoutDatesRef.current.add(targetDate)
+    try {
+      const headers = { 'Content-Type': 'application/json', ...await getPrivyAuthHeaders() }
+      const response = await apiFetch(withCoachActAs(`${API_BASE_URL}/v1/workouts/${workoutId}/clear`), {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ expected_revision: expectedRevision, request_id: crypto.randomUUID() }),
+      })
+      if (!response.ok) {
+        const body = await response.json().catch(() => null) as { detail?: string | { message?: string } } | null
+        const detail = body?.detail
+        const detailMessage = typeof detail === 'string' ? detail : detail?.message
+        throw new Error(detailMessage || t('workout.clearFailed'))
+      }
+      const receipt = await response.json() as BackendWorkoutReceipt
+      if (receipt.workout) {
+        const saved = backendWorkoutToSession(receipt.workout, currentUserId)
+        // The reduced day is authoritative. Release the in-flight guard only
+        // for the synchronous apply, then hold it again through the refresh
+        // below so a stale pre-clear hydration cannot restore removed sets.
+        pendingWorkoutDatesRef.current.delete(targetDate)
+        applySavedWorkoutSessionToWeek(saved)
+        pendingWorkoutDatesRef.current.add(targetDate)
+      } else {
+        // The canonical record is gone: render the selected day as empty.
+        // Keep the in-flight guard held through the refresh below and stamp
+        // the suppression time so a stale pre-clear hydration cannot re-apply
+        // the just-deleted workout.
+        delete workoutIdByOwnerDateRef.current[ownerKey]
+        delete workoutRevisionByOwnerDateRef.current[ownerKey]
+        // Stamp the delete so any pre-clear fetch resolving late cannot
+        // resurrect the day: its snapshot predates this timestamp.
+        clearedWorkoutAtRef.current[targetDate] = (receipt as unknown as { updated_at?: string }).updated_at ?? new Date().toISOString()
+        const clearedDay: WeekPlanDay = {
+          ...(selectedDay ?? { date: targetDate, label: selectedDayLabel, exercises: [], extras: [], isRest: true, planNotes: '', notes: '' }),
+          date: targetDate,
+          exercises: [],
+          extras: [],
+          isRest: true,
+          autoFillSuppressedAt: (receipt as unknown as { updated_at?: string }).updated_at ?? new Date().toISOString(),
+          planNotes: '',
+          notes: '',
+        }
+        applyWeekPlan(
+          {
+            weekStart: weekPlanRef.current.weekStart,
+            days: weekPlanRef.current.days.map((day) => (day.date === targetDate ? clearedDay : day)),
+          },
+          { selectedDate: targetDate, logsByDay: { ...weekSetLogsRef.current, [targetDate]: {} } },
+        )
+      }
+      try {
+        await refreshVisibleWorkoutSessions()
+      } catch {
+        // The local reduction above already reflects the canonical clear.
+      }
+    } catch (error) {
+      console.warn('Clear workout day failed:', error)
+      window.alert(error instanceof Error ? error.message : t('workout.clearFailed'))
+    } finally {
+      pendingWorkoutDatesRef.current.delete(targetDate)
+    }
+  }, [
+    applySavedWorkoutSessionToWeek,
+    applyWeekPlan,
+    canQuerySavedWorkoutSessions,
+    coachActAsOwnerId,
+    currentUserId,
+    getPrivyAuthHeaders,
+    isBackendHealthy,
+    refreshVisibleWorkoutSessions,
+    selectedDay,
+    selectedDayLabel,
+    t,
+    todayId,
+    weekPlan.days,
+    weekPlan.weekStart,
+    withCoachActAs,
+  ])
+
+  const handleGenerateDayWorkoutWithCoach = useCallback(() => {
+    if (!canGenerateWorkoutSelectedDay || !coachChatEnabled) return
+    const targetDate = selectedDay?.date ?? todayId
+    const prompt = t('workout.generateChatPrompt', { date: targetDate, label: selectedDayLabel })
+    handleActiveViewChange('home')
+    void handleSend(prompt)
+  }, [
+    canGenerateWorkoutSelectedDay,
+    coachChatEnabled,
+    handleActiveViewChange,
+    handleSend,
+    selectedDay?.date,
+    selectedDayLabel,
+    t,
+    todayId,
+  ])
 
   const handleCoachSend = useCallback(async (exerciseId: string, message: string) => {
     const trimmed = message.trim()
@@ -2865,7 +3425,7 @@ const App = () => {
     ensureWorkoutSession()
     const scopeId = getCoachScopeId(exerciseId)
     addCoachMessage(scopeId, trimmed, 'user')
-    const thinkingId = addCoachThinkingMessage(scopeId, selectedModelLabel)
+    const thinkingId = addCoachThinkingMessage(scopeId, miniSelectedModelLabel)
 
     const exercise = getExercise(exerciseId)
     if (!exercise) {
@@ -2874,15 +3434,20 @@ const App = () => {
       return
     }
 
+    const ownerWorkoutKey = `${currentUserId}:${selectedDay?.date ?? todayId}`
+    const ownerWorkoutId = workoutIdByOwnerDateRef.current[ownerWorkoutKey]
     const payload = {
       user_id: currentUserId,
       request_id: crypto.randomUUID(),
       message: trimmed,
+      scope: MINI_CHAT_SCOPE,
       scope_id: scopeId,
       reference_date: selectedDay?.date ?? todayId,
       exercise_id: exercise.id,
-      ...(workoutRevisionByOwnerDateRef.current[`${currentUserId}:${selectedDay?.date ?? todayId}`]
-        ? { expected_revision: workoutRevisionByOwnerDateRef.current[`${currentUserId}:${selectedDay?.date ?? todayId}`] }
+      ...(ownerWorkoutId ? { workout_id: ownerWorkoutId } : {}),
+      exercise_instance_id: exercise.id,
+      ...(workoutRevisionByOwnerDateRef.current[ownerWorkoutKey]
+        ? { expected_revision: workoutRevisionByOwnerDateRef.current[ownerWorkoutKey] }
         : {}),
     }
 
@@ -2893,7 +3458,9 @@ const App = () => {
       removeCoachMessage(scopeId, thinkingId)
       const responseMessage = error instanceof Error && error.message.includes('Async chat endpoint unavailable')
         ? 'Backend needs a restart for async chat. /chat/async is not available yet.'
-        : t('messages.coachNetworkError')
+        : error instanceof TypeError || !(error instanceof Error) || !error.message
+          ? t('messages.coachNetworkError')
+          : error.message
       addCoachMessage(scopeId, responseMessage, 'ai')
     }
   }, [
@@ -2905,11 +3472,118 @@ const App = () => {
     fetchCoachReply,
     getCoachScopeId,
     getExercise,
+    miniSelectedModelLabel,
     removeCoachMessage,
     selectedDay?.date,
-    selectedModelLabel,
     t,
     todayId,
+  ])
+
+  const handleCloseSwap = useCallback(() => {
+    swapExerciseIdRef.current = null
+    swapResponseRef.current = null
+    setSwapOpen(false)
+    setSwapLoading(false)
+    setSwapError(null)
+    setSwapCandidates([])
+    setSwappingCandidateId(null)
+  }, [])
+
+  const handleOpenSwap = useCallback(async (exerciseId: string) => {
+    if (!canQuerySavedWorkoutSessions || !coachCanEditPrograms || !isBackendHealthy) return
+    const targetDate = selectedDay?.date ?? todayId
+    const workoutId = workoutIdByOwnerDateRef.current[`${coachActAsOwnerId ?? currentUserId}:${targetDate}`]
+    if (!workoutId) return
+    swapExerciseIdRef.current = exerciseId
+    swapResponseRef.current = null
+    setSwapOpen(true)
+    setSwapLoading(true)
+    setSwapError(null)
+    setSwapCandidates([])
+    setSwappingCandidateId(null)
+    try {
+      const headers = await getPrivyAuthHeaders()
+      const result = await fetchSwapCandidates({
+        apiBaseUrl: API_BASE_URL,
+        getHeaders: async () => headers,
+        workoutId,
+        exerciseInstanceId: exerciseId,
+        actAsLinkId: coachActAsLinkId,
+      })
+      if (swapExerciseIdRef.current !== exerciseId) return
+      swapResponseRef.current = result
+      setSwapCandidates(result.candidates)
+    } catch (error) {
+      if (swapExerciseIdRef.current !== exerciseId) return
+      const code = error instanceof SwapCandidatesError ? error.code : null
+      setSwapError(t(`workout.${swapErrorKey(code)}`))
+    } finally {
+      if (swapExerciseIdRef.current === exerciseId) setSwapLoading(false)
+    }
+  }, [
+    canQuerySavedWorkoutSessions,
+    coachActAsLinkId,
+    coachActAsOwnerId,
+    coachCanEditPrograms,
+    currentUserId,
+    getPrivyAuthHeaders,
+    isBackendHealthy,
+    selectedDay?.date,
+    t,
+    todayId,
+  ])
+
+  const handleSelectSwapCandidate = useCallback(async (candidate: SwapCandidate) => {
+    const response = swapResponseRef.current
+    if (!response || swappingCandidateId) return
+    setSwappingCandidateId(candidate.candidate_id)
+    try {
+      const headers = { 'Content-Type': 'application/json', ...await getPrivyAuthHeaders() }
+      const result = await apiFetch(withCoachActAs(
+        `${API_BASE_URL}/v1/workouts/${response.workout_id}/exercises/${response.exercise_instance_id}/swap`,
+      ), {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          source: 'jev',
+          reason: `Picked ${candidate.name} from the MiniChat alternatives.`,
+          target_candidate_id: candidate.candidate_id,
+          expected_revision: response.workout_revision,
+          expected_blueprint_revision: response.blueprint_revision,
+          request_id: crypto.randomUUID(),
+        }),
+      })
+      if (!result.ok) {
+        throw readApiError(await result.json().catch(() => null), result.status, t('workout.swapFailed'))
+      }
+      const receipt = await result.json() as BackendWorkoutReceipt
+      if (!receipt.workout) throw new Error(t('workout.swapFailed'))
+      applySavedWorkoutSessionToWeek(backendWorkoutToSession(receipt.workout, currentUserId))
+      handleCloseSwap()
+      try {
+        await refreshVisibleWorkoutSessions()
+      } catch {
+        // The swap receipt above already reflects the canonical record.
+      }
+    } catch (error) {
+      console.warn('Swap exercise failed:', error)
+      const code = error instanceof SwapCandidatesError ? error.code : null
+      const key = swapErrorKey(code)
+      setSwapError(key === 'swapFailed'
+        ? (error instanceof Error && error.message ? error.message : t('workout.swapFailed'))
+        : t(`workout.${key}`))
+    } finally {
+      setSwappingCandidateId(null)
+    }
+  }, [
+    applySavedWorkoutSessionToWeek,
+    currentUserId,
+    getPrivyAuthHeaders,
+    handleCloseSwap,
+    refreshVisibleWorkoutSessions,
+    swappingCandidateId,
+    t,
+    withCoachActAs,
   ])
 
   const handleClearChat = useCallback(async () => {
@@ -3076,10 +3750,12 @@ const App = () => {
   useEffect(() => {
     if (!isBackendHealthy || !privyReady || !privyAuthenticated) {
       setModelControl(null)
+      setMiniModelControl(null)
       return
     }
     const load = () => {
       refreshModelControl().catch((error) => console.warn('Ez model controls unavailable:', error))
+      refreshMiniModelControl().catch((error) => console.warn('Mini-chat model controls unavailable:', error))
     }
     load()
     const onVisible = () => {
@@ -3091,7 +3767,7 @@ const App = () => {
       document.removeEventListener('visibilitychange', onVisible)
       window.removeEventListener('focus', onVisible)
     }
-  }, [isBackendHealthy, privyAuthenticated, privyReady, refreshModelControl])
+  }, [isBackendHealthy, privyAuthenticated, privyReady, refreshModelControl, refreshMiniModelControl])
 
   const handleAuthClick = useCallback(async () => {
     if (!privyReady) return
@@ -3488,6 +4164,34 @@ const App = () => {
     showWorkoutDetail(id, type)
   }, [showWorkoutDetail])
 
+  const resetVisibleWeek = useCallback(() => {
+    // The owner changed: drop the previous account's in-memory week and let the
+    // canonical hydration effect pull the new owner's records.
+    workoutIdByOwnerDateRef.current = {}
+    workoutRevisionByOwnerDateRef.current = {}
+    weekSetLogsRef.current = {}
+    applyWeekPlan(buildWeekPlanFromSingleDay(todayId, [], [], profile.language), {
+      selectedDate: todayId,
+      logsByDay: {},
+    })
+  }, [applyWeekPlan, profile.language, todayId])
+
+  const handleStartCoachView = useCallback((target: CoachActAsTarget) => {
+    setCoachActAsLinkId(target.linkId)
+    setCoachActAsLabel(target.label)
+    setCoachActAsPermissions(target.permissions)
+    resetVisibleWeek()
+    handleActiveViewChange('workout')
+  }, [handleActiveViewChange, resetVisibleWeek])
+
+  const handleStopCoachView = useCallback(() => {
+    setCoachActAsLinkId(null)
+    setCoachActAsLabel('')
+    setCoachActAsPermissions(null)
+    resetVisibleWeek()
+    handleActiveViewChange('workout')
+  }, [handleActiveViewChange, resetVisibleWeek])
+
   const handleProfileChange = useCallback((field: 'language' | 'fontScale', value: string) => {
     if (field === 'language') {
       const normalized = normalizeLanguage(value) ?? 'en'
@@ -3544,6 +4248,8 @@ const App = () => {
             active={activeView === 'workout'}
             canLogDay={canLogSelectedDay}
             coachChatEnabled={coachChatEnabled}
+            apiBaseUrl={API_BASE_URL}
+            getAuthHeaders={getPrivyAuthHeaders}
             weekDays={weekDaySummaries}
             selectedDayLabel={selectedDayLabel}
             hasWeekWorkouts={hasWeekWorkouts}
@@ -3552,16 +4258,24 @@ const App = () => {
             extras={displayedWorkoutExtras}
             setLogs={setLogsRef.current}
             planNotes={selectedDay?.planNotes ?? ''}
+            savingDayNote={dayNoteSaving}
+            savingExerciseFeedback={exerciseFeedbackSaving}
             activeEntryId={activeEntryId}
             activeEntryType={activeEntryType}
             editingSet={editingSet}
             holdTimer={holdTimer}
             coachMessages={activeCoachMessages}
             showModelLabels
+            miniModelOptions={miniModelOptions}
+            miniSelectedModel={miniSelectedModelValue}
+            miniModelSelectionDisabled={miniModelSelectionPending}
+            onMiniModelChange={handleMiniModelSelection}
             onSelectEntry={handleSelectEntry}
             onSelectDay={handleSelectDay}
             onBack={hideWorkoutDetail}
             onLogSet={logNextSet}
+            onSkipSet={skipSet}
+            onUnlogSet={unlogSet}
             onStartEditingSet={(exerciseId, index) => {
               const stateList = setLogsRef.current[exerciseId]
               const setItem = stateList?.[index]
@@ -3583,7 +4297,17 @@ const App = () => {
                   if (exercise?.metric === 'reps') {
                     setItem.metric = normalizeRepValue(setItem.metric)
                   }
-                  if (setItem.done) void syncLoggedSetRef.current?.(editingSet.exerciseId, editingSet.index)
+                  if (setItem.done) {
+                    const previous = editingSetSnapshot
+                      ? {
+                        weight: editingSetSnapshot.weight,
+                        metric: editingSetSnapshot.metric,
+                        done: true,
+                        value_source: editingSetSnapshot.value_source,
+                      }
+                      : null
+                    void syncLoggedSetRef.current?.(editingSet.exerciseId, editingSet.index, previous)
+                  }
                 }
               }
               setEditingSet(null)
@@ -3607,7 +4331,18 @@ const App = () => {
             onUpdateSetField={updateSetField}
             onStartHoldTimer={startHoldTimer}
             onLogHoldTimerSet={logHoldTimerSet}
+            onSaveDayNote={handleSaveDayNote}
+            onSaveExerciseFeedback={handleSaveExerciseFeedback}
             onCoachSend={handleCoachSend}
+            swapOpen={swapOpen}
+            swapLoading={swapLoading}
+            swappingCandidateId={swappingCandidateId}
+            swapError={swapError}
+            swapCandidates={swapCandidates}
+            onOpenSwap={handleOpenSwap}
+            onSelectSwapCandidate={handleSelectSwapCandidate}
+            onCloseSwap={handleCloseSwap}
+            actAsLinkId={coachActAsLinkId}
           />
           <ProfileView
             telegramControl={privyAuthenticated ? <TelegramLink apiBase={API_BASE_URL} getHeaders={getPrivyAuthHeaders} /> : undefined}
@@ -3617,21 +4352,34 @@ const App = () => {
             onChange={handleProfileChange}
             onAuthClick={handleAuthClick}
             authState={authState}
+            apiBaseUrl={API_BASE_URL}
+            getHeaders={getPrivyAuthHeaders}
+            actAsLinkId={coachActAsLinkId}
+            onStartActAs={handleStartCoachView}
+            onStopActAs={handleStopCoachView}
           />
         </div>
 
         <TabBar
           activeView={activeView}
           onChange={handleActiveViewChange}
-          coachModeActive={Boolean(coachActAsOwnerId)}
-          coachContextLabel=""
+          coachModeActive={Boolean(coachActAsLinkId)}
+          coachContextLabel={coachActAsLabel}
+          onExitCoachMode={coachActAsLinkId ? handleStopCoachView : undefined}
+          disabledTab={coachActAsLinkId ? 'home' : null}
+          disabledNotice={coachActAsLinkId ? t('coach.chatDisabledNotice') : ''}
           leadingControl={activeView === 'home' ? (
             <ChatOverflowMenu onRefresh={handleRefreshSession} />
           ) : (
             <WorkoutOverflowMenu
               canGeneratePlan={canGenerateWorkoutSelectedDay && canQuerySavedWorkoutSessions && isBackendHealthy}
+              canGenerateWithCoach={canGenerateWorkoutSelectedDay && canQuerySavedWorkoutSessions && isBackendHealthy && coachChatEnabled}
+              canCopyLastWeek={canGenerateWorkoutSelectedDay && canQuerySavedWorkoutSessions && isBackendHealthy}
+              canClearWorkout={canClearSelectedDay && isBackendHealthy}
               onGenerateWorkout={handleGenerateDayWorkout}
-              onVaryWorkout={handleVaryDayWorkout}
+              onGenerateWithCoach={handleGenerateDayWorkoutWithCoach}
+              onCopyLastWeek={handleCopyLastWeek}
+              onClearWorkout={handleClearWorkoutDay}
               onRefresh={handleRefreshSession}
             />
           )}
