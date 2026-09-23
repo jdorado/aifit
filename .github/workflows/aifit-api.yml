@@ -43,28 +43,9 @@ jobs:
   deploy-production:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: api-tests
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, aifit]
     timeout-minutes: 10
     environment: production
     steps:
-      - uses: actions/checkout@v4
-      - name: Configure the restricted SSH key
-        env:
-          AIFIT_DEPLOY_SSH_KEY: ${{ secrets.AIFIT_DEPLOY_SSH_KEY }}
-        run: |
-          test -n "$AIFIT_DEPLOY_SSH_KEY"
-          install -m 700 -d "$HOME/.ssh"
-          printf '%s\n' "$AIFIT_DEPLOY_SSH_KEY" > "$HOME/.ssh/aifit_deploy"
-          chmod 600 "$HOME/.ssh/aifit_deploy"
-          install -m 600 deploy/known_hosts "$HOME/.ssh/known_hosts"
       - name: Deploy from main
-        run: >-
-          ssh -i "$HOME/.ssh/aifit_deploy"
-          -o IdentitiesOnly=yes
-          -o BatchMode=yes
-          -o ConnectTimeout=20
-          -o ServerAliveInterval=15
-          -o ServerAliveCountMax=2
-          -o StrictHostKeyChecking=yes
-          -o UserKnownHostsFile="$HOME/.ssh/known_hosts"
-          aifit-deploy@dev.ezenciel.com
+        run: sudo /usr/local/sbin/aifit-api-deploy
