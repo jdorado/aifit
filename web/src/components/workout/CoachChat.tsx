@@ -24,7 +24,16 @@ type CoachChatProps = {
   onSwap?: () => void
 }
 
-const QUICK_PROMPT_KEYS = ['quickExplainForm', 'quickSuggestWeight', 'quickMakeEasier'] as const
+const QUICK_PROMPT_KEYS = [
+  'quickExplainForm',
+  'quickSuggestWeight',
+  'quickMakeEasier',
+  'quickLastTime',
+  'quickProgressOrDeload',
+  'quickRestTime',
+  'quickAdjustVolume',
+  'quickNextExercise',
+] as const
 
 const CoachChat: FC<CoachChatProps> = ({
   open,

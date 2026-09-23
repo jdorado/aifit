@@ -3377,6 +3377,8 @@ const App = () => {
     if (!canGenerateWorkoutSelectedDay || !canQuerySavedWorkoutSessions || !isBackendHealthy) return
     const targetDate = selectedDay?.date ?? todayId
     if (pendingWorkoutDatesRef.current.has(targetDate)) return
+    const targetHasContent = Boolean(workoutExercisesRef.current.length > 0 || workoutExtrasRef.current.length > 0)
+    if (targetHasContent && !window.confirm(t('workout.copyLastWeekConfirm', { date: shiftDateId(targetDate, -7) }))) return
     pendingWorkoutDatesRef.current.add(targetDate)
     try {
       const headers = { 'Content-Type': 'application/json', ...await getPrivyAuthHeaders() }
