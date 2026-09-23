@@ -43,7 +43,7 @@ if [[ ! -f "$COMPOSE_FILE" || ! -f "$CHECKOUT/api/Dockerfile" ]]; then
   exit 1
 fi
 
-compose=(docker compose --project-directory "$CHECKOUT" --file "$COMPOSE_FILE")
+compose=(docker compose --file "$COMPOSE_FILE")
 previous_image="$(docker image inspect --format '{{.Id}}' "$IMAGE" 2>/dev/null || true)"
 if [[ -n "$previous_image" ]]; then
   docker image tag "$previous_image" aifit-api:rollback
