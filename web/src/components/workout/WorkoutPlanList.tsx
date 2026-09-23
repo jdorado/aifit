@@ -247,7 +247,7 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
 
       cards.push(
         <div
-          key={`circuit-row-${circuitName}`}
+          key={`circuit-row-${groupKey}`}
           className="plan-row"
         >
           <div
