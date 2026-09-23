@@ -62,7 +62,7 @@ def stable_id(prefix: str, value: str) -> str:
 
 mongo = AsyncMongoClient(os.getenv("MONGO_URL", "mongodb://localhost:27017"))
 db = mongo[os.getenv("MONGO_DB", "aifit_dev")]
-app = FastAPI(title="AIFit API", version="0.1.0")
+app = FastAPI(title="AIFit API", version="0.1.0-beta.1")
 origins = [item.strip() for item in os.getenv(
     "CORS_ORIGINS",
     "http://localhost:5175,http://127.0.0.1:5175,http://[::1]:5175,http://localhost:5176,http://127.0.0.1:5176",
