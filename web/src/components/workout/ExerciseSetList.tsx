@@ -30,12 +30,16 @@ type ExerciseSetListProps = {
   holdTargetSec: number
   holdPrepSec: number
   canLogDay: boolean
+  canEditPlan: boolean
+  onAddSet: () => void
+  onRemoveSet: (exerciseId: string, index: number) => void
   onStartEditingSet: (exerciseId: string, index: number) => void
   onSaveEditingSet: () => void
   onCancelEditingSet: () => void
   onSkipSet: (exerciseId: string, index: number) => void
   onUnlogSet: (exerciseId: string, index: number) => void
   onUpdateSetField: (exerciseId: string, index: number, field: 'weight' | 'metric', value: string) => void
+  onCommitSetTarget: (exerciseId: string, index: number, field: 'weight' | 'metric') => void
   onStartHoldTimer: (
     exerciseId: string,
     setIndex: number,
@@ -57,12 +61,16 @@ const ExerciseSetList: FC<ExerciseSetListProps> = ({
   holdTargetSec,
   holdPrepSec,
   canLogDay,
+  canEditPlan,
+  onAddSet,
+  onRemoveSet,
   onStartEditingSet,
   onSaveEditingSet,
   onCancelEditingSet,
   onSkipSet,
   onUnlogSet,
   onUpdateSetField,
+  onCommitSetTarget,
   onStartHoldTimer,
   onLogHoldTimerSet,
 }) => {
@@ -277,6 +285,7 @@ const ExerciseSetList: FC<ExerciseSetListProps> = ({
                         value={currentState.metric}
                         inputMode="numeric"
                         onFocus={handleSetInputFocus}
+                        onBlur={canEditPlan ? () => onCommitSetTarget(exercise.id, index, 'metric') : undefined}
                         onChange={(event) => onUpdateSetField(exercise.id, index, 'metric', event.target.value)}
                       />
                     </label>
@@ -290,6 +299,7 @@ const ExerciseSetList: FC<ExerciseSetListProps> = ({
                           value={currentState.weight}
                           inputMode="decimal"
                           onFocus={handleSetInputFocus}
+                          onBlur={canEditPlan ? () => onCommitSetTarget(exercise.id, index, 'weight') : undefined}
                           onChange={(event) => onUpdateSetField(exercise.id, index, 'weight', event.target.value)}
                         />
                       </label>
@@ -378,7 +388,7 @@ const ExerciseSetList: FC<ExerciseSetListProps> = ({
               resultText = t('workout.pending')
             }
 
-            const actionsCount = currentState.done ? (isSkipped ? 1 : 2) : 1
+            const actionsCount = currentState.done ? (isSkipped ? 1 : 2) : 2
 
             return (
               <div
@@ -433,26 +443,56 @@ const ExerciseSetList: FC<ExerciseSetListProps> = ({
                       </svg>
                     </button>
                   ) : (
-                    <button
-                      className="set-row-action"
-                      type="button"
-                      data-set-action="skip"
-                      title={t('workout.skipSet')}
-                      aria-label={t('workout.skipSet')}
-                      disabled={!canLogDay}
-                      onClick={canLogDay ? () => onSkipSet(exercise.id, index) : undefined}
-                    >
-                      <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M18 6 6 18" />
-                        <path d="m6 6 12 12" />
-                      </svg>
-                    </button>
+                    <>
+                      <button
+                        className="set-row-action"
+                        type="button"
+                        data-set-action="skip"
+                        title={t('workout.skipSet')}
+                        aria-label={t('workout.skipSet')}
+                        disabled={!canLogDay}
+                        onClick={canLogDay ? () => onSkipSet(exercise.id, index) : undefined}
+                      >
+                        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M18 6 6 18" />
+                          <path d="m6 6 12 12" />
+                        </svg>
+                      </button>
+                      <button
+                        className="set-row-action danger"
+                        type="button"
+                        data-set-action="remove-set"
+                        title={t('workout.removeSet')}
+                        aria-label={t('workout.removeSet')}
+                        disabled={!canEditPlan}
+                        onClick={canEditPlan ? () => onRemoveSet(exercise.id, index) : undefined}
+                      >
+                        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <polyline points="3 6 5 6 21 6" />
+                          <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+                          <path d="M10 11v6" />
+                          <path d="M14 11v6" />
+                          <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+                        </svg>
+                      </button>
+                    </>
                   )}
                 </div>
               </div>
             )
           })
         )}
+      </div>
+      <div className="set-list-actions">
+        <button
+          className="add-set-btn"
+          type="button"
+          onClick={onAddSet}
+          disabled={!canEditPlan}
+        >
+          <span className="add-set-icon">+</span>
+          {t('workout.addSet')}
+        </button>
       </div>
     </>
   )

@@ -103,7 +103,7 @@ export type BackendWorkoutReceipt = {
   resource_id?: string
   revision?: string
   effect?: string
-  workout?: BackendWorkout
+  workout?: BackendWorkout | null
 }
 
 const formatRange = (range: BackendRange | undefined) => {
@@ -221,6 +221,7 @@ const toExercise = (segment: BackendSegment, item: BackendWorkoutItem): WorkoutE
 
   return {
     id: item.exercise_instance_id,
+    segmentId: segment.segment_id,
     name: snapshot.name,
     standardName: snapshot.name,
     exerciseKey: snapshot.exercise_id,

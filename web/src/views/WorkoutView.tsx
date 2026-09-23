@@ -56,6 +56,7 @@ const SECTION_TONE_COLOR_SLOTS: Partial<Record<SectionTone, number>> = {
 type WorkoutViewProps = {
   active: boolean
   canLogDay: boolean
+  canEditPlan: boolean
   coachChatEnabled: boolean
   apiBaseUrl: string
   getAuthHeaders: () => Promise<Record<string, string>>
@@ -90,6 +91,9 @@ type WorkoutViewProps = {
   onSaveEditingSet: () => void
   onCancelEditingSet: () => void
   onUpdateSetField: (exerciseId: string, index: number, field: 'weight' | 'metric', value: string) => void
+  onCommitSetTarget: (exerciseId: string, index: number, field: 'weight' | 'metric') => void
+  onAddSet: (exerciseId: string) => void
+  onRemoveSet: (exerciseId: string, index: number) => void
   onStartHoldTimer: (
     exerciseId: string,
     setIndex: number,
@@ -109,6 +113,9 @@ type WorkoutViewProps = {
   onOpenSwap: (exerciseId: string) => void
   onSelectSwapCandidate: (candidate: SwapCandidate) => void
   onCloseSwap: () => void
+  onRemoveExercise: (exerciseId: string) => void
+  onRemoveCircuit: (segmentId: string) => void
+  onRemoveSection: (segmentIds: string[]) => void
 }
 
 const getSectionToneFromText = (rawHaystack: string): SectionTone => {
@@ -127,6 +134,7 @@ const getSectionToneFromText = (rawHaystack: string): SectionTone => {
 const WorkoutView: FC<WorkoutViewProps> = ({
   active,
   canLogDay,
+  canEditPlan,
   coachChatEnabled,
   apiBaseUrl,
   getAuthHeaders,
@@ -161,6 +169,9 @@ const WorkoutView: FC<WorkoutViewProps> = ({
   onSaveEditingSet,
   onCancelEditingSet,
   onUpdateSetField,
+  onCommitSetTarget,
+  onAddSet,
+  onRemoveSet,
   onStartHoldTimer,
   onLogHoldTimerSet,
   onSaveDayNote,
@@ -174,6 +185,9 @@ const WorkoutView: FC<WorkoutViewProps> = ({
   onOpenSwap,
   onSelectSwapCandidate,
   onCloseSwap,
+  onRemoveExercise,
+  onRemoveCircuit,
+  onRemoveSection,
 }) => {
   const { t } = useI18n()
   const [coachChatOpen, setCoachChatOpen] = useState(false)
@@ -482,12 +496,16 @@ const WorkoutView: FC<WorkoutViewProps> = ({
           holdTargetSec={holdTargetSec}
           holdPrepSec={holdPrepSec}
           canLogDay={canLogDay}
+          canEditPlan={canEditPlan}
           onSkipSet={onSkipSet}
           onUnlogSet={onUnlogSet}
           onStartEditingSet={onStartEditingSet}
           onSaveEditingSet={onSaveEditingSet}
           onCancelEditingSet={onCancelEditingSet}
           onUpdateSetField={onUpdateSetField}
+          onCommitSetTarget={onCommitSetTarget}
+          onAddSet={() => onAddSet(activeExercise.id)}
+          onRemoveSet={onRemoveSet}
           onStartHoldTimer={onStartHoldTimer}
           onLogHoldTimerSet={onLogHoldTimerSet}
         />
@@ -578,6 +596,10 @@ const WorkoutView: FC<WorkoutViewProps> = ({
         circuitGroups={circuitGroups}
         getNextCircuitExercise={getNextCircuitExercise}
         onSelectEntry={onSelectEntry}
+        canEditPlan={canEditPlan}
+        onRemoveExercise={onRemoveExercise}
+        onRemoveCircuit={onRemoveCircuit}
+        onRemoveSection={onRemoveSection}
       />
 
       <section className={`workout-detail ${activeEntryId ? 'active' : ''}`} data-section-color={detailSectionColorSlot}>

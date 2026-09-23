@@ -596,6 +596,117 @@ const parseActualMetric = (exercise: WorkoutExercise, value: string | undefined)
   return { reps }
 }
 
+type BackendSetTarget = {
+  reps?: { min: number; max: number }
+  duration_seconds?: { min: number; max: number }
+  load?: { value: number; unit: 'kg' | 'lb' }
+}
+
+const parseTargetRange = (value: unknown): { min: number; max: number } | null => {
+  const text = normalizeWorkoutTargetText(value)
+  if (!text) return null
+  const trimmed = text.trim()
+  if (!trimmed) return null
+  const parts = trimmed.split('-').map((part) => part.trim()).filter(Boolean)
+  const first = Number(parts[0])
+  const second = parts.length > 1 ? Number(parts[1]) : first
+  if (!Number.isFinite(first) || first < 0) return null
+  if (!Number.isFinite(second) || second < first) return null
+  return { min: first, max: second }
+}
+
+// Compose the full target PATCH body from the edited field plus the row's
+// existing target. Exactly one of reps / duration_seconds, optional load.
+const composeSetTarget = (
+  exercise: WorkoutExercise,
+  set: WorkoutExercise['sets'][number] | undefined,
+  field: 'weight' | 'metric',
+  value: string,
+): BackendSetTarget | null => {
+  if (field === 'metric') {
+    const load = parseActualLoad(normalizeWorkoutTargetText(set?.targetWeight))
+    if (exercise.metric === 'time') {
+      const seconds = parseDurationToSeconds(value)
+      if (seconds === null || seconds < 0) return null
+      return {
+        duration_seconds: { min: Math.round(seconds), max: Math.round(seconds) },
+        ...(load ? { load } : {}),
+      }
+    }
+    const reps = Number.parseInt(value.trim(), 10)
+    if (!Number.isFinite(reps) || reps < 0) return null
+    return {
+      reps: { min: reps, max: reps },
+      ...(load ? { load } : {}),
+    }
+  }
+  const metricRange = parseTargetRange(exercise.metric === 'time' ? set?.targetTime : set?.targetReps)
+  if (!metricRange) return null
+  const load = value.trim() ? parseActualLoad(value) : null
+  if (value.trim() && !load) return null
+  return {
+    ...(exercise.metric === 'time'
+      ? { duration_seconds: metricRange }
+      : { reps: metricRange }),
+    ...(load ? { load } : {}),
+  }
+}
+
+// Optimistic local propagation matching `apply_to_remaining: true`: the edited
+// field's value replaces the target of this set and every later unlogged set.
+const applyTargetEditToSets = (
+  exercise: WorkoutExercise,
+  stateList: SetState[],
+  index: number,
+  field: 'weight' | 'metric',
+  value: string,
+) => {
+  for (let i = index; i < exercise.sets.length; i++) {
+    if (stateList[i]?.done) continue
+    const targetSet = exercise.sets[i]
+    if (!targetSet) continue
+    if (field === 'metric') {
+      if (exercise.metric === 'time') targetSet.targetTime = value
+      else targetSet.targetReps = value
+    } else {
+      targetSet.targetWeight = value
+    }
+  }
+}
+
+type TargetEditSnapshotEntry = { index: number; reps?: string; time?: string; weight?: string }
+
+const captureTargetEditSnapshot = (
+  exercise: WorkoutExercise,
+  stateList: SetState[],
+  index: number,
+): TargetEditSnapshotEntry[] => {
+  const snapshot: TargetEditSnapshotEntry[] = []
+  for (let i = index; i < exercise.sets.length; i++) {
+    if (stateList[i]?.done) continue
+    const targetSet = exercise.sets[i]
+    snapshot.push({ index: i, reps: targetSet?.targetReps, time: targetSet?.targetTime, weight: targetSet?.targetWeight })
+  }
+  return snapshot
+}
+
+const restoreTargetEditSnapshot = (
+  exercise: WorkoutExercise,
+  field: 'weight' | 'metric',
+  snapshot: TargetEditSnapshotEntry[],
+) => {
+  snapshot.forEach((entry) => {
+    const targetSet = exercise.sets[entry.index]
+    if (!targetSet) return
+    if (field === 'metric') {
+      if (exercise.metric === 'time') targetSet.targetTime = entry.time
+      else targetSet.targetReps = entry.reps
+    } else {
+      targetSet.targetWeight = entry.weight
+    }
+  })
+}
+
 const formatWeightValue = (value: number, precision: number) => {
   const rounded = Number(value.toFixed(precision))
   if (!Number.isFinite(rounded)) return ''
@@ -960,6 +1071,10 @@ const App = () => {
   const workoutIdByOwnerDateRef = useRef<Record<string, string>>({})
   const syncedSetKeysRef = useRef(new Map<string, string>())
   const pendingSetSyncsByDateRef = useRef<Record<string, number>>({})
+  // In-flight target edits keyed by `${workoutId}:${setId}`. Logging a set
+  // awaits its own pending target edit so the two writes cannot race into a
+  // stale_revision.
+  const pendingTargetEditsRef = useRef(new Map<string, Promise<boolean>>())
   const syncLoggedSetRef = useRef<((exerciseId: string, index: number, previous?: SetSyncRevert | null) => void) | null>(null)
   const pendingWorkoutDatesRef = useRef(new Set<string>())
   // Delete tombstones: date -> server timestamp of a clear that removed the
@@ -1184,6 +1299,13 @@ const App = () => {
   // The public v1 API supports canonical reads, generation, and per-set
   // actual logging. Arbitrary plan/set rewrites have no browser contract.
   const canGenerateWorkoutSelectedDay = useMemo(() => (
+    isPlanEditableDate(selectedDay?.date ?? todayId) && coachCanEditPrograms
+  ), [coachCanEditPrograms, isPlanEditableDate, selectedDay?.date, todayId])
+
+  // Plan edits (add/remove set, edit target, remove exercise/circuit/section)
+  // use the same editable-date rule as generation and never enable in the
+  // read-only coach view.
+  const canEditPlanSelectedDay = useMemo(() => (
     isPlanEditableDate(selectedDay?.date ?? todayId) && coachCanEditPrograms
   ), [coachCanEditPrograms, isPlanEditableDate, selectedDay?.date, todayId])
 
@@ -2771,6 +2893,14 @@ const App = () => {
     const fingerprint = JSON.stringify([skipped ? 'skipped' : metric, skipped ? null : load])
     if (syncedSetKeysRef.current.get(setKey) === fingerprint) return
 
+    // A target edit on this set may still be in flight. Wait for it so the
+    // log write uses the post-edit revision instead of racing it into a
+    // stale_revision.
+    const pendingTarget = pendingTargetEditsRef.current.get(setKey)
+    if (pendingTarget) await pendingTarget
+    const expectedRevision = workoutRevisionByOwnerDateRef.current[ownerKey]
+    if (!expectedRevision) { revertLocal(); return }
+
     const pending = pendingSetSyncsByDateRef.current
     pending[targetDate] = (pending[targetDate] ?? 0) + 1
     pendingWorkoutDatesRef.current.add(targetDate)
@@ -2784,7 +2914,7 @@ const App = () => {
           headers,
           body: JSON.stringify({
             actual: skipped ? { status: 'skipped' } : { status: 'completed', ...metric, ...(load ? { load } : {}) },
-            expected_revision: revision,
+            expected_revision: expectedRevision,
             request_id: crypto.randomUUID(),
           }),
         },
@@ -3586,6 +3716,304 @@ const App = () => {
     withCoachActAs,
   ])
 
+  // Merge typed-but-unlogged inputs into a freshly built structural receipt so
+  // applying it never wipes what the user is mid-way through typing. Logged
+  // sets still come from the receipt (done), untouched here.
+  const mergeUnloggedSetInputs = useCallback((targetDate: string, session: WorkoutSession) => {
+    const previousLogs = weekSetLogsRef.current[targetDate]
+    const nextLogs = session.workout?.set_logs
+    if (!previousLogs || !nextLogs) return
+    for (const exercise of session.workout?.exercises ?? []) {
+      const previousStates = previousLogs[exercise.id]
+      const nextStates = nextLogs[exercise.id]
+      if (!previousStates || !nextStates) continue
+      nextStates.forEach((nextState, index) => {
+        const previous = previousStates[index]
+        if (!previous || nextState.done || previous.done) return
+        nextState.weight = previous.weight
+        nextState.metric = previous.metric
+        if (previous.value_source) nextState.value_source = previous.value_source
+      })
+    }
+  }, [])
+
+  // Apply a structural receipt without rebuilding the day from empty actuals.
+  // `workout: null` means the record is gone, mirroring clear.
+  const applyStructuralReceipt = useCallback((
+    receipt: BackendWorkoutReceipt,
+    targetDate: string,
+    ownerKey: string,
+  ) => {
+    if (receipt.workout) {
+      if (receipt.workout.workout_id) workoutIdByOwnerDateRef.current[ownerKey] = receipt.workout.workout_id
+      const nextRevision = receipt.revision ?? receipt.workout.revision
+      if (nextRevision) workoutRevisionByOwnerDateRef.current[ownerKey] = nextRevision
+      const session = backendWorkoutToSession(receipt.workout, currentUserId)
+      mergeUnloggedSetInputs(targetDate, session)
+      // Release the in-flight guard only for the synchronous apply; callers
+      // re-hold it before the refresh that follows.
+      pendingWorkoutDatesRef.current.delete(targetDate)
+      applySavedWorkoutSessionsToWeek([session], { preserveSelectedDate: true, preserveActiveEntry: true })
+      return
+    }
+
+    delete workoutIdByOwnerDateRef.current[ownerKey]
+    delete workoutRevisionByOwnerDateRef.current[ownerKey]
+    clearedWorkoutAtRef.current[targetDate] = (receipt as unknown as { updated_at?: string }).updated_at ?? new Date().toISOString()
+    const clearedDay: WeekPlanDay = {
+      ...(selectedDay ?? { date: targetDate, label: selectedDayLabel, exercises: [], extras: [], isRest: true, planNotes: '', notes: '' }),
+      date: targetDate,
+      exercises: [],
+      extras: [],
+      isRest: true,
+      autoFillSuppressedAt: clearedWorkoutAtRef.current[targetDate],
+      planNotes: '',
+      notes: '',
+    }
+    applyWeekPlan(
+      {
+        weekStart: weekPlanRef.current.weekStart,
+        days: weekPlanRef.current.days.map((day) => (day.date === targetDate ? clearedDay : day)),
+      },
+      { selectedDate: targetDate, logsByDay: { ...weekSetLogsRef.current, [targetDate]: {} } },
+    )
+  }, [
+    applySavedWorkoutSessionsToWeek,
+    applyWeekPlan,
+    currentUserId,
+    mergeUnloggedSetInputs,
+    selectedDay,
+    selectedDayLabel,
+  ])
+
+  // One canonical mutation: auth, 409 refresh + message, generic error parse.
+  const mutateWorkout = useCallback(async (
+    workoutId: string,
+    pathSuffix: string,
+    method: 'POST' | 'PATCH',
+    body: Record<string, unknown>,
+    ownerKey: string,
+  ): Promise<BackendWorkoutReceipt | null> => {
+    const headers = { 'Content-Type': 'application/json', ...(await getPrivyAuthHeaders()) }
+    const response = await apiFetch(
+      withCoachActAs(`${API_BASE_URL}/v1/workouts/${encodeURIComponent(workoutId)}${pathSuffix}`),
+      { method, headers, body: JSON.stringify(body) },
+    )
+    if (response.status === 409) {
+      delete workoutRevisionByOwnerDateRef.current[ownerKey]
+      await refreshVisibleWorkoutSessions().catch(() => false)
+      window.alert(t('workout.editStale'))
+      return null
+    }
+    if (!response.ok) {
+      const errorBody = await response.json().catch(() => null) as { detail?: string | { message?: string } } | null
+      const detail = errorBody?.detail
+      const message = typeof detail === 'string' ? detail : (detail && typeof detail === 'object' ? detail.message : undefined)
+      throw new Error(message || t('workout.editFailed'))
+    }
+    return await response.json() as BackendWorkoutReceipt
+  }, [getPrivyAuthHeaders, refreshVisibleWorkoutSessions, t, withCoachActAs])
+
+  const runStructuralMutation = useCallback(async (
+    workoutId: string,
+    pathSuffix: string,
+    method: 'POST' | 'PATCH',
+    body: Record<string, unknown>,
+    targetDate: string,
+    ownerKey: string,
+  ): Promise<boolean> => {
+    if (pendingWorkoutDatesRef.current.has(targetDate)) return false
+    pendingWorkoutDatesRef.current.add(targetDate)
+    try {
+      const receipt = await mutateWorkout(workoutId, pathSuffix, method, body, ownerKey)
+      if (!receipt) return false
+      applyStructuralReceipt(receipt, targetDate, ownerKey)
+      pendingWorkoutDatesRef.current.add(targetDate)
+      try {
+        await refreshVisibleWorkoutSessions()
+      } catch {
+        // The receipt apply above already reflects the canonical record.
+      }
+      return true
+    } catch (error) {
+      console.warn('Workout plan edit failed:', error)
+      window.alert(error instanceof Error ? error.message : t('workout.editFailed'))
+      return false
+    } finally {
+      pendingWorkoutDatesRef.current.delete(targetDate)
+    }
+  }, [
+    applyStructuralReceipt,
+    mutateWorkout,
+    refreshVisibleWorkoutSessions,
+    t,
+  ])
+
+  const requireEditContext = useCallback(() => {
+    if (!canEditPlanSelectedDay || !canQuerySavedWorkoutSessions || !isBackendHealthy) return null
+    const targetDate = selectedDay?.date ?? todayId
+    const ownerId = coachActAsOwnerId ?? currentUserId
+    const ownerKey = `${ownerId}:${targetDate}`
+    const workoutId = workoutIdByOwnerDateRef.current[ownerKey]
+    const revision = workoutRevisionByOwnerDateRef.current[ownerKey]
+    if (!workoutId || !revision) return null
+    return { targetDate, ownerKey, workoutId, revision }
+  }, [
+    canEditPlanSelectedDay,
+    canQuerySavedWorkoutSessions,
+    coachActAsOwnerId,
+    currentUserId,
+    isBackendHealthy,
+    selectedDay?.date,
+    todayId,
+  ])
+
+  const handleAddSet = useCallback(async (exerciseId: string) => {
+    const context = requireEditContext()
+    if (!context) return
+    await runStructuralMutation(
+      context.workoutId,
+      `/exercises/${encodeURIComponent(exerciseId)}/sets`,
+      'POST',
+      { expected_revision: context.revision, request_id: crypto.randomUUID() },
+      context.targetDate,
+      context.ownerKey,
+    )
+  }, [requireEditContext, runStructuralMutation])
+
+  const handleRemoveSet = useCallback(async (exerciseId: string, index: number) => {
+    const context = requireEditContext()
+    if (!context) return
+    const exercise = getExercise(exerciseId)
+    const setId = exercise?.sets[index]?.setId
+    if (!setId) return
+    await runStructuralMutation(
+      context.workoutId,
+      `/sets/${encodeURIComponent(setId)}/remove`,
+      'POST',
+      { expected_revision: context.revision, request_id: crypto.randomUUID() },
+      context.targetDate,
+      context.ownerKey,
+    )
+  }, [getExercise, requireEditContext, runStructuralMutation])
+
+  const handleRemoveExercise = useCallback(async (exerciseId: string) => {
+    const context = requireEditContext()
+    if (!context) return
+    await runStructuralMutation(
+      context.workoutId,
+      `/exercises/${encodeURIComponent(exerciseId)}/remove`,
+      'POST',
+      { expected_revision: context.revision, request_id: crypto.randomUUID() },
+      context.targetDate,
+      context.ownerKey,
+    )
+  }, [requireEditContext, runStructuralMutation])
+
+  const handleRemoveSegment = useCallback(async (segmentId: string) => {
+    const context = requireEditContext()
+    if (!context) return
+    await runStructuralMutation(
+      context.workoutId,
+      `/segments/${encodeURIComponent(segmentId)}/remove`,
+      'POST',
+      { expected_revision: context.revision, request_id: crypto.randomUUID() },
+      context.targetDate,
+      context.ownerKey,
+    )
+  }, [requireEditContext, runStructuralMutation])
+
+  const handleRemoveSection = useCallback(async (segmentIds: string[]) => {
+    // Remove each distinct segment in the section, chaining the fresh
+    // revision from each receipt into the next call.
+    for (const segmentId of segmentIds) {
+      const context = requireEditContext()
+      if (!context) return
+      const ok = await runStructuralMutation(
+        context.workoutId,
+        `/segments/${encodeURIComponent(segmentId)}/remove`,
+        'POST',
+        { expected_revision: context.revision, request_id: crypto.randomUUID() },
+        context.targetDate,
+        context.ownerKey,
+      )
+      if (!ok) return
+    }
+  }, [requireEditContext, runStructuralMutation])
+
+  const handleCommitSetTarget = useCallback(async (exerciseId: string, index: number, field: 'weight' | 'metric') => {
+    const context = requireEditContext()
+    if (!context) return
+    const exercise = getExercise(exerciseId)
+    const stateList = setLogsRef.current[exerciseId]
+    const setItem = stateList?.[index]
+    const setId = exercise?.sets[index]?.setId
+    if (!exercise || !setItem || setItem.done || !setId) return
+    const value = field === 'metric' ? setItem.metric : setItem.weight
+    const target = composeSetTarget(exercise, exercise.sets[index], field, value)
+    if (!target) return
+
+    const setKey = `${context.workoutId}:${setId}`
+    const snapshot = captureTargetEditSnapshot(exercise, stateList, index)
+
+    // Optimistic local target + remaining-set propagation. Keep the typed
+    // values and never apply the receipt: applying it rebuilds the day from
+    // actuals and would wipe typed-but-unlogged inputs.
+    applyTargetEditToSets(exercise, stateList, index, field, value)
+    bumpData()
+
+    pendingWorkoutDatesRef.current.add(context.targetDate)
+    const pendingPromise = (async (): Promise<boolean> => {
+      try {
+        const headers = { 'Content-Type': 'application/json', ...(await getPrivyAuthHeaders()) }
+        const response = await apiFetch(
+          withCoachActAs(`${API_BASE_URL}/v1/workouts/${encodeURIComponent(context.workoutId)}/sets/${encodeURIComponent(setId)}/target`),
+          {
+            method: 'PATCH',
+            headers,
+            body: JSON.stringify({
+              target,
+              apply_to_remaining: true,
+              expected_revision: context.revision,
+              request_id: crypto.randomUUID(),
+            }),
+          },
+        )
+        if (response.status === 409) {
+          pendingWorkoutDatesRef.current.delete(context.targetDate)
+          delete workoutRevisionByOwnerDateRef.current[context.ownerKey]
+          await refreshVisibleWorkoutSessions().catch(() => false)
+          window.alert(t('workout.editStale'))
+          return false
+        }
+        if (!response.ok) throw new Error(`Target update failed (${response.status})`)
+        const receipt = await response.json() as BackendWorkoutReceipt
+        const nextRevision = receipt.revision ?? receipt.workout?.revision
+        if (nextRevision) workoutRevisionByOwnerDateRef.current[context.ownerKey] = nextRevision
+        return true
+      } catch (error) {
+        console.warn('Canonical target update failed:', error)
+        restoreTargetEditSnapshot(exercise, field, snapshot)
+        bumpData()
+        window.alert(error instanceof Error ? error.message : t('workout.editFailed'))
+        return false
+      } finally {
+        pendingWorkoutDatesRef.current.delete(context.targetDate)
+        pendingTargetEditsRef.current.delete(setKey)
+      }
+    })()
+    pendingTargetEditsRef.current.set(setKey, pendingPromise)
+    await pendingPromise
+  }, [
+    bumpData,
+    getExercise,
+    getPrivyAuthHeaders,
+    refreshVisibleWorkoutSessions,
+    requireEditContext,
+    t,
+    withCoachActAs,
+  ])
+
   const handleClearChat = useCallback(async () => {
     if (!coachChatEnabled) return
 
@@ -4247,6 +4675,7 @@ const App = () => {
           <WorkoutView
             active={activeView === 'workout'}
             canLogDay={canLogSelectedDay}
+            canEditPlan={canEditPlanSelectedDay}
             coachChatEnabled={coachChatEnabled}
             apiBaseUrl={API_BASE_URL}
             getAuthHeaders={getPrivyAuthHeaders}
@@ -4329,6 +4758,9 @@ const App = () => {
               bumpData()
             }}
             onUpdateSetField={updateSetField}
+            onCommitSetTarget={handleCommitSetTarget}
+            onAddSet={handleAddSet}
+            onRemoveSet={handleRemoveSet}
             onStartHoldTimer={startHoldTimer}
             onLogHoldTimerSet={logHoldTimerSet}
             onSaveDayNote={handleSaveDayNote}
@@ -4342,6 +4774,9 @@ const App = () => {
             onOpenSwap={handleOpenSwap}
             onSelectSwapCandidate={handleSelectSwapCandidate}
             onCloseSwap={handleCloseSwap}
+            onRemoveExercise={handleRemoveExercise}
+            onRemoveCircuit={handleRemoveSegment}
+            onRemoveSection={handleRemoveSection}
             actAsLinkId={coachActAsLinkId}
           />
           <ProfileView

@@ -70,6 +70,10 @@ export type WorkoutFeedbackPreset = 'pain' | 'hard' | 'easy' | 'form'
 
 export type WorkoutExercise = {
     id: string
+    // Canonical segment identity (segment_id). Section/circuit removals need
+    // this to address `POST /segments/{segment_id}/remove`; display grouping
+    // still uses circuitGroupKey().
+    segmentId?: string
     name: string
     standardName?: string
     exerciseKey?: string

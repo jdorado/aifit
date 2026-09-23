@@ -47,9 +47,23 @@ type WorkoutPlanListProps = {
   circuitGroups: Map<string, CircuitGroup>
   getNextCircuitExercise: (items: WorkoutExercise[]) => WorkoutExercise | null
   onSelectEntry: (id: string, type: ActiveEntryType) => void
+  canEditPlan: boolean
+  onRemoveExercise: (exerciseId: string) => void
+  onRemoveCircuit: (segmentId: string) => void
+  onRemoveSection: (segmentIds: string[]) => void
 }
 
 const DEFAULT_COLLAPSED_SECTIONS: Record<string, boolean> = {}
+
+const TrashIcon = () => (
+  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+    <polyline points="3 6 5 6 21 6" />
+    <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+    <path d="M10 11v6" />
+    <path d="M14 11v6" />
+    <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+  </svg>
+)
 
 const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
   activeEntryId,
@@ -65,6 +79,10 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
   circuitGroups,
   getNextCircuitExercise,
   onSelectEntry,
+  canEditPlan,
+  onRemoveExercise,
+  onRemoveCircuit,
+  onRemoveSection,
 }) => {
   const { t } = useI18n()
   const [planNotesOpen, setPlanNotesOpen] = useState(false)
@@ -76,6 +94,21 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
       [sectionKey]: !current[sectionKey],
     }))
   }, [])
+
+  const handleRemoveExercise = useCallback((exercise: WorkoutExercise) => {
+    if (!window.confirm(t('workout.removeExerciseConfirm', { name: exercise.name }))) return
+    onRemoveExercise(exercise.id)
+  }, [onRemoveExercise, t])
+
+  const handleRemoveCircuit = useCallback((segmentId: string, circuitName: string) => {
+    if (!window.confirm(t('workout.removeCircuitConfirm', { name: circuitName }))) return
+    onRemoveCircuit(segmentId)
+  }, [onRemoveCircuit, t])
+
+  const handleRemoveSection = useCallback((sectionLabel: string, segmentIds: string[]) => {
+    if (!window.confirm(t('workout.removeSectionConfirm', { name: sectionLabel }))) return
+    onRemoveSection(segmentIds)
+  }, [onRemoveSection, t])
 
   const normalizeSectionKey = (value: string) => (
     (value.trim() || t('workout.sectionWorkout'))
@@ -131,6 +164,17 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
     getSectionInfoFromEntry(extra.section, `${extra.category ?? ''} ${extra.name ?? ''}`)
   )
 
+  // Canonical exercises carry their segment id; a section removal deletes each
+  // distinct segment whose title maps to the section key.
+  const getSectionSegmentIds = (sectionKey: string): string[] => (
+    [...new Set(
+      exercises
+        .filter((exercise) => normalizeSectionKey(exercise.section) === sectionKey)
+        .map((exercise) => exercise.segmentId)
+        .filter((id): id is string => Boolean(id))
+    )]
+  )
+
   const sectionColorSlots = new Map<string, number>()
   const usedSectionColorSlots = new Set<number>()
   let nextSectionColorSlot = 0
@@ -151,8 +195,9 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
     return next
   }
 
-  const renderStageHeader = (stage: SectionInfo, key: string, colorSlot: number) => {
+  const renderStageHeader = (stage: SectionInfo, key: string, colorSlot: number, sectionSegmentIds?: string[]) => {
     const collapsed = Boolean(collapsedSections[stage.key])
+    const canRemoveSection = canEditPlan && Boolean(sectionSegmentIds?.length)
     return (
       <div
         key={key}
@@ -171,6 +216,17 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
           <span className="workout-stage-label">{stage.label}</span>
           <span className="workout-stage-chevron" aria-hidden="true">&gt;</span>
         </button>
+        {canRemoveSection ? (
+          <button
+            className="stage-trash-btn"
+            type="button"
+            title={t('workout.removeSection')}
+            aria-label={t('workout.removeSection')}
+            onClick={() => handleRemoveSection(stage.label, sectionSegmentIds ?? [])}
+          >
+            <TrashIcon />
+          </button>
+        ) : null}
       </div>
     )
   }
@@ -196,7 +252,7 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
       const stage = getStageInfo(exercise)
       const colorSlot = getSectionColorSlot(stage.key, stage.tone)
       if (stage.key !== lastStageKey) {
-        cards.push(renderStageHeader(stage, `stage-${stage.key}-${exercise.id}`, colorSlot))
+        cards.push(renderStageHeader(stage, `stage-${stage.key}-${exercise.id}`, colorSlot, getSectionSegmentIds(stage.key)))
         lastStageKey = stage.key
       }
       if (collapsedSections[stage.key]) return
@@ -269,7 +325,7 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
               </div>
               <div className="card-meta">
                 <span className={`badge ${isCompleted ? 'completed-badge' : ''}`}>{progress}</span>
-                <span className="chevron">&gt;</span>
+                {canEditPlan ? null : <span className="chevron">&gt;</span>}
               </div>
             </button>
             <ol className="circuit-preview">
@@ -288,11 +344,33 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
                       <span className="circuit-preview-index">{order}</span>
                       <span className="circuit-preview-name">{item.name}</span>
                     </button>
+                    {canEditPlan ? (
+                      <button
+                        className="circuit-preview-delete"
+                        type="button"
+                        title={t('workout.removeExercise')}
+                        aria-label={t('workout.removeExercise')}
+                        onClick={() => handleRemoveExercise(item)}
+                      >
+                        <TrashIcon />
+                      </button>
+                    ) : null}
                   </li>
                 )
               })}
             </ol>
           </div>
+          {canEditPlan ? (
+            <button
+              className="plan-trash-btn"
+              type="button"
+              title={t('workout.removeCircuit')}
+              aria-label={t('workout.removeCircuit')}
+              onClick={() => handleRemoveCircuit(groupKey, circuitName)}
+            >
+              <TrashIcon />
+            </button>
+          ) : null}
         </div>
       )
       return
@@ -308,7 +386,7 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
     const stage = getStageInfo(exercise)
     const colorSlot = getSectionColorSlot(stage.key, stage.tone)
     if (stage.key !== lastStageKey) {
-      cards.push(renderStageHeader(stage, `stage-${stage.key}-${exercise.id}`, colorSlot))
+      cards.push(renderStageHeader(stage, `stage-${stage.key}-${exercise.id}`, colorSlot, getSectionSegmentIds(stage.key)))
       lastStageKey = stage.key
     }
     if (collapsedSections[stage.key]) return
@@ -334,9 +412,20 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
             <span className={`badge ${isCompleted ? 'completed-badge' : ''}`}>
               {exercise.status === 'skip' ? t('workout.skip') : progress}
             </span>
-            <span className="chevron">&gt;</span>
+            {canEditPlan ? null : <span className="chevron">&gt;</span>}
           </div>
         </button>
+        {canEditPlan ? (
+          <button
+            className="plan-trash-btn"
+            type="button"
+            title={t('workout.removeExercise')}
+            aria-label={t('workout.removeExercise')}
+            onClick={() => handleRemoveExercise(exercise)}
+          >
+            <TrashIcon />
+          </button>
+        ) : null}
       </div>
     )
   })
