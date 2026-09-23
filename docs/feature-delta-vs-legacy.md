@@ -5,6 +5,40 @@ Read-only inventory of the legacy app's user-facing actions compared with
 deleted, and `aifit/` stays the implementation target. Each item is classified
 so the repo can be groomed for open source without silently dropping behavior.
 
+## Parity restored (2026-09-23)
+
+The workout editing gap is closed on the canonical API:
+
+- `POST /v1/workouts/{id}/exercises/{instance}/sets` — add set
+- `POST /v1/workouts/{id}/sets/{set_id}/remove` — remove an unlogged set
+- `PATCH /v1/workouts/{id}/sets/{set_id}/target` — edit a target, optionally
+  propagating to remaining unlogged sets
+- `POST /v1/workouts/{id}/exercises/{instance}/remove` — remove an exercise
+- `POST /v1/workouts/{id}/segments/{segment_id}/remove` — remove a circuit or
+  section
+
+The browser exposes add set, remove set, target edit (commit on blur, legacy
+propagation), and trash actions with confirmation on exercise, circuit and
+section rows, all gated by edit-program permission and the editable-date rule.
+Logged sets stay immutable in every path. Covered by `api/tests/test_workout_plan_edits.py`,
+`web/scripts/plan_edit_contract.cjs` (wired into the web build) and a real
+browser click-through against the local API and Mongo.
+
+Also restored: the legacy workout quick prompts (last time, progress/deload,
+rest time, adjust sets/reps, what next) now answered by the mini-chat agent,
+and the copy-last-week confirmation when the day already has a plan.
+
+Still open from this inventory:
+
+- Video gallery exact-match/suggestion states (the current gallery has list,
+  retry and empty/error states; legacy suggested alternatives when no exact
+  match existed).
+- History "estimated values" note: the new history read carries no confidence
+  or `value_source` field, so this needs an API field before the app can show
+  it.
+- Account deletion (`clear account`) and meals/health stay as product
+  decisions; meals/health remain documented placeholders.
+
 ## Classification
 
 - **PORT NOW** — no new backend contract; small UI/chat wiring on top of reads
@@ -104,8 +138,8 @@ when ported they need canonical API contracts and the app/agent split above.
 
 ## Open-source grooming checklist
 
-- [ ] Decide the `PORT WITH API` set-shape writes (add/delete set, target
-      propagation, plan removal) or route them to the agent explicitly.
+- [x] Restore the set-shape writes (add/delete set, target propagation, plan
+      removal) on the canonical API and the browser.
 - [ ] Decide account deletion (`clear account`) before publishing.
 - [ ] Keep meals/health as documented `TO BE DONE` placeholders.
 - [ ] Remove or archive the legacy `feat/legacy-parity-1-5` and
