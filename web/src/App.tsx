@@ -2151,7 +2151,7 @@ const App = () => {
   }, [activeEntryId, activeEntryType, getExercise, holdTimer, logNextSet, startHoldTimer, stopHoldTimer])
 
   const updateSetField = useCallback(
-    (exerciseId: string, index: number, field: 'weight' | 'metric', value: string) => {
+    (exerciseId: string, index: number, field: 'weight' | 'metric', value: string, propagate = false) => {
       if (!canLogSelectedDay) return
       const exercise = getExercise(exerciseId)
       if (!exercise) return
@@ -2159,11 +2159,27 @@ const App = () => {
       const setItem = stateList[index]
       if (!setItem) return
 
+      // Legacy inherit: typing in the next-set hero carries the value to every
+      // remaining unlogged set, so the following set logs what the user did
+      // instead of the suggested target. Editing a logged set stays local.
       if (field === 'weight') {
         setItem.weight = value
         setItem.value_source = value.trim() ? 'user_entered' : undefined
+        if (propagate) {
+          for (let i = index + 1; i < stateList.length; i++) {
+            if (stateList[i]?.done) continue
+            stateList[i].weight = value
+            stateList[i].value_source = value.trim() ? 'user_entered' : undefined
+          }
+        }
       } else {
         setItem.metric = value
+        if (propagate) {
+          for (let i = index + 1; i < stateList.length; i++) {
+            if (stateList[i]?.done) continue
+            stateList[i].metric = value
+          }
+        }
       }
 
       bumpData()

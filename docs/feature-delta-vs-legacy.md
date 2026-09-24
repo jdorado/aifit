@@ -128,7 +128,15 @@ when ported they need canonical API contracts and the app/agent split above.
    future rest days) showed them, sometimes next to the empty-state card.
    Fixed by keying circuit rows by segment identity; covered by
    `web/scripts/workout_circuit_keys_smoke.cjs` (wired into `web` build).
-2. **Open (owner: API/agent artifact):** an override on a partially logged day
+2. **Fixed:** the plan-edit restore rendered always-visible trash buttons on
+   every plan row; the legacy app hides delete behind a swipe. Restored the
+   swipe pattern (row reveal, confirm, tap-elsewhere closes) and removed the
+   always-visible buttons.
+3. **Fixed:** a typed rep/weight in the next-set hero did not carry to the
+   remaining unlogged sets, so the following set fell back to the suggested
+   target. Restored the legacy propagation (hero inputs only; editing a logged
+   set stays local), covered by `web/scripts/workout_set_inherit_smoke.cjs`.
+4. **Open (owner: API/agent artifact):** an override on a partially logged day
    emits two segments with the same title — the preserved logged history and
    the new plan — so the UI shows the same circuit twice, one `Done`, one open.
    Preservation is intended; the duplicate title is not distinguishable to the

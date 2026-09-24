@@ -38,7 +38,7 @@ type ExerciseSetListProps = {
   onCancelEditingSet: () => void
   onSkipSet: (exerciseId: string, index: number) => void
   onUnlogSet: (exerciseId: string, index: number) => void
-  onUpdateSetField: (exerciseId: string, index: number, field: 'weight' | 'metric', value: string) => void
+  onUpdateSetField: (exerciseId: string, index: number, field: 'weight' | 'metric', value: string, propagate?: boolean) => void
   onCommitSetTarget: (exerciseId: string, index: number, field: 'weight' | 'metric') => void
   onStartHoldTimer: (
     exerciseId: string,
@@ -286,7 +286,7 @@ const ExerciseSetList: FC<ExerciseSetListProps> = ({
                         inputMode="numeric"
                         onFocus={handleSetInputFocus}
                         onBlur={canEditPlan ? () => onCommitSetTarget(exercise.id, index, 'metric') : undefined}
-                        onChange={(event) => onUpdateSetField(exercise.id, index, 'metric', event.target.value)}
+                        onChange={(event) => onUpdateSetField(exercise.id, index, 'metric', event.target.value, true)}
                       />
                     </label>
                     {showWeightInput ? (
@@ -300,7 +300,7 @@ const ExerciseSetList: FC<ExerciseSetListProps> = ({
                           inputMode="decimal"
                           onFocus={handleSetInputFocus}
                           onBlur={canEditPlan ? () => onCommitSetTarget(exercise.id, index, 'weight') : undefined}
-                          onChange={(event) => onUpdateSetField(exercise.id, index, 'weight', event.target.value)}
+                          onChange={(event) => onUpdateSetField(exercise.id, index, 'weight', event.target.value, true)}
                         />
                       </label>
                     ) : null}
