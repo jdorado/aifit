@@ -50,6 +50,7 @@ const exercises = [
 const hooks = {
   useState: (initial) => [typeof initial === 'function' ? initial() : initial, () => undefined],
   useCallback: (fn) => fn,
+  useMemo: (fn) => fn(),
   useEffect: () => undefined,
   useRef: (initial) => ({ current: initial }),
 }

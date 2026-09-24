@@ -104,6 +104,42 @@ Body `PlanEntryRemoveInput` (same shape as above).
 - Applies the exercise rule to every item in the segment.
 - `effect`: `segment_removed`.
 
+## 6. Reorder segments
+
+`POST /v1/workouts/{workout_id}/segments/reorder`
+
+Body `PlanReorderInput`:
+
+```json
+{ "segment_ids": ["seg_cooldown", "seg_main", "seg_warmup"], "expected_revision": "rev_…", "request_id": "…" }
+```
+
+- `segment_ids` is the complete new order: every segment of the day exactly
+  once. A missing, duplicated or unknown id returns `422 reorder_mismatch`.
+- Segments move as whole blocks; items and every set (logged or not) stay
+  verbatim under their original snapshot.
+- `effect`: `segments_reordered`.
+
+## 7. Move an item
+
+`POST /v1/workouts/{workout_id}/exercises/{exercise_instance_id}/move`
+
+Body `PlanItemMoveInput`:
+
+```json
+{ "target_segment_id": "seg_main", "target_index": 2, "expected_revision": "rev_…", "request_id": "…" }
+```
+
+- Moves one item within its segment or to another segment of the same day.
+- `target_index` is the 1-based position the item takes in the target segment
+  after the source removal, so a same-segment move never counts the item twice.
+  An index outside `1..items+1` returns `422 target_index_out_of_range`.
+- Every set stays verbatim; only item order and segment membership change. A
+  source segment left with no items is removed and remaining orders are
+  renumbered. `404 exercise_instance_not_found` / `404 segment_not_found` when
+  either id is unknown.
+- `effect`: `item_moved`.
+
 ## Browser consumption
 
 After a successful mutation the app applies the returned workout with the same
@@ -129,4 +165,6 @@ same way `clear` does.
 | Edit target, propagate to remaining sets | `PATCH …/sets/{set_id}/target` |
 | Remove exercise | `POST …/exercises/{id}/remove` |
 | Remove circuit / section | `POST …/segments/{segment_id}/remove` |
+| Reorder blocks | `POST …/segments/reorder` |
+| Reorder / move an item | `POST …/exercises/{id}/move` |
 | Remove extra | Not applicable: canonical workouts have no extras |

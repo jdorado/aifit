@@ -3959,6 +3959,37 @@ const App = () => {
     }
   }, [requireEditContext, runStructuralMutation])
 
+  const handleReorderSegments = useCallback(async (segmentIds: string[]): Promise<boolean> => {
+    const context = requireEditContext()
+    if (!context) return false
+    return runStructuralMutation(
+      context.workoutId,
+      '/segments/reorder',
+      'POST',
+      { segment_ids: segmentIds, expected_revision: context.revision, request_id: crypto.randomUUID() },
+      context.targetDate,
+      context.ownerKey,
+    )
+  }, [requireEditContext, runStructuralMutation])
+
+  const handleMoveItem = useCallback(async (exerciseId: string, targetSegmentId: string, targetIndex: number): Promise<boolean> => {
+    const context = requireEditContext()
+    if (!context) return false
+    return runStructuralMutation(
+      context.workoutId,
+      `/exercises/${encodeURIComponent(exerciseId)}/move`,
+      'POST',
+      {
+        target_segment_id: targetSegmentId,
+        target_index: targetIndex,
+        expected_revision: context.revision,
+        request_id: crypto.randomUUID(),
+      },
+      context.targetDate,
+      context.ownerKey,
+    )
+  }, [requireEditContext, runStructuralMutation])
+
   const handleCommitSetTarget = useCallback(async (exerciseId: string, index: number, field: 'weight' | 'metric') => {
     const context = requireEditContext()
     if (!context) return
@@ -4795,6 +4826,8 @@ const App = () => {
             onRemoveExercise={handleRemoveExercise}
             onRemoveCircuit={handleRemoveSegment}
             onRemoveSection={handleRemoveSection}
+            onReorderSegments={handleReorderSegments}
+            onMoveItem={handleMoveItem}
             actAsLinkId={coachActAsLinkId}
           />
           <ProfileView

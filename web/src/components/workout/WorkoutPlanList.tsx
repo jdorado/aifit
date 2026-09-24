@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type FC, type MouseEvent as ReactMouseEvent, type TouchEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type FC, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type TouchEvent } from 'react'
 import { useI18n } from '../../i18n'
 import type { WorkoutExercise, WorkoutExtra } from '../../data/testWorkout'
 import { circuitGroupKey } from '../../data/testWorkout'
@@ -31,11 +31,42 @@ const SECTION_TONE_COLOR_SLOTS: Partial<Record<SectionTone, number>> = {
   rehab: 6,
 }
 
+const DRAG_START_THRESHOLD = 6
+
 type CircuitGroup = {
   items: Array<{ exercise: WorkoutExercise, index: number }>
   rounds?: number
   restAfterSec?: number
   totalExercises?: number
+}
+
+type DragPayload =
+  | { kind: 'block', blockId: string, segmentIds: string[] }
+  | { kind: 'item', itemId: string, segmentId: string }
+
+type DragState = {
+  pointerId: number
+  startY: number
+  moved: boolean
+  payload: DragPayload
+  deltaY: number
+  dropSegmentId: string | null
+  dropBeforeItemId: string | null
+  dropBeforeBlockId: string | null
+}
+
+type RenderBlock = {
+  id: string
+  stage: SectionInfo
+  colorSlot: number
+  segmentIds: string[]
+  exercises: WorkoutExercise[]
+}
+
+type PendingItemMove = {
+  itemId: string
+  targetSegmentId: string
+  targetIndex: number
 }
 
 type WorkoutPlanListProps = {
@@ -57,6 +88,8 @@ type WorkoutPlanListProps = {
   onRemoveExercise: (exerciseId: string) => void
   onRemoveCircuit: (segmentId: string) => void
   onRemoveSection: (segmentIds: string[]) => void
+  onReorderSegments: (segmentIds: string[]) => Promise<boolean>
+  onMoveItem: (exerciseId: string, targetSegmentId: string, targetIndex: number) => Promise<boolean>
 }
 
 const DEFAULT_COLLAPSED_SECTIONS: Record<string, boolean> = {}
@@ -69,6 +102,56 @@ const TrashIcon = () => (
     <path d="M14 11v6" />
     <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
   </svg>
+)
+
+const GripIcon = () => (
+  <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true" focusable="false">
+    <circle cx="9" cy="6" r="1.7" />
+    <circle cx="15" cy="6" r="1.7" />
+    <circle cx="9" cy="12" r="1.7" />
+    <circle cx="15" cy="12" r="1.7" />
+    <circle cx="9" cy="18" r="1.7" />
+    <circle cx="15" cy="18" r="1.7" />
+  </svg>
+)
+
+const findScrollContainer = (element: HTMLElement): HTMLElement | null => {
+  let node = element.parentElement
+  while (node) {
+    const style = window.getComputedStyle(node)
+    if (/(auto|scroll)/.test(style.overflowY) && node.scrollHeight > node.clientHeight + 1) {
+      return node
+    }
+    node = node.parentElement
+  }
+  return null
+}
+
+const moveExerciseInList = (list: WorkoutExercise[], itemId: string, targetSegmentId: string, targetIndex: number): WorkoutExercise[] => {
+  const item = list.find((exercise) => exercise.id === itemId)
+  if (!item) return list
+  const without = list.filter((exercise) => exercise.id !== itemId)
+  const targetItems = without.filter((exercise) => exercise.segmentId === targetSegmentId)
+  const anchor = targetItems[targetIndex - 1]
+  if (anchor) {
+    const at = without.indexOf(anchor)
+    return [...without.slice(0, at), item, ...without.slice(at)]
+  }
+  const last = targetItems[targetItems.length - 1]
+  if (!last) return [...without, item]
+  const at = without.indexOf(last) + 1
+  return [...without.slice(0, at), item, ...without.slice(at)]
+}
+
+const orderExercisesBySegments = (list: WorkoutExercise[], segmentIds: string[]): WorkoutExercise[] => {
+  const rank = new Map(segmentIds.map((id, index) => [id, index]))
+  return [...list].sort((a, b) => (
+    (rank.get(a.segmentId ?? '') ?? segmentIds.length) - (rank.get(b.segmentId ?? '') ?? segmentIds.length)
+  ))
+}
+
+const sameExerciseOrder = (a: WorkoutExercise[], b: WorkoutExercise[]) => (
+  a.length === b.length && a.every((exercise, index) => exercise.id === b[index]?.id)
 )
 
 const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
@@ -89,6 +172,8 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
   onRemoveExercise,
   onRemoveCircuit,
   onRemoveSection,
+  onReorderSegments,
+  onMoveItem,
 }) => {
   const { t } = useI18n()
   const [planNotesOpen, setPlanNotesOpen] = useState(false)
@@ -96,10 +181,40 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
   const [planSwipeActiveId, setPlanSwipeActiveId] = useState<string | null>(null)
   const planSwipeRef = useRef<PlanSwipeState | null>(null)
   const planSwipeIgnoreClickRef = useRef(false)
+  const [drag, setDrag] = useState<DragState | null>(null)
+  const liveDragRef = useRef<DragState | null>(null)
+  const lastPointerYRef = useRef(0)
+  const scrollContainerRef = useRef<HTMLElement | null>(null)
+  const [pendingItemMove, setPendingItemMove] = useState<PendingItemMove | null>(null)
+  const [pendingSegmentOrder, setPendingSegmentOrder] = useState<string[] | null>(null)
 
   useEffect(() => {
     setPlanSwipeActiveId(null)
+    liveDragRef.current = null
+    setDrag(null)
   }, [canEditPlan, exercises])
+
+  // A receipt or refresh landed: the canonical order is authoritative again.
+  useEffect(() => {
+    setPendingItemMove(null)
+    setPendingSegmentOrder(null)
+  }, [exercises])
+
+  const orderedExercises = useMemo(() => {
+    let list = exercises
+    if (pendingItemMove) {
+      list = moveExerciseInList(list, pendingItemMove.itemId, pendingItemMove.targetSegmentId, pendingItemMove.targetIndex)
+    }
+    if (pendingSegmentOrder) {
+      list = orderExercisesBySegments(list, pendingSegmentOrder)
+    }
+    return list
+  }, [exercises, pendingItemMove, pendingSegmentOrder])
+
+  const orderedExercisesRef = useRef<WorkoutExercise[]>(orderedExercises)
+  useEffect(() => {
+    orderedExercisesRef.current = orderedExercises
+  }, [orderedExercises])
 
   const handlePlanTouchStart = (rowId: string) => (event: TouchEvent<HTMLElement>) => {
     if (!canEditPlan) return
@@ -222,17 +337,6 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
     getSectionInfoFromEntry(extra.section, `${extra.category ?? ''} ${extra.name ?? ''}`)
   )
 
-  // Canonical exercises carry their segment id; a section removal deletes each
-  // distinct segment whose title maps to the section key.
-  const getSectionSegmentIds = (sectionKey: string): string[] => (
-    [...new Set(
-      exercises
-        .filter((exercise) => normalizeSectionKey(exercise.section) === sectionKey)
-        .map((exercise) => exercise.segmentId)
-        .filter((id): id is string => Boolean(id))
-    )]
-  )
-
   const sectionColorSlots = new Map<string, number>()
   const usedSectionColorSlots = new Set<number>()
   let nextSectionColorSlot = 0
@@ -253,19 +357,247 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
     return next
   }
 
-  const renderStageHeader = (stage: SectionInfo, key: string, colorSlot: number, sectionSegmentIds?: string[]) => {
+  const renderBlocks: RenderBlock[] = []
+  let currentBlock: RenderBlock | null = null
+  orderedExercises.forEach((exercise) => {
+    const stage = getStageInfo(exercise)
+    if (!currentBlock || currentBlock.stage.key !== stage.key) {
+      currentBlock = {
+        id: `block-${renderBlocks.length}`,
+        stage,
+        colorSlot: getSectionColorSlot(stage.key, stage.tone),
+        segmentIds: [],
+        exercises: [],
+      }
+      renderBlocks.push(currentBlock)
+    }
+    if (exercise.segmentId && !currentBlock.segmentIds.includes(exercise.segmentId)) {
+      currentBlock.segmentIds.push(exercise.segmentId)
+    }
+    currentBlock.exercises.push(exercise)
+  })
+
+  const renderBlocksRef = useRef<RenderBlock[]>([])
+  useEffect(() => {
+    renderBlocksRef.current = renderBlocks
+  })
+
+  const updateDragTarget = useCallback((pointerY: number) => {
+    const live = liveDragRef.current
+    if (!live || !live.moved) return
+    if (live.payload.kind === 'item') {
+      const draggedId = live.payload.itemId
+      const elements = Array.from(document.querySelectorAll<HTMLElement>('[data-drag-item]'))
+      const others = elements.filter((element) => element.dataset.dragItem !== draggedId)
+      let beforeElement: HTMLElement | null = null
+      for (const element of others) {
+        const rect = element.getBoundingClientRect()
+        if (pointerY < rect.top + rect.height / 2) {
+          beforeElement = element
+          break
+        }
+      }
+      const lastOther = others[others.length - 1]
+      const next: DragState = {
+        ...live,
+        deltaY: pointerY - live.startY,
+        dropSegmentId: beforeElement?.dataset.dragSegment ?? lastOther?.dataset.dragSegment ?? null,
+        dropBeforeItemId: beforeElement?.dataset.dragItem ?? null,
+      }
+      liveDragRef.current = next
+      setDrag(next)
+      return
+    }
+
+    const draggedBlockId = live.payload.blockId
+    const headers = Array.from(document.querySelectorAll<HTMLElement>('[data-drag-block-header]'))
+    let beforeBlockId: string | null = null
+    for (const element of headers) {
+      const blockId = element.dataset.dragBlockHeader
+      if (!blockId || blockId === draggedBlockId) continue
+      const blockElements = Array.from(document.querySelectorAll<HTMLElement>(`[data-drag-block="${blockId}"]`))
+      const rects = blockElements.map((item) => item.getBoundingClientRect())
+      if (!rects.length) continue
+      const top = Math.min(...rects.map((rect) => rect.top))
+      const bottom = Math.max(...rects.map((rect) => rect.bottom))
+      if (pointerY < top + (bottom - top) / 2) {
+        beforeBlockId = blockId
+        break
+      }
+    }
+    const next: DragState = { ...live, deltaY: pointerY - live.startY, dropBeforeBlockId: beforeBlockId }
+    liveDragRef.current = next
+    setDrag(next)
+  }, [])
+
+  const updateDragTargetRef = useRef(updateDragTarget)
+  useEffect(() => {
+    updateDragTargetRef.current = updateDragTarget
+  }, [updateDragTarget])
+
+  const beginDrag = (event: ReactPointerEvent<HTMLButtonElement>, payload: DragPayload) => {
+    if (event.pointerType === 'mouse' && event.button !== 0) return
+    const handle = event.currentTarget
+    if (!handle.setPointerCapture) return
+    handle.setPointerCapture(event.pointerId)
+    scrollContainerRef.current = findScrollContainer(handle)
+    lastPointerYRef.current = event.clientY
+    const initial: DragState = {
+      pointerId: event.pointerId,
+      startY: event.clientY,
+      moved: false,
+      payload,
+      deltaY: 0,
+      dropSegmentId: payload.kind === 'item' ? payload.segmentId : null,
+      dropBeforeItemId: null,
+      dropBeforeBlockId: payload.kind === 'block' ? payload.blockId : null,
+    }
+    liveDragRef.current = initial
+    setPlanSwipeActiveId(null)
+    setDrag(initial)
+    event.preventDefault()
+    event.stopPropagation()
+  }
+
+  const commitDrag = useCallback(async (live: DragState) => {
+    if (live.payload.kind === 'item') {
+      const { itemId } = live.payload
+      const targetSegmentId = live.dropSegmentId
+      if (!targetSegmentId) return
+      const current = orderedExercisesRef.current
+      const targetItems = current.filter((exercise) => exercise.segmentId === targetSegmentId && exercise.id !== itemId)
+      let targetIndex = targetItems.length + 1
+      if (live.dropBeforeItemId) {
+        const anchorIndex = targetItems.findIndex((exercise) => exercise.id === live.dropBeforeItemId)
+        if (anchorIndex >= 0) targetIndex = anchorIndex + 1
+      }
+      if (sameExerciseOrder(moveExerciseInList(current, itemId, targetSegmentId, targetIndex), current)) return
+      setPendingItemMove({ itemId, targetSegmentId, targetIndex })
+      const ok = await onMoveItem(itemId, targetSegmentId, targetIndex)
+      if (!ok) setPendingItemMove(null)
+      return
+    }
+
+    const { segmentIds } = live.payload
+    const currentSegmentIds: string[] = []
+    for (const exercise of orderedExercisesRef.current) {
+      if (exercise.segmentId && !currentSegmentIds.includes(exercise.segmentId)) {
+        currentSegmentIds.push(exercise.segmentId)
+      }
+    }
+    const remaining = currentSegmentIds.filter((id) => !segmentIds.includes(id))
+    let insertAt = remaining.length
+    if (live.dropBeforeBlockId) {
+      const anchorBlock = renderBlocksRef.current.find((block) => block.id === live.dropBeforeBlockId)
+      const anchor = anchorBlock?.segmentIds.find((id) => remaining.includes(id))
+      if (anchor) insertAt = remaining.indexOf(anchor)
+    }
+    const nextOrder = [...remaining.slice(0, insertAt), ...segmentIds, ...remaining.slice(insertAt)]
+    if (nextOrder.join('|') === currentSegmentIds.join('|')) return
+    setPendingSegmentOrder(nextOrder)
+    const ok = await onReorderSegments(nextOrder)
+    if (!ok) setPendingSegmentOrder(null)
+  }, [onMoveItem, onReorderSegments])
+
+  const handleDragPointerMove = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    const live = liveDragRef.current
+    if (!live || event.pointerId !== live.pointerId) return
+    lastPointerYRef.current = event.clientY
+    const deltaY = event.clientY - live.startY
+    if (!live.moved && Math.abs(deltaY) < DRAG_START_THRESHOLD) return
+    live.moved = true
+    updateDragTarget(event.clientY)
+  }
+
+  const finishDrag = (event: ReactPointerEvent<HTMLButtonElement>, commit: boolean) => {
+    const live = liveDragRef.current
+    if (!live || event.pointerId !== live.pointerId) return
+    liveDragRef.current = null
+    setDrag(null)
+    const handle = event.currentTarget
+    if (handle.hasPointerCapture?.(event.pointerId)) {
+      handle.releasePointerCapture(event.pointerId)
+    }
+    if (!commit || !live.moved) return
+    void commitDrag(live)
+  }
+
+  useEffect(() => {
+    if (!drag) return
+    let frame = 0
+    const step = () => {
+      const container = scrollContainerRef.current
+      const pointerY = lastPointerYRef.current
+      if (container) {
+        const rect = container.getBoundingClientRect()
+        const edge = 84
+        let delta = 0
+        if (pointerY < rect.top + edge) {
+          delta = -Math.max(2, Math.ceil((rect.top + edge - pointerY) / 3))
+        } else if (pointerY > rect.bottom - edge) {
+          delta = Math.max(2, Math.ceil((pointerY - (rect.bottom - edge)) / 3))
+        }
+        if (delta) {
+          container.scrollTop += delta
+          updateDragTargetRef.current(pointerY)
+        }
+      }
+      frame = requestAnimationFrame(step)
+    }
+    frame = requestAnimationFrame(step)
+    return () => cancelAnimationFrame(frame)
+  }, [drag !== null])
+
+  const renderDragHandle = (
+    payload: DragPayload,
+    label: string,
+    className: string,
+    testId: string,
+  ) => (
+    <button
+      className={className}
+      type="button"
+      data-plan-drag={testId}
+      aria-label={label}
+      title={label}
+      onPointerDown={(event) => beginDrag(event, payload)}
+      onPointerMove={handleDragPointerMove}
+      onPointerUp={(event) => finishDrag(event, true)}
+      onPointerCancel={(event) => finishDrag(event, false)}
+      onTouchStart={(event) => event.stopPropagation()}
+      onTouchEnd={(event) => event.stopPropagation()}
+      onClick={(event) => event.preventDefault()}
+    >
+      <GripIcon />
+    </button>
+  )
+
+  const renderStageHeader = (stage: SectionInfo, key: string, colorSlot: number, blockId: string, sectionSegmentIds: string[]) => {
     const collapsed = Boolean(collapsedSections[stage.key])
-    const canRemoveSection = canEditPlan && Boolean(sectionSegmentIds?.length)
-    const stageSwipeId = `section:${stage.key}`
+    const canRemoveSection = canEditPlan && sectionSegmentIds.length > 0
+    const stageSwipeId = `section:${key}`
+    const activeBlockDrag = drag && drag.payload.kind === 'block' && drag.payload.blockId === blockId && drag.moved ? drag : null
+    const isDraggingBlock = Boolean(activeBlockDrag)
+    const isDropBefore = Boolean(drag && drag.payload.kind === 'block' && drag.moved && drag.payload.blockId !== blockId && drag.dropBeforeBlockId === blockId)
+    const isDropAfter = Boolean(
+      drag && drag.payload.kind === 'block' && drag.moved && drag.dropBeforeBlockId === null
+      && drag.payload.blockId !== blockId && renderBlocks[renderBlocks.length - 1]?.id === blockId,
+    )
+    const dragAttributes = blockId
+      ? { 'data-drag-block': blockId, 'data-drag-block-header': blockId }
+      : {}
     return (
       <div
         key={key}
         data-stage={stage.tone}
         data-section-color={colorSlot}
-        className={`workout-stage-row ${canEditPlan && planSwipeActiveId === stageSwipeId ? 'show-actions' : ''}`}
+        {...dragAttributes}
+        className={`workout-stage-row ${canEditPlan && planSwipeActiveId === stageSwipeId ? 'show-actions' : ''} ${isDraggingBlock ? 'is-dragging' : ''} ${isDropBefore ? 'drop-before' : ''} ${isDropAfter ? 'drop-after' : ''}`}
+        style={activeBlockDrag ? { transform: `translateY(${activeBlockDrag.deltaY}px)` } : undefined}
         onTouchStart={canEditPlan ? handlePlanTouchStart(stageSwipeId) : undefined}
         onTouchEnd={canEditPlan ? handlePlanTouchEnd(stageSwipeId) : undefined}
       >
+        {canRemoveSection ? renderDragHandle({ kind: 'block', blockId, segmentIds: sectionSegmentIds }, t('workout.moveSection'), 'plan-drag-handle', 'block') : null}
         <button
           className={`workout-stage ${collapsed ? 'is-collapsed' : ''}`}
           type="button"
@@ -292,7 +624,7 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
               data-plan-action="remove"
               title={t('workout.removeSection')}
               aria-label={t('workout.removeSection')}
-              onClick={() => handleRemoveSection(stage.label, sectionSegmentIds ?? [])}
+              onClick={() => handleRemoveSection(stage.label, sectionSegmentIds)}
             >
               <span className="plan-row-action-icon" aria-hidden="true">
                 <TrashIcon />
@@ -306,8 +638,6 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
   }
 
   const cards: JSX.Element[] = []
-  const renderedCircuits = new Set<string>()
-  let lastStageKey: string | null = null
   const isEmptyDay = exercises.length === 0 && extras.length === 0
   const hideEmptyState = loading && isEmptyDay
   const showEmptyState = !hideEmptyState && !hasWeekWorkouts && isEmptyDay
@@ -317,153 +647,234 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
   let lastExtraStageKey: string | null = null
   let lastPriorityExtraStageKey: string | null = null
 
-  exercises.forEach((exercise) => {
-    const circuitName = exercise.circuit?.name
-    const groupKey = circuitGroupKey(exercise.circuit)
-    if (circuitName && groupKey) {
-      if (renderedCircuits.has(groupKey)) return
-      renderedCircuits.add(groupKey)
-      const stage = getStageInfo(exercise)
-      const colorSlot = getSectionColorSlot(stage.key, stage.tone)
-      if (stage.key !== lastStageKey) {
-        cards.push(renderStageHeader(stage, `stage-${stage.key}-${exercise.id}`, colorSlot, getSectionSegmentIds(stage.key)))
-        lastStageKey = stage.key
-      }
-      if (collapsedSections[stage.key]) return
+  renderBlocks.forEach((block) => {
+    cards.push(renderStageHeader(block.stage, `stage-${block.id}`, block.colorSlot, block.id, block.segmentIds))
+    if (collapsedSections[block.stage.key]) return
 
-      const group = circuitGroups.get(groupKey)
-      const items = group?.items.length
-        ? [...group.items].sort((a, b) => {
-          const orderA = a.exercise.circuit?.order ?? a.index
-          const orderB = b.exercise.circuit?.order ?? b.index
-          return orderA - orderB
-        })
-        : [{ exercise, index: 0 }]
-      const exercisesInCircuit = items.map((item) => item.exercise)
-      const getWorkSetCount = (exerciseItem: WorkoutExercise) => (
-        exerciseItem.sets.reduce((count, setItem) => (setItem.isWarmup ? count : count + 1), 0)
-      )
-      const getDoneWorkSetCount = (exerciseItem: WorkoutExercise) => {
-        const stateList = setLogs[exerciseItem.id] || []
-        return exerciseItem.sets.reduce((count, setItem, index) => (
-          setItem.isWarmup ? count : (stateList[index]?.done ? count + 1 : count)
-        ), 0)
+    let lastSegmentId: string | null = null
+    block.exercises.forEach((exercise) => {
+      const segmentId = exercise.segmentId
+      const activeBlockDrag = drag && drag.payload.kind === 'block' && drag.payload.blockId === block.id && drag.moved ? drag : null
+      const isDraggingBlock = Boolean(activeBlockDrag)
+      const blockTransform = activeBlockDrag ? { transform: `translateY(${activeBlockDrag.deltaY}px)` } : undefined
+
+      const circuitName = exercise.circuit?.name
+      const groupKey = circuitGroupKey(exercise.circuit)
+      if (circuitName && groupKey) {
+        const circuitSegmentId = segmentId ?? groupKey
+        if (circuitSegmentId === lastSegmentId) return
+        lastSegmentId = circuitSegmentId
+        const group = circuitGroups.get(groupKey)
+        const items = block.exercises.filter((item) => (item.segmentId ?? circuitGroupKey(item.circuit)) === circuitSegmentId)
+        const exercisesInCircuit = items
+        const getWorkSetCount = (exerciseItem: WorkoutExercise) => (
+          exerciseItem.sets.reduce((count, setItem) => (setItem.isWarmup ? count : count + 1), 0)
+        )
+        const getDoneWorkSetCount = (exerciseItem: WorkoutExercise) => {
+          const stateList = setLogs[exerciseItem.id] || []
+          return exerciseItem.sets.reduce((count, setItem, index) => (
+            setItem.isWarmup ? count : (stateList[index]?.done ? count + 1 : count)
+          ), 0)
+        }
+
+        const rounds = exercise.circuit?.rounds ?? group?.rounds ?? getWorkSetCount(exercise)
+        const totalExercises = exercise.circuit?.totalExercises ?? group?.totalExercises ?? exercisesInCircuit.length
+        const restAfterSec = exercise.circuit?.restAfterSec ?? group?.restAfterSec
+        const workSetCounts = exercisesInCircuit.map((item) => getWorkSetCount(item))
+        const doneWorkSetCounts = exercisesInCircuit.map((item) => getDoneWorkSetCount(item))
+        const targetWorkSetCount = workSetCounts.reduce((total, count) => total + count, 0)
+        const completedWorkSetCount = doneWorkSetCounts.reduce((total, count) => total + count, 0)
+        const doneRounds = doneWorkSetCounts.length
+          ? Math.min(...doneWorkSetCounts)
+          : 0
+        const isCompleted = targetWorkSetCount > 0 && completedWorkSetCount >= targetWorkSetCount
+        const progress = isCompleted
+          ? t('common.done')
+          : targetWorkSetCount
+            ? t('workout.progressFraction', { done: completedWorkSetCount, total: targetWorkSetCount })
+            : rounds
+              ? t('workout.roundProgress', { current: Math.min(doneRounds + 1, rounds), total: rounds })
+              : t('common.start')
+        const summaryParts = [
+          t('workout.movesCount', { count: totalExercises }),
+          rounds ? t('workout.roundsCount', { count: rounds }) : null,
+          typeof restAfterSec === 'number' ? t('workout.restSeconds', { count: restAfterSec }) : null,
+        ].filter(Boolean).join(' · ')
+        const nextExercise = getNextCircuitExercise(exercisesInCircuit)
+        const activeItemId = drag && drag.payload.kind === 'item' && drag.moved ? drag.payload.itemId : null
+        const isItemDragFromCircuit = Boolean(activeItemId && exercisesInCircuit.some((item) => item.id === activeItemId))
+
+        const circuitSwipeId = `circuit:${groupKey}`
+        cards.push(
+          <div
+            key={`circuit-row-${groupKey}`}
+            data-drag-block={block.id}
+            className={`plan-row ${canEditPlan && planSwipeActiveId === circuitSwipeId ? 'show-actions' : ''} ${isDraggingBlock ? 'is-dragging' : ''} ${isItemDragFromCircuit ? 'drag-open' : ''}`}
+            style={blockTransform}
+            onTouchStart={canEditPlan ? handlePlanTouchStart(circuitSwipeId) : undefined}
+            onTouchEnd={canEditPlan ? handlePlanTouchEnd(circuitSwipeId) : undefined}
+          >
+            <div
+              className={`workout-card circuit-group ${isCompleted ? 'is-completed' : ''}`}
+              data-stage={block.stage.tone}
+              data-section-color={block.colorSlot}
+              role="group"
+              aria-label={t('workout.circuitAria', { name: circuitName })}
+            >
+              <button
+                className="circuit-group-start"
+                type="button"
+                onClick={handlePlanCardClick((nextExercise || exercisesInCircuit[0]).id, 'exercise')}
+              >
+                <div>
+                  <p className="card-label">{t('workout.circuit')}</p>
+                  <h3>{circuitName}</h3>
+                  <p className="card-sub">{summaryParts}</p>
+                </div>
+                <div className="card-meta">
+                  <span className={`badge ${isCompleted ? 'completed-badge' : ''}`}>{progress}</span>
+                  <span className="chevron">&gt;</span>
+                </div>
+              </button>
+              <ol className="circuit-preview">
+                {exercisesInCircuit.map((item, itemIndex) => {
+                  const order = itemIndex + 1
+                  const activeItemDrag = drag && drag.payload.kind === 'item' && drag.payload.itemId === item.id && drag.moved ? drag : null
+                  const isDraggingItem = Boolean(activeItemDrag)
+                  const isDropBefore = Boolean(drag && drag.payload.kind === 'item' && drag.moved && drag.dropSegmentId === circuitSegmentId && drag.dropBeforeItemId === item.id)
+                  const isDropAfter = Boolean(drag && drag.payload.kind === 'item' && drag.moved && drag.dropSegmentId === circuitSegmentId && drag.dropBeforeItemId === null && itemIndex === exercisesInCircuit.length - 1)
+                  return (
+                    <li
+                      key={`${item.id}-preview`}
+                      data-drag-item={item.id}
+                      data-drag-segment={circuitSegmentId}
+                      className={`circuit-preview-item ${canEditPlan && planSwipeActiveId === item.id ? 'show-actions' : ''} ${isDraggingItem ? 'is-dragging' : ''} ${isDropBefore ? 'drop-before' : ''} ${isDropAfter ? 'drop-after' : ''}`}
+                      style={activeItemDrag ? { transform: `translateY(${activeItemDrag.deltaY}px)` } : undefined}
+                      onTouchStart={canEditPlan
+                        ? (event) => {
+                          event.stopPropagation()
+                          handlePlanTouchStart(item.id)(event)
+                        }
+                        : undefined}
+                      onTouchEnd={canEditPlan
+                        ? (event) => {
+                          event.stopPropagation()
+                          handlePlanTouchEnd(item.id)(event)
+                        }
+                        : undefined}
+                    >
+                      {canEditPlan
+                        ? renderDragHandle({ kind: 'item', itemId: item.id, segmentId: circuitSegmentId }, t('workout.moveExercise'), 'plan-drag-handle compact', 'item')
+                        : null}
+                      <button
+                        className="circuit-preview-btn"
+                        type="button"
+                        onClick={handlePlanCardClick(item.id, 'exercise')}
+                      >
+                        <span className="circuit-preview-index">{order}</span>
+                        <span className="circuit-preview-name">{item.name}</span>
+                      </button>
+                      {canEditPlan ? (
+                        <div className="circuit-preview-actions">
+                          <button
+                            className="plan-row-action danger"
+                            type="button"
+                            data-plan-action="remove"
+                            title={t('workout.removeExercise')}
+                            aria-label={t('workout.removeExercise')}
+                            onClick={() => handleRemoveExercise(item)}
+                          >
+                            <span className="plan-row-action-icon" aria-hidden="true">
+                              <TrashIcon />
+                            </span>
+                            <span className="plan-row-action-label">{t('workout.deleteAction')}</span>
+                          </button>
+                        </div>
+                      ) : null}
+                    </li>
+                  )
+                })}
+              </ol>
+            </div>
+            {canEditPlan ? (
+              <div className="plan-row-actions">
+                <button
+                  className="plan-row-action danger"
+                  type="button"
+                  data-plan-action="remove"
+                  title={t('workout.removeCircuit')}
+                  aria-label={t('workout.removeCircuit')}
+                  onClick={() => handleRemoveCircuit(groupKey, circuitName)}
+                >
+                  <span className="plan-row-action-icon" aria-hidden="true">
+                    <TrashIcon />
+                  </span>
+                  <span className="plan-row-action-label">{t('workout.deleteAction')}</span>
+                </button>
+              </div>
+            ) : null}
+          </div>
+        )
+        return
       }
 
-      const rounds = exercise.circuit?.rounds ?? group?.rounds ?? getWorkSetCount(exercise)
-      const totalExercises = exercise.circuit?.totalExercises ?? group?.totalExercises ?? exercisesInCircuit.length
-      const restAfterSec = exercise.circuit?.restAfterSec ?? group?.restAfterSec
-      const workSetCounts = exercisesInCircuit.map((item) => getWorkSetCount(item))
-      const doneWorkSetCounts = exercisesInCircuit.map((item) => getDoneWorkSetCount(item))
-      const targetWorkSetCount = workSetCounts.reduce((total, count) => total + count, 0)
-      const completedWorkSetCount = doneWorkSetCounts.reduce((total, count) => total + count, 0)
-      const doneRounds = doneWorkSetCounts.length
-        ? Math.min(...doneWorkSetCounts)
-        : 0
-      const isCompleted = targetWorkSetCount > 0 && completedWorkSetCount >= targetWorkSetCount
+      const stateList = setLogs[exercise.id]
+      const doneCount = stateList?.filter((set) => set.done).length ?? 0
+      const total = exercise.sets.length
+      const isCompleted = total > 0 && doneCount === total
       const progress = isCompleted
         ? t('common.done')
-        : targetWorkSetCount
-          ? t('workout.progressFraction', { done: completedWorkSetCount, total: targetWorkSetCount })
-          : rounds
-            ? t('workout.roundProgress', { current: Math.min(doneRounds + 1, rounds), total: rounds })
-            : t('common.start')
-      const summaryParts = [
-        t('workout.movesCount', { count: totalExercises }),
-        rounds ? t('workout.roundsCount', { count: rounds }) : null,
-        typeof restAfterSec === 'number' ? t('workout.restSeconds', { count: restAfterSec }) : null,
-      ].filter(Boolean).join(' · ')
-      const nextExercise = getNextCircuitExercise(exercisesInCircuit)
+        : (total ? t('workout.progressFraction', { done: doneCount, total }) : t('workout.skip'))
+      const segmentItems = segmentId ? orderedExercises.filter((item) => item.segmentId === segmentId) : [exercise]
+      const isLastOfSegment = segmentItems[segmentItems.length - 1]?.id === exercise.id
+      const activeItemDrag = drag && drag.payload.kind === 'item' && drag.payload.itemId === exercise.id && drag.moved ? drag : null
+      const isDraggingItem = Boolean(activeItemDrag)
+      const isDropBefore = Boolean(drag && drag.payload.kind === 'item' && drag.moved && drag.dropSegmentId === segmentId && drag.dropBeforeItemId === exercise.id)
+      const isDropAfter = Boolean(drag && drag.payload.kind === 'item' && drag.moved && drag.dropSegmentId === segmentId && drag.dropBeforeItemId === null && isLastOfSegment)
+      const activeRowDrag = activeItemDrag ?? activeBlockDrag
 
-      const circuitSwipeId = `circuit:${groupKey}`
       cards.push(
         <div
-          key={`circuit-row-${groupKey}`}
-          className={`plan-row ${canEditPlan && planSwipeActiveId === circuitSwipeId ? 'show-actions' : ''}`}
-          onTouchStart={canEditPlan ? handlePlanTouchStart(circuitSwipeId) : undefined}
-          onTouchEnd={canEditPlan ? handlePlanTouchEnd(circuitSwipeId) : undefined}
+          key={exercise.id}
+          data-drag-block={block.id}
+          data-drag-item={exercise.id}
+          data-drag-segment={segmentId}
+          className={`plan-row ${canEditPlan && planSwipeActiveId === exercise.id ? 'show-actions' : ''} ${isDraggingItem || isDraggingBlock ? 'is-dragging' : ''} ${isDropBefore ? 'drop-before' : ''} ${isDropAfter ? 'drop-after' : ''}`}
+          style={activeRowDrag ? { transform: `translateY(${activeRowDrag.deltaY}px)` } : undefined}
+          onTouchStart={canEditPlan ? handlePlanTouchStart(exercise.id) : undefined}
+          onTouchEnd={canEditPlan ? handlePlanTouchEnd(exercise.id) : undefined}
         >
-          <div
-            className={`workout-card circuit-group ${isCompleted ? 'is-completed' : ''}`}
-            data-stage={stage.tone}
-            data-section-color={colorSlot}
-            role="group"
-            aria-label={t('workout.circuitAria', { name: circuitName })}
+          {canEditPlan && segmentId
+            ? renderDragHandle({ kind: 'item', itemId: exercise.id, segmentId }, t('workout.moveExercise'), 'plan-drag-handle', 'item')
+            : null}
+          <button
+            className={`workout-card ${exercise.status === 'skip' ? 'is-skip' : ''} ${isCompleted ? 'is-completed' : ''}`}
+            type="button"
+            onClick={handlePlanCardClick(exercise.id, 'exercise')}
+            data-stage={block.stage.tone}
+            data-section-color={block.colorSlot}
           >
-            <button
-              className="circuit-group-start"
-              type="button"
-              onClick={handlePlanCardClick((nextExercise || exercisesInCircuit[0]).id, 'exercise')}
-            >
-              <div>
-                <p className="card-label">{t('workout.circuit')}</p>
-                <h3>{circuitName}</h3>
-                <p className="card-sub">{summaryParts}</p>
-              </div>
-              <div className="card-meta">
-                <span className={`badge ${isCompleted ? 'completed-badge' : ''}`}>{progress}</span>
-                <span className="chevron">&gt;</span>
-              </div>
-            </button>
-            <ol className="circuit-preview">
-              {exercisesInCircuit.map((item, itemIndex) => {
-                const order = item.circuit?.order ?? (itemIndex + 1)
-                return (
-                  <li
-                    key={`${item.id}-preview`}
-                    className={`circuit-preview-item ${canEditPlan && planSwipeActiveId === item.id ? 'show-actions' : ''}`}
-                    onTouchStart={canEditPlan
-                      ? (event) => {
-                        event.stopPropagation()
-                        handlePlanTouchStart(item.id)(event)
-                      }
-                      : undefined}
-                    onTouchEnd={canEditPlan
-                      ? (event) => {
-                        event.stopPropagation()
-                        handlePlanTouchEnd(item.id)(event)
-                      }
-                      : undefined}
-                  >
-                    <button
-                      className="circuit-preview-btn"
-                      type="button"
-                      onClick={handlePlanCardClick(item.id, 'exercise')}
-                    >
-                      <span className="circuit-preview-index">{order}</span>
-                      <span className="circuit-preview-name">{item.name}</span>
-                    </button>
-                    {canEditPlan ? (
-                      <div className="circuit-preview-actions">
-                        <button
-                          className="plan-row-action danger"
-                          type="button"
-                          data-plan-action="remove"
-                          title={t('workout.removeExercise')}
-                          aria-label={t('workout.removeExercise')}
-                          onClick={() => handleRemoveExercise(item)}
-                        >
-                          <span className="plan-row-action-icon" aria-hidden="true">
-                            <TrashIcon />
-                          </span>
-                          <span className="plan-row-action-label">{t('workout.deleteAction')}</span>
-                        </button>
-                      </div>
-                    ) : null}
-                  </li>
-                )
-              })}
-            </ol>
-          </div>
+            <div>
+              <p className="card-label">{exercise.section}</p>
+              <h3>{exercise.name}</h3>
+              <p className="card-sub">{exercise.summary}</p>
+            </div>
+            <div className="card-meta">
+              <span className={`badge ${isCompleted ? 'completed-badge' : ''}`}>
+                {exercise.status === 'skip' ? t('workout.skip') : progress}
+              </span>
+              <span className="chevron">&gt;</span>
+            </div>
+          </button>
           {canEditPlan ? (
             <div className="plan-row-actions">
               <button
                 className="plan-row-action danger"
                 type="button"
                 data-plan-action="remove"
-                title={t('workout.removeCircuit')}
-                aria-label={t('workout.removeCircuit')}
-                onClick={() => handleRemoveCircuit(groupKey, circuitName)}
+                title={t('workout.removeExercise')}
+                aria-label={t('workout.removeExercise')}
+                onClick={() => handleRemoveExercise(exercise)}
               >
                 <span className="plan-row-action-icon" aria-hidden="true">
                   <TrashIcon />
@@ -474,69 +885,7 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
           ) : null}
         </div>
       )
-      return
-    }
-
-    const stateList = setLogs[exercise.id]
-    const doneCount = stateList?.filter((set) => set.done).length ?? 0
-    const total = exercise.sets.length
-    const isCompleted = total > 0 && doneCount === total
-    const progress = isCompleted
-      ? t('common.done')
-      : (total ? t('workout.progressFraction', { done: doneCount, total }) : t('workout.skip'))
-    const stage = getStageInfo(exercise)
-    const colorSlot = getSectionColorSlot(stage.key, stage.tone)
-    if (stage.key !== lastStageKey) {
-      cards.push(renderStageHeader(stage, `stage-${stage.key}-${exercise.id}`, colorSlot, getSectionSegmentIds(stage.key)))
-      lastStageKey = stage.key
-    }
-    if (collapsedSections[stage.key]) return
-
-    cards.push(
-      <div
-        key={exercise.id}
-        className={`plan-row ${canEditPlan && planSwipeActiveId === exercise.id ? 'show-actions' : ''}`}
-        onTouchStart={canEditPlan ? handlePlanTouchStart(exercise.id) : undefined}
-        onTouchEnd={canEditPlan ? handlePlanTouchEnd(exercise.id) : undefined}
-      >
-        <button
-          className={`workout-card ${exercise.status === 'skip' ? 'is-skip' : ''} ${isCompleted ? 'is-completed' : ''}`}
-          type="button"
-          onClick={handlePlanCardClick(exercise.id, 'exercise')}
-          data-stage={stage.tone}
-          data-section-color={colorSlot}
-        >
-          <div>
-            <p className="card-label">{exercise.section}</p>
-            <h3>{exercise.name}</h3>
-            <p className="card-sub">{exercise.summary}</p>
-          </div>
-          <div className="card-meta">
-            <span className={`badge ${isCompleted ? 'completed-badge' : ''}`}>
-              {exercise.status === 'skip' ? t('workout.skip') : progress}
-            </span>
-            <span className="chevron">&gt;</span>
-          </div>
-        </button>
-        {canEditPlan ? (
-          <div className="plan-row-actions">
-            <button
-              className="plan-row-action danger"
-              type="button"
-              data-plan-action="remove"
-              title={t('workout.removeExercise')}
-              aria-label={t('workout.removeExercise')}
-              onClick={() => handleRemoveExercise(exercise)}
-            >
-              <span className="plan-row-action-icon" aria-hidden="true">
-                <TrashIcon />
-              </span>
-              <span className="plan-row-action-label">{t('workout.deleteAction')}</span>
-            </button>
-          </div>
-        ) : null}
-      </div>
-    )
+    })
   })
 
   extras.forEach((extra) => {
@@ -545,7 +894,7 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
     const targetCards = extra.isReadOnly ? priorityExtraCards : extraCards
     const lastKey = extra.isReadOnly ? lastPriorityExtraStageKey : lastExtraStageKey
     if (stage.key !== lastKey) {
-      targetCards.push(renderStageHeader(stage, `extra-stage-${stage.key}-${extra.id}`, colorSlot))
+      targetCards.push(renderStageHeader(stage, `extra-stage-${stage.key}-${extra.id}`, colorSlot, '', []))
       if (extra.isReadOnly) lastPriorityExtraStageKey = stage.key
       else lastExtraStageKey = stage.key
     }
@@ -578,7 +927,7 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
   })
 
   return (
-    <section className={`workout-list ${activeEntryId ? 'hidden' : ''}`}>
+    <section className={`workout-list ${activeEntryId ? 'hidden' : ''} ${drag ? 'is-reordering' : ''}`}>
       <div className="list-section">
         <PlanNotes
           notes={planNotes}

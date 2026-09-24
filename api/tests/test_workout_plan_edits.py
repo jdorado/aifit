@@ -3,6 +3,8 @@ import pytest
 from aifit_api import main
 from aifit_api.workouts import (
     PlanEntryRemoveInput,
+    PlanItemMoveInput,
+    PlanReorderInput,
     SetAddInput,
     SetRemoveInput,
     SetTargetInput,
@@ -493,6 +495,170 @@ async def test_plan_edits_return_404_for_unknown_ids():
         )
     assert error.value.code == "segment_not_found"
 
+    with pytest.raises(WorkoutDomainError) as error:
+        await service.move_item(
+            "acc_one", workout_id, "wex_missing",
+            PlanItemMoveInput(target_segment_id="seg_missing", target_index=1,
+                              expected_revision=workout["revision"], request_id="missing-wex-003"),
+        )
+    assert error.value.code == "exercise_instance_not_found"
+
+    with pytest.raises(WorkoutDomainError) as error:
+        await service.move_item(
+            "acc_one", workout_id, instance_id,
+            PlanItemMoveInput(target_segment_id="seg_missing", target_index=1,
+                              expected_revision=workout["revision"], request_id="missing-seg-002"),
+        )
+    assert error.value.code == "segment_not_found"
+
+
+@pytest.mark.asyncio
+async def test_reorder_segments_renumbers_and_replays_idempotently():
+    database = FakeDatabase()
+    insert_workout(database, [
+        make_segment("seg_one", 1, [make_item("wex_a", 1, [make_set("set_a1", logged=True)])]),
+        make_segment("seg_two", 2, [make_item("wex_b", 1, [make_set("set_b1")])]),
+        make_segment("seg_three", 3, [make_item("wex_c", 1, [make_set("set_c1")])]),
+    ])
+    service = WorkoutService(database)
+
+    response = await service.reorder_segments(
+        "acc_one", "wrk_manual",
+        PlanReorderInput(segment_ids=["seg_three", "seg_one", "seg_two"],
+                         expected_revision=REV, request_id="reorder-seg-001"),
+    )
+
+    assert response["effect"] == "segments_reordered"
+    segments = response["workout"]["segments"]
+    assert [segment["segment_id"] for segment in segments] == ["seg_three", "seg_one", "seg_two"]
+    assert [segment["order"] for segment in segments] == [1, 2, 3]
+    # Logged sets stay verbatim under their original snapshot.
+    logged = segments[1]["items"][0]
+    assert logged["exercise_instance_id"] == "wex_a"
+    assert [set_row["set_id"] for set_row in logged["sets"]] == ["set_a1"]
+    assert logged["sets"][0]["actual"]["reps"] == 10
+    assert response["workout"]["revision"] != REV
+
+    replayed = await service.reorder_segments(
+        "acc_one", "wrk_manual",
+        PlanReorderInput(segment_ids=["seg_three", "seg_one", "seg_two"],
+                         expected_revision=REV, request_id="reorder-seg-001"),
+    )
+    assert replayed == response
+    assert [segment["segment_id"] for segment in database.documents["workouts"][0]["segments"]] == ["seg_three", "seg_one", "seg_two"]
+
+
+@pytest.mark.asyncio
+async def test_reorder_segments_rejects_a_non_permutation():
+    database = FakeDatabase()
+    insert_workout(database, [
+        make_segment("seg_one", 1, [make_item("wex_a", 1, [make_set("set_a1")])]),
+        make_segment("seg_two", 2, [make_item("wex_b", 1, [make_set("set_b1")])]),
+    ])
+    service = WorkoutService(database)
+
+    for request_id, segment_ids in [
+        ("reorder-bad-001", ["seg_one"]),
+        ("reorder-bad-002", ["seg_one", "seg_one"]),
+        ("reorder-bad-003", ["seg_one", "seg_missing"]),
+    ]:
+        with pytest.raises(WorkoutDomainError) as error:
+            await service.reorder_segments(
+                "acc_one", "wrk_manual",
+                PlanReorderInput(segment_ids=segment_ids, expected_revision=REV, request_id=request_id),
+            )
+        assert error.value.code == "reorder_mismatch"
+        assert error.value.status_code == 422
+
+    assert [segment["segment_id"] for segment in database.documents["workouts"][0]["segments"]] == ["seg_one", "seg_two"]
+    assert not any(row["request_id"].startswith("reorder-bad") for row in database.documents["mutation_receipts"])
+
+
+@pytest.mark.asyncio
+async def test_move_item_reorders_within_a_segment():
+    database = FakeDatabase()
+    insert_workout(database, [
+        make_segment("seg_one", 1, [
+            make_item("wex_a", 1, [make_set("set_a1")]),
+            make_item("wex_b", 2, [make_set("set_b1")]),
+            make_item("wex_c", 3, [make_set("set_c1")]),
+        ]),
+    ])
+    service = WorkoutService(database)
+
+    response = await service.move_item(
+        "acc_one", "wrk_manual", "wex_c",
+        PlanItemMoveInput(target_segment_id="seg_one", target_index=1,
+                          expected_revision=REV, request_id="move-item-001"),
+    )
+
+    assert response["effect"] == "item_moved"
+    items = response["workout"]["segments"][0]["items"]
+    assert [item["exercise_instance_id"] for item in items] == ["wex_c", "wex_a", "wex_b"]
+    assert [item["order"] for item in items] == [1, 2, 3]
+    assert [set_row["set_id"] for set_row in items[0]["sets"]] == ["set_c1"]
+
+    replayed = await service.move_item(
+        "acc_one", "wrk_manual", "wex_c",
+        PlanItemMoveInput(target_segment_id="seg_one", target_index=1,
+                          expected_revision=REV, request_id="move-item-001"),
+    )
+    assert replayed == response
+
+
+@pytest.mark.asyncio
+async def test_move_item_moves_across_segments_and_drops_the_empty_source():
+    database = FakeDatabase()
+    insert_workout(database, [
+        make_segment("seg_one", 1, [make_item("wex_a", 1, [make_set("set_a1", logged=True)])]),
+        make_segment("seg_two", 2, [
+            make_item("wex_b", 1, [make_set("set_b1")]),
+            make_item("wex_c", 2, [make_set("set_c1")]),
+        ]),
+    ])
+    service = WorkoutService(database)
+
+    response = await service.move_item(
+        "acc_one", "wrk_manual", "wex_a",
+        PlanItemMoveInput(target_segment_id="seg_two", target_index=3,
+                          expected_revision=REV, request_id="move-item-002"),
+    )
+
+    assert response["effect"] == "item_moved"
+    segments = response["workout"]["segments"]
+    assert [segment["segment_id"] for segment in segments] == ["seg_two"]
+    assert segments[0]["order"] == 1
+    items = segments[0]["items"]
+    assert [item["exercise_instance_id"] for item in items] == ["wex_b", "wex_c", "wex_a"]
+    assert [item["order"] for item in items] == [1, 2, 3]
+    moved = items[2]
+    assert [set_row["set_id"] for set_row in moved["sets"]] == ["set_a1"]
+    assert moved["sets"][0]["actual"]["reps"] == 10
+    assert moved["sets"][0]["target"] == make_set("set_a1", logged=True)["target"]
+    assert moved["exercise_snapshot"] == make_item("wex_a", 1, [])["exercise_snapshot"]
+
+
+@pytest.mark.asyncio
+async def test_move_item_rejects_an_out_of_range_target_index():
+    database = FakeDatabase()
+    insert_workout(database, [
+        make_segment("seg_one", 1, [make_item("wex_a", 1, [make_set("set_a1")])]),
+        make_segment("seg_two", 2, [make_item("wex_b", 1, [make_set("set_b1")])]),
+    ])
+    service = WorkoutService(database)
+
+    with pytest.raises(WorkoutDomainError) as error:
+        await service.move_item(
+            "acc_one", "wrk_manual", "wex_a",
+            PlanItemMoveInput(target_segment_id="seg_two", target_index=3,
+                              expected_revision=REV, request_id="move-item-003"),
+        )
+
+    assert error.value.code == "target_index_out_of_range"
+    assert error.value.status_code == 422
+    assert [segment["segment_id"] for segment in database.documents["workouts"][0]["segments"]] == ["seg_one", "seg_two"]
+    assert not any(row["request_id"] == "move-item-003" for row in database.documents["mutation_receipts"])
+
 
 @pytest.mark.asyncio
 async def test_plan_edit_routes_delegate_to_the_service(monkeypatch):
@@ -519,6 +685,14 @@ async def test_plan_edit_routes_delegate_to_the_service(monkeypatch):
             calls.append(("remove_segment", account_id, workout_id, segment_id))
             return {"effect": "segment_removed"}
 
+        async def reorder_segments(self, account_id, workout_id, body):
+            calls.append(("reorder_segments", account_id, workout_id, tuple(body.segment_ids)))
+            return {"effect": "segments_reordered"}
+
+        async def move_item(self, account_id, workout_id, instance_id, body):
+            calls.append(("move_item", account_id, workout_id, instance_id, body.target_segment_id, body.target_index))
+            return {"effect": "item_moved"}
+
     monkeypatch.setattr(main, "workouts", lambda: StubService())
     account = {"account_id": "acc_one"}
 
@@ -538,6 +712,13 @@ async def test_plan_edit_routes_delegate_to_the_service(monkeypatch):
     assert await main.remove_workout_segment_v1(
         "wrk_one", "seg_one", PlanEntryRemoveInput(expected_revision=REV, request_id="r5"), account,
     ) == {"effect": "segment_removed"}
+    assert await main.reorder_workout_segments_v1(
+        "wrk_one", PlanReorderInput(segment_ids=["seg_two", "seg_one"], expected_revision=REV, request_id="r6"), account,
+    ) == {"effect": "segments_reordered"}
+    assert await main.move_workout_item_v1(
+        "wrk_one", "wex_one",
+        PlanItemMoveInput(target_segment_id="seg_two", target_index=2, expected_revision=REV, request_id="r7"), account,
+    ) == {"effect": "item_moved"}
 
     assert calls == [
         ("add_set", "acc_one", "wrk_one", "wex_one"),
@@ -545,4 +726,6 @@ async def test_plan_edit_routes_delegate_to_the_service(monkeypatch):
         ("update_set_target", "acc_one", "wrk_one", "set_one"),
         ("remove_exercise", "acc_one", "wrk_one", "wex_one"),
         ("remove_segment", "acc_one", "wrk_one", "seg_one"),
+        ("reorder_segments", "acc_one", "wrk_one", ("seg_two", "seg_one")),
+        ("move_item", "acc_one", "wrk_one", "wex_one", "seg_two", 2),
     ]

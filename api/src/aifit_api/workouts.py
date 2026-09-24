@@ -393,6 +393,23 @@ class PlanEntryRemoveInput(StrictModel):
     request_id: str = Field(min_length=1, max_length=160, pattern=r"^[A-Za-z0-9_.:-]+$")
 
 
+class PlanReorderInput(StrictModel):
+    """The day's segments in their new order: every segment exactly once."""
+
+    segment_ids: list[str] = Field(min_length=1, max_length=100)
+    expected_revision: str = Field(pattern=r"^rev_[a-f0-9]{32}$")
+    request_id: str = Field(min_length=1, max_length=160, pattern=r"^[A-Za-z0-9_.:-]+$")
+
+
+class PlanItemMoveInput(StrictModel):
+    """Move one item to a segment position; source removal applies first."""
+
+    target_segment_id: str = Field(min_length=1, max_length=160)
+    target_index: int = Field(ge=1, le=100)
+    expected_revision: str = Field(pattern=r"^rev_[a-f0-9]{32}$")
+    request_id: str = Field(min_length=1, max_length=160, pattern=r"^[A-Za-z0-9_.:-]+$")
+
+
 class WorkoutNotesInput(StrictModel):
     notes: str = Field(max_length=4_000)
     expected_revision: str = Field(pattern=r"^rev_[a-f0-9]{32}$")
@@ -1226,6 +1243,59 @@ class WorkoutService:
             workout["segments"].remove(target_segment)
         return await self._replace_or_delete_workout(
             account_id, workout_id, input.expected_revision, input.request_id, fingerprint, "segment_removed", workout,
+        )
+
+    @transactional_mutation
+    async def reorder_segments(self, account_id: str, workout_id: str, input: PlanReorderInput) -> dict[str, Any]:
+        """Reorder the day's segments; items and every set stay verbatim."""
+        fingerprint = _fingerprint({"workout_id": workout_id, **input.model_dump(mode="json")})
+        prior = await self._receipt(account_id, input.request_id, fingerprint)
+        if prior:
+            return prior
+        workout = await self._editable_workout(account_id, workout_id, input.expected_revision)
+        by_id = {segment["segment_id"]: segment for segment in workout["segments"]}
+        requested = input.segment_ids
+        if len(requested) != len(by_id) or len(set(requested)) != len(requested) or set(requested) != set(by_id):
+            raise WorkoutDomainError("reorder_mismatch", "Reorder must list every workout segment exactly once.", 422)
+        workout["segments"] = [by_id[segment_id] for segment_id in requested]
+        return await self._replace_or_delete_workout(
+            account_id, workout_id, input.expected_revision, input.request_id, fingerprint, "segments_reordered", workout,
+        )
+
+    @transactional_mutation
+    async def move_item(self, account_id: str, workout_id: str, exercise_instance_id: str, input: PlanItemMoveInput) -> dict[str, Any]:
+        """Move one item to a new segment position; sets stay verbatim."""
+        fingerprint = _fingerprint({"workout_id": workout_id, "exercise_instance_id": exercise_instance_id, **input.model_dump(mode="json")})
+        prior = await self._receipt(account_id, input.request_id, fingerprint)
+        if prior:
+            return prior
+        workout = await self._editable_workout(account_id, workout_id, input.expected_revision)
+        source_segment: dict[str, Any] | None = None
+        target_segment: dict[str, Any] | None = None
+        item: dict[str, Any] | None = None
+        for segment in workout["segments"]:
+            if segment["segment_id"] == input.target_segment_id:
+                target_segment = segment
+            for candidate in segment["items"]:
+                if candidate["exercise_instance_id"] == exercise_instance_id:
+                    source_segment = segment
+                    item = candidate
+        if item is None or source_segment is None:
+            raise WorkoutDomainError("exercise_instance_not_found", "Workout exercise was not found.", 404)
+        if target_segment is None:
+            raise WorkoutDomainError("segment_not_found", "Workout segment was not found.", 404)
+        # The target index is the position in the target segment after the
+        # source removal, so a same-segment move never counts the item twice.
+        target_items = [candidate for candidate in target_segment["items"] if candidate is not item]
+        if input.target_index > len(target_items) + 1:
+            raise WorkoutDomainError("target_index_out_of_range", "The target position is outside the segment.", 422)
+        source_segment["items"].remove(item)
+        target_items.insert(input.target_index - 1, item)
+        target_segment["items"] = target_items
+        if not source_segment["items"]:
+            workout["segments"].remove(source_segment)
+        return await self._replace_or_delete_workout(
+            account_id, workout_id, input.expected_revision, input.request_id, fingerprint, "item_moved", workout,
         )
 
     @transactional_mutation

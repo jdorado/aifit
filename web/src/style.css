@@ -1375,11 +1375,95 @@ p {
   overflow: hidden;
   border-radius: var(--radius-md);
   margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .plan-row .workout-card {
+  flex: 1;
+  min-width: 0;
   margin-bottom: 0;
   transition: transform 0.2s ease;
+}
+
+/* Reorder affordance: a grip the user holds to drag a section, circuit or
+   exercise up/down. touch-action keeps the gesture from scrolling the list. */
+.plan-drag-handle {
+  flex: 0 0 auto;
+  align-self: stretch;
+  width: 32px;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--ink-tertiary);
+  cursor: grab;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.plan-row.show-actions .plan-drag-handle,
+.workout-stage-row.show-actions .plan-drag-handle,
+.circuit-preview-item.show-actions .plan-drag-handle {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.plan-drag-handle:active {
+  cursor: grabbing;
+  color: var(--ink-secondary);
+}
+
+.plan-drag-handle svg {
+  pointer-events: none;
+}
+
+.plan-drag-handle.compact {
+  width: 26px;
+  min-height: 34px;
+}
+
+.plan-row.is-dragging,
+.workout-stage-row.is-dragging,
+.circuit-preview-item.is-dragging {
+  position: relative;
+  z-index: 6;
+  box-shadow: 0 12px 26px rgba(0, 0, 0, 0.32);
+  transition: none;
+}
+
+/* A circuit preview item leaves its card while dragged, so the row and the
+   card must stop clipping it. */
+.plan-row.drag-open,
+.plan-row.drag-open .workout-card {
+  overflow: visible;
+}
+
+.workout-list.is-reordering {
+  cursor: grabbing;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Inset lines stay visible inside the clipped rows (swipe needs overflow). */
+.plan-row.drop-before,
+.circuit-preview-item.drop-before,
+.workout-stage-row.drop-before {
+  box-shadow: inset 0 3px 0 0 var(--brand-primary);
+}
+
+.plan-row.drop-after,
+.circuit-preview-item.drop-after,
+.workout-stage-row.drop-after {
+  box-shadow: inset 0 -3px 0 0 var(--brand-primary);
 }
 
 .plan-row.show-actions .workout-card {
@@ -6542,14 +6626,19 @@ body:has(.view:is([data-view="workout"], [data-view="diet"], [data-view="health"
   text-transform: none;
 }
 
-.view[data-view="workout"] .plan-row {
-  width: 100%;
-  max-width: 100%;
-  min-width: 0;
-  overflow: hidden;
-  margin: 0;
-  border-radius: var(--aifit-radius);
-}
+  .view[data-view="workout"] .plan-row {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    overflow: hidden;
+    margin: 0;
+    border-radius: var(--aifit-radius);
+  }
+
+  .view[data-view="workout"] .plan-row.drag-open,
+  .view[data-view="workout"] .plan-row.drag-open .workout-card {
+    overflow: visible;
+  }
 
 .view[data-view="workout"] .list-section:first-child .plan-row::before {
   content: none;

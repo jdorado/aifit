@@ -1,5 +1,5 @@
 // Plan-edit contract smoke. Asserts the browser plan-editing handlers address
-// the five canonical routes from docs/plan-edit-contract.md, send the shared
+// the canonical routes from docs/plan-edit-contract.md, send the shared
 // mutation envelope, apply structural receipts through the existing
 // session-apply path (without wiping typed-but-unlogged inputs), and handle
 // `workout: null` exactly like clear. Source-level, in the style of
@@ -25,6 +25,10 @@ has(appSource, '/sets/${encodeURIComponent(setId)}/remove', 'remove set must cal
 has(appSource, '/sets/${encodeURIComponent(setId)}/target', 'target edit must call the canonical target route')
 has(appSource, '/exercises/${encodeURIComponent(exerciseId)}/remove', 'remove exercise must call the canonical remove route')
 has(appSource, '/segments/${encodeURIComponent(segmentId)}/remove', 'remove segment must call the canonical segment route')
+has(appSource, "'/segments/reorder'", 'reordering blocks must call the canonical segment reorder route')
+has(appSource, '/exercises/${encodeURIComponent(exerciseId)}/move', 'moving an item must call the canonical item move route')
+has(appSource, 'target_segment_id: targetSegmentId', 'an item move must send the target segment')
+has(appSource, 'target_index: targetIndex', 'an item move must send the 1-based target position')
 
 // 2. Shared mutation envelope: expected revision + fresh request id.
 has(appSource, 'expected_revision: context.revision', 'mutations must send the current revision')
@@ -73,6 +77,26 @@ has(planListSource, 'window.confirm(t(\'workout.removeExerciseConfirm\'', 'exerc
 has(planListSource, 'window.confirm(t(\'workout.removeCircuitConfirm\'', 'circuit removal must confirm')
 has(planListSource, 'window.confirm(t(\'workout.removeSectionConfirm\'', 'section removal must confirm')
 
+// 8b. Drag reorder: grip handles only in edit mode, block and item units,
+//     touch-action isolation, and an optimistic preview that clears on failure.
+has(planListSource, 'plan-drag-handle', 'reorder must render a grip handle')
+has(planListSource, 'data-drag-item={', 'items must expose a drag unit')
+has(planListSource, 'data-drag-block={', 'blocks must expose a drag unit')
+has(planListSource, "'data-drag-block-header': blockId", 'block headers must anchor the drop position')
+has(planListSource, 'onReorderSegments(nextOrder)', 'a block drop must persist the new segment order')
+has(planListSource, 'onMoveItem(itemId, targetSegmentId, targetIndex)', 'an item drop must persist the move')
+has(planListSource, 'setPendingSegmentOrder(nextOrder)', 'a block drop must preview optimistically')
+has(planListSource, 'setPendingItemMove({ itemId, targetSegmentId, targetIndex })', 'an item drop must preview optimistically')
+has(planListSource, 'if (!ok) setPendingItemMove(null)', 'a failed item move must snap back')
+has(planListSource, 'if (!ok) setPendingSegmentOrder(null)', 'a failed block reorder must snap back')
+has(planListSource, 'canEditPlan && sectionSegmentIds.length > 0', 'section grips must be edit-gated')
+has(planListSource, '{canEditPlan && segmentId', 'item grips must be edit-gated and canonical')
+has(planListSource, 'moveExerciseInList', 'the optimistic preview must reuse the move transform')
+has(planListSource, 'orderExercisesBySegments', 'the optimistic preview must reuse the block order transform')
+has(planListSource, 'onPointerDown={(event) => beginDrag(event, payload)}', 'the grip must start the drag on pointer down')
+has(planListSource, 'setPointerCapture(event.pointerId)', 'the drag must capture the pointer')
+assert.ok(!planListSource.includes('onPointerDown={canEditPlan'), 'drag starts must not fire outside edit mode')
+
 // 9. The circuit-key fix must stay intact.
 has(planListSource, 'key={`circuit-row-${groupKey}`}', 'the circuit-key fix must remain')
 
@@ -87,6 +111,8 @@ for (const key of [
   'removeCircuitConfirm',
   'removeSection',
   'removeSectionConfirm',
+  'moveSection',
+  'moveExercise',
   'editFailed',
   'editStale',
 ]) {
