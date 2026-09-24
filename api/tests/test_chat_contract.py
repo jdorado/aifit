@@ -41,7 +41,7 @@ def identity():
 
 @pytest.mark.asyncio
 async def test_enqueue_sends_untouched_text_and_slim_scope_only(monkeypatch, identity):
-    monkeypatch.setattr(main, "owned_account", lambda *_args: async_value({
+    monkeypatch.setattr(main, "chat_account", lambda *_args: async_value({
         "account_id": "acc_1", "tenant_id": "ten_1",
     }))
     monkeypatch.setattr(main, "verified_binding", lambda *_args: async_value({"bindingId": "binding_1"}))
@@ -80,7 +80,7 @@ async def test_enqueue_sends_untouched_text_and_slim_scope_only(monkeypatch, ide
 
 @pytest.mark.asyncio
 async def test_enqueue_forwards_canonical_workout_and_instance_refs(monkeypatch, identity):
-    monkeypatch.setattr(main, "owned_account", lambda *_args: async_value({
+    monkeypatch.setattr(main, "chat_account", lambda *_args: async_value({
         "account_id": "acc_1", "tenant_id": "ten_1",
     }))
     monkeypatch.setattr(main, "verified_binding", lambda *_args: async_value({"bindingId": "binding_1"}))
@@ -107,7 +107,7 @@ async def test_enqueue_forwards_canonical_workout_and_instance_refs(monkeypatch,
 
 @pytest.mark.asyncio
 async def test_enqueue_propagates_ez_request_key_conflict(monkeypatch, identity):
-    monkeypatch.setattr(main, "owned_account", lambda *_args: async_value({
+    monkeypatch.setattr(main, "chat_account", lambda *_args: async_value({
         "account_id": "acc_1", "tenant_id": "ten_1",
     }))
     monkeypatch.setattr(main, "verified_binding", lambda *_args: async_value({"bindingId": "binding_1"}))
@@ -323,7 +323,7 @@ async def test_enqueue_does_not_touch_model_control(tmp_path, monkeypatch, ident
             return {"id": "run_1"}
         return {"id": "run_1", "status": "completed", "messages": [{"id": "msg_1", "text": "ok"}]}
 
-    monkeypatch.setattr(main, "owned_account", lambda *_args: async_value({
+    monkeypatch.setattr(main, "chat_account", lambda *_args: async_value({
         "account_id": "acc_1", "tenant_id": "ten_1",
     }))
     monkeypatch.setattr(main, "verified_binding", lambda *_args: async_value({"bindingId": "binding_1"}))
@@ -338,7 +338,7 @@ async def test_enqueue_does_not_touch_model_control(tmp_path, monkeypatch, ident
 
 @pytest.mark.asyncio
 async def test_chat_job_proxies_ez_run_by_id(monkeypatch, identity):
-    monkeypatch.setattr(main, "owned_account", lambda *_args: async_value({
+    monkeypatch.setattr(main, "chat_account", lambda *_args: async_value({
         "account_id": "acc_1", "tenant_id": "ten_1",
     }))
     monkeypatch.setattr(main, "verified_binding", lambda *_args: async_value({"bindingId": "binding_1"}))
@@ -385,7 +385,7 @@ async def test_binding_verification_requires_owner_and_receipt(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_mini_chat_enqueue_uses_its_own_scope_without_follow_owner(monkeypatch, identity):
-    monkeypatch.setattr(main, "owned_account", lambda *_args: async_value({
+    monkeypatch.setattr(main, "chat_account", lambda *_args: async_value({
         "account_id": "acc_1", "tenant_id": "ten_1",
     }))
     monkeypatch.setattr(main, "verified_binding", lambda *_args: async_value({"bindingId": "binding_1"}))
@@ -416,6 +416,100 @@ def test_unknown_chat_scope_is_rejected():
         main.ChatInput(user_id="owner", request_id=uuid4(), message="hi", scope="owner-other")
     with pytest.raises(ValidationError):
         main.ModelSelectionInput(expected_session="s", scope="owner-other", cli="codex")
+
+
+COACH = {"account_id": "acc_coach", "tenant_id": "ten_coach"}
+TRAINEE = {"account_id": "acc_trainee", "tenant_id": "ten_trainee"}
+
+
+def link_service(permission="edit_programs"):
+    class Links:
+        async def resolve_act_as(self, coach_account_id, link_id, required):
+            assert coach_account_id == "acc_coach"
+            assert link_id == "cl_1"
+            assert required == permission
+            return {"account_id": "acc_trainee", "link_id": "cl_1",
+                    "permissions": {"view_progress": True, "edit_programs": True}}
+
+    return Links()
+
+
+def trainee_db(monkeypatch):
+    class Accounts:
+        async def find_one(self, query):
+            assert query == {"account_id": "acc_trainee"}
+            return TRAINEE
+
+    class FakeDb:
+        accounts = Accounts()
+
+    monkeypatch.setattr(main, "db", FakeDb())
+
+
+@pytest.mark.asyncio
+async def test_enqueue_with_act_as_link_runs_the_turn_in_the_trainee_agent(monkeypatch, identity):
+    monkeypatch.setattr(main, "account_for", lambda *_args: async_value(COACH))
+    monkeypatch.setattr(main, "coach_links", lambda: link_service())
+    trainee_db(monkeypatch)
+    monkeypatch.setattr(main, "verified_binding", lambda *_args: async_value({"bindingId": "binding_trainee"}))
+    monkeypatch.setattr(main, "agent_run_context",
+                        lambda account, _job: {"plugins": {"aifit": {"for": account["account_id"]}}})
+    seen = {}
+
+    async def ez_call(binding, method, path, body=None):
+        seen["binding"] = binding
+        if method == "POST":
+            seen["admission"] = body
+            return {"id": "run_trainee"}
+        return {"id": "run_trainee", "status": "completed", "messages": [{"id": "m1", "text": "hi trainee"}]}
+
+    monkeypatch.setattr(main, "ez_call", ez_call)
+    result = await main.enqueue_chat(main.ChatInput(
+        user_id="acc_coach", request_id=uuid4(), message="how did the set go?",
+        scope="owner-minichat", scope_id="coach:session:wex_9", act_as_link_id="cl_1",
+    ), identity)
+
+    assert seen["binding"] == {"bindingId": "binding_trainee"}
+    assert seen["admission"]["text"] == "how did the set go?"
+    assert seen["admission"]["context"]["plugins"] == {"aifit": {"for": "acc_trainee"}}
+    assert result["job_id"] == "run_trainee"
+    assert result["messages"][0]["text"] == "hi trainee"
+
+
+@pytest.mark.asyncio
+async def test_enqueue_with_act_as_link_denies_a_forbidden_link(monkeypatch, identity):
+    monkeypatch.setattr(main, "account_for", lambda *_args: async_value(COACH))
+
+    class ForbiddenLinks:
+        async def resolve_act_as(self, *_args):
+            raise HTTPException(403, "This coach link is not yours.")
+
+    monkeypatch.setattr(main, "coach_links", lambda: ForbiddenLinks())
+    with pytest.raises(HTTPException) as error:
+        await main.enqueue_chat(main.ChatInput(
+            user_id="acc_coach", request_id=uuid4(), message="hi",
+            act_as_link_id="cl_rogue",
+        ), identity)
+    assert error.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_chat_job_with_act_as_link_polls_the_trainee_relay(monkeypatch, identity):
+    monkeypatch.setattr(main, "account_for", lambda *_args: async_value(COACH))
+    monkeypatch.setattr(main, "coach_links", lambda: link_service())
+    trainee_db(monkeypatch)
+    monkeypatch.setattr(main, "verified_binding", lambda *_args: async_value({"bindingId": "binding_trainee"}))
+    seen = {}
+
+    async def ez_call(binding, method, path, body=None):
+        seen["binding"] = binding
+        assert path == "/v1/runs/run_9"
+        return {"id": "run_9", "status": "completed", "messages": [{"id": "m1", "text": "hi"}]}
+
+    monkeypatch.setattr(main, "ez_call", ez_call)
+    result = await main.chat_job("run_9", "acc_coach", identity, act_as_link_id="cl_1")
+    assert seen["binding"] == {"bindingId": "binding_trainee"}
+    assert result["job_id"] == "run_9"
 
 
 @pytest.mark.asyncio

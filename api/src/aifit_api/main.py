@@ -173,6 +173,7 @@ class ChatInput(BaseModel):
     workout_id: str | None = Field(default=None, min_length=1, max_length=200)
     exercise_instance_id: str | None = Field(default=None, min_length=1, max_length=200)
     expected_revision: str | None = Field(default=None, pattern=r"^rev_[a-f0-9]{32}$")
+    act_as_link_id: str | None = Field(default=None, max_length=200)
 
 
 class ModelSelectionInput(BaseModel):
@@ -308,6 +309,24 @@ async def owned_account(identity: Identity, requested_user_id: str) -> dict:
     if requested_user_id not in {identity.subject, account["account_id"], identity.email}:
         raise HTTPException(403, "Account mismatch.")
     return account
+
+
+async def chat_account(identity: Identity, requested_user_id: str, act_as_link_id: str | None) -> dict[str, Any]:
+    """Resolve the account a chat turn runs as.
+
+    Without a link this is the signed-in owner's own account. With one, the
+    stored coach link is re-checked (`edit_programs` implies coach chat, as in
+    the legacy access rule) and the turn runs in the trainee's bound agent. A
+    trainee without a binding fails exactly like an unbound owner.
+    """
+    if not act_as_link_id:
+        return await owned_account(identity, requested_user_id)
+    coach = await account_for(identity)
+    resolved = await coach_links().resolve_act_as(coach["account_id"], act_as_link_id, "edit_programs")
+    trainee = await db.accounts.find_one({"account_id": resolved["account_id"]})
+    if not trainee:
+        raise HTTPException(404, "Coach link trainee was not found.")
+    return trainee
 
 
 def validated_messages(value: Any) -> list[dict]:
@@ -607,7 +626,7 @@ async def enqueue_chat(body: ChatInput, identity: Identity = Depends(require_ide
     admitted chat scope (mini-chat) runs in its own native session with its
     own model selection, so the two surfaces never change each other's AI.
     """
-    account = await owned_account(identity, body.user_id)
+    account = await chat_account(identity, body.user_id, body.act_as_link_id)
     binding = await verified_binding(account["account_id"])
     request_id = str(body.request_id)
     references = {key: value for key, value in {"scopeId": body.scope_id, "referenceDate": body.reference_date,
@@ -631,8 +650,9 @@ async def enqueue_chat(body: ChatInput, identity: Identity = Depends(require_ide
 
 
 @app.get("/chat/jobs/{job_id}")
-async def chat_job(job_id: str, user_id: str, identity: Identity = Depends(require_identity)) -> dict:
-    account = await owned_account(identity, user_id)
+async def chat_job(job_id: str, user_id: str, identity: Identity = Depends(require_identity),
+                   act_as_link_id: str | None = Query(default=None, max_length=200)) -> dict:
+    account = await chat_account(identity, user_id, act_as_link_id)
     binding = await verified_binding(account["account_id"])
     if not job_id or len(job_id) > 200:
         raise HTTPException(404, "Chat job not found.")
@@ -647,8 +667,9 @@ async def chat_job(job_id: str, user_id: str, identity: Identity = Depends(requi
 
 
 @app.post("/chat/jobs/{job_id}/cancel")
-async def cancel_chat(job_id: str, user_id: str, identity: Identity = Depends(require_identity)) -> dict:
-    account = await owned_account(identity, user_id)
+async def cancel_chat(job_id: str, user_id: str, identity: Identity = Depends(require_identity),
+                      act_as_link_id: str | None = Query(default=None, max_length=200)) -> dict:
+    account = await chat_account(identity, user_id, act_as_link_id)
     binding = await verified_binding(account["account_id"])
     if not job_id or len(job_id) > 200:
         raise HTTPException(404, "Chat job not found.")

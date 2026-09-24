@@ -213,6 +213,7 @@ type ChatRequestPayload = {
   workout_id?: string
   exercise_instance_id?: string
   expected_revision?: string
+  act_as_link_id?: string
 }
 
 type ChatResponsePayload = {
@@ -1063,7 +1064,12 @@ const App = () => {
   )
   const i18n = useMemo(() => createI18n(profile.language), [profile.language])
   const { t } = i18n
+  // Coach chat in the trainee's context follows the legacy rule: the link
+  // must carry view_progress, and edit_programs implies coach chat
+  // (chat_as_coach has no new-schema equivalent). The home tab stays the
+  // coach's own and remains unavailable in coach mode.
   const coachChatEnabled = !coachActAsLinkId
+    || (coachActAsPermissions?.view_progress === true && coachActAsPermissions?.edit_programs === true)
   const selectedModelPreset = modelControl?.presets.find((preset) => preset.id === modelControl.selected_id)
   const selectedModelLabel = presetLabel(selectedModelPreset, modelControl?.models)
   const modelOptions = useMemo(() => buildModelOptions(modelControl), [modelControl])
@@ -2551,7 +2557,10 @@ const App = () => {
       throw new Error(typeof queued.error === 'string' ? queued.error : 'Chat job failed')
     }
 
-    const params = new URLSearchParams({ user_id: payload.user_id })
+    const params = new URLSearchParams({
+      user_id: payload.user_id,
+      ...(payload.act_as_link_id ? { act_as_link_id: payload.act_as_link_id } : {}),
+    })
 
     const startedAt = Date.now()
     while (Date.now() - startedAt < CHAT_JOB_MAX_WAIT_MS) {
@@ -3615,13 +3624,15 @@ const App = () => {
   ])
 
   const handleGenerateDayWorkoutWithCoach = useCallback(() => {
-    if (!canGenerateWorkoutSelectedDay || !coachChatEnabled) return
+    // The home chat is the coach's own; never route a trainee generate prompt there.
+    if (!canGenerateWorkoutSelectedDay || !coachChatEnabled || coachActAsLinkId) return
     const targetDate = selectedDay?.date ?? todayId
     const prompt = t('workout.generateChatPrompt', { date: targetDate, label: selectedDayLabel })
     handleActiveViewChange('home')
     void handleSend(prompt)
   }, [
     canGenerateWorkoutSelectedDay,
+    coachActAsLinkId,
     coachChatEnabled,
     handleActiveViewChange,
     handleSend,
@@ -3647,7 +3658,7 @@ const App = () => {
       return
     }
 
-    const ownerWorkoutKey = `${currentUserId}:${selectedDay?.date ?? todayId}`
+    const ownerWorkoutKey = `${coachActAsOwnerId ?? currentUserId}:${selectedDay?.date ?? todayId}`
     const ownerWorkoutId = workoutIdByOwnerDateRef.current[ownerWorkoutKey]
     const payload = {
       user_id: currentUserId,
@@ -3662,6 +3673,7 @@ const App = () => {
       ...(workoutRevisionByOwnerDateRef.current[ownerWorkoutKey]
         ? { expected_revision: workoutRevisionByOwnerDateRef.current[ownerWorkoutKey] }
         : {}),
+      ...(coachActAsLinkId ? { act_as_link_id: coachActAsLinkId } : {}),
     }
 
     try {
@@ -3679,6 +3691,8 @@ const App = () => {
   }, [
     addCoachMessage,
     addCoachThinkingMessage,
+    coachActAsLinkId,
+    coachActAsOwnerId,
     coachChatEnabled,
     currentUserId,
     ensureWorkoutSession,
@@ -4827,7 +4841,7 @@ const App = () => {
             showModelLabels
             miniModelOptions={miniModelOptions}
             miniSelectedModel={miniSelectedModelValue}
-            miniModelSelectionDisabled={miniModelSelectionPending}
+            miniModelSelectionDisabled={miniModelSelectionPending || Boolean(coachActAsLinkId)}
             onMiniModelChange={handleMiniModelSelection}
             onSelectEntry={handleSelectEntry}
             onSelectDay={handleSelectDay}
@@ -4941,7 +4955,7 @@ const App = () => {
           ) : (
             <WorkoutOverflowMenu
               canGeneratePlan={canGenerateWorkoutSelectedDay && canQuerySavedWorkoutSessions && isBackendHealthy}
-              canGenerateWithCoach={canGenerateWorkoutSelectedDay && canQuerySavedWorkoutSessions && isBackendHealthy && coachChatEnabled}
+              canGenerateWithCoach={canGenerateWorkoutSelectedDay && canQuerySavedWorkoutSessions && isBackendHealthy && coachChatEnabled && !coachActAsLinkId}
               canCopyLastWeek={canGenerateWorkoutSelectedDay && canQuerySavedWorkoutSessions && isBackendHealthy}
               canClearWorkout={canClearSelectedDay && isBackendHealthy}
               onShowHistory={handleOpenWorkoutHistory}
