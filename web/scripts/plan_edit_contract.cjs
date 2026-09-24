@@ -57,6 +57,16 @@ has(appSource, 'response.status === 409', 'mutations must recognise stale_revisi
 has(appSource, 'canEditPlanSelectedDay', 'plan editing must be gated by an editable-date flag')
 has(appSource, 'isPlanEditableDate(selectedDay?.date ?? todayId) && coachCanEditPrograms', 'plan editing must share the generation date rule and edit permission')
 
+// 6b. Coach mode registers the canonical workout refs under the act-as owner.
+//     Keying them by the coach's user id left logging and plan edits disabled.
+const hydrationBlock = appSource.slice(
+  appSource.indexOf('const fetchWorkoutSessionsByDates'),
+  appSource.indexOf('const applySavedWorkoutSessionsToWeek'),
+)
+assert.ok(hydrationBlock.length > 0, 'the workout hydration block must exist')
+has(hydrationBlock, 'const ownerId = coachActAsOwnerId ?? currentUserId', 'coach mode must resolve the act-as owner')
+has(hydrationBlock, 'const ownerKey = `${ownerId}:${session.date}`', 'coach mode must key the workout refs by the act-as owner')
+
 // 7. Segment identity is carried through the adapter for section removal.
 has(adapterSource, 'segmentId: segment.segment_id', 'the adapter must expose the canonical segment id')
 has(testWorkoutSource, 'segmentId?: string', 'the exercise type must carry an optional segment id')
