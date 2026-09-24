@@ -71,7 +71,9 @@ const providerLabel = (provider?: string) => provider === 'openrouter'
 const modelDisplayName = (model: EzModel) => {
   const provider = providerLabel(model.provider)
   const prefix = provider ? `${provider} · ` : ''
-  return provider && model.name.startsWith(prefix) ? model.name.slice(prefix.length) : model.name
+  const name = provider && model.name.startsWith(prefix) ? model.name.slice(prefix.length) : model.name
+  const idSuffix = model.model ? ` · ${model.model}` : ''
+  return idSuffix && name.endsWith(idSuffix) ? name.slice(0, -idSuffix.length) : name
 }
 
 const presetLabel = (preset: EzPreset | undefined, models: EzModel[] = []) => {

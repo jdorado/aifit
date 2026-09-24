@@ -1,4 +1,4 @@
-import type { FC } from 'react'
+import { useEffect, useRef, useState, type FC } from 'react'
 import { useI18n } from '../../i18n'
 type ChatHeaderProps = {
   canStartNewChat: boolean
@@ -21,6 +21,28 @@ const ChatHeader: FC<ChatHeaderProps> = ({
   const singleModelOption = modelOptions.length === 1 ? modelOptions[0] : undefined
   const activeModelOption = modelOptions.find((option) => option.value === selectedModel)
     ?? singleModelOption
+  const [modelMenuOpen, setModelMenuOpen] = useState(false)
+  const modelMenuRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!modelMenuOpen) return
+    const closeOnOutsideClick = (event: PointerEvent) => {
+      if (!modelMenuRef.current?.contains(event.target as Node)) setModelMenuOpen(false)
+    }
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setModelMenuOpen(false)
+    }
+    document.addEventListener('pointerdown', closeOnOutsideClick)
+    document.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutsideClick)
+      document.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [modelMenuOpen])
+
+  useEffect(() => {
+    if (modelSelectionDisabled) setModelMenuOpen(false)
+  }, [modelSelectionDisabled])
 
   return (
     <div className="chat-header">
@@ -32,20 +54,38 @@ const ChatHeader: FC<ChatHeaderProps> = ({
       </div>
       <div className="chat-header-actions">
         {modelOptions.length > 1 ? (
-          <label className="chat-model-control">
-            <select
+          <div className="chat-model-control" ref={modelMenuRef}>
+            <button
+              type="button"
+              className="chat-model-trigger"
               aria-label="AI model"
-              title={modelOptions.find((option) => option.value === selectedModel)?.label}
-              value={selectedModel}
+              aria-expanded={modelMenuOpen}
+              title={activeModelOption?.label}
               disabled={modelSelectionDisabled}
-              onChange={(event) => onModelChange(event.target.value)}
+              onClick={() => setModelMenuOpen((open) => !open)}
             >
-              {modelOptions.map((option) => (
-                <option key={option.value} value={option.value}>{option.label}</option>
-              ))}
-            </select>
-            <svg viewBox="0 0 12 8" aria-hidden="true"><path d="m1 1 5 5 5-5" /></svg>
-          </label>
+              <span>{activeModelOption?.label ?? 'Select model'}</span>
+              <svg viewBox="0 0 12 8" aria-hidden="true"><path d="m1 1 5 5 5-5" /></svg>
+            </button>
+            {modelMenuOpen && (
+              <div className="chat-model-menu" role="group" aria-label="AI model options">
+                {modelOptions.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    className="chat-model-option"
+                    aria-current={option.value === selectedModel ? 'true' : undefined}
+                    onClick={() => {
+                      setModelMenuOpen(false)
+                      onModelChange(option.value)
+                    }}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         ) : singleModelOption && activeModelOption ? (
           <span
             className="chat-model-single"
