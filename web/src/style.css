@@ -7636,6 +7636,7 @@ body:has(.view[data-view="workout"] .workout-detail.active) {
   flex: 0 1 auto;
   align-items: center;
   gap: 8px;
+  min-width: 0;
 }
 
 .view[data-view="home"] .chat-model-trigger {
@@ -7733,7 +7734,9 @@ body:has(.view[data-view="workout"] .workout-detail.active) {
 .view[data-view="home"] .chat-model-single {
   display: inline-flex;
   align-items: center;
-  width: 100%;
+  flex: 0 1 194px;
+  width: 194px;
+  min-width: 0;
   min-height: 40px;
   padding: 0 15px;
   border: 1px solid rgba(7, 26, 53, 0.08);
