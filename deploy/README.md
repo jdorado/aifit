@@ -8,6 +8,10 @@ legacy API stays available for rollback.
 Production values stay on the VM in `/etc/aifit/aifit-api.env`. The binding
 registry and application token are separate owner-only files at the paths in
 `compose.prod.yml`; neither belongs in this repository or in Vercel.
+The curated account model policy is the required private file
+`/etc/aifit/aifit-model-policy.json`. Compose mounts it read-only and sets
+`AIFIT_MODEL_POLICY_FILE`; a missing file blocks deployment instead of exposing
+the full Ez catalog.
 
 GitHub Actions runs API tests on pull requests and deploys `main` to the VM with
 a restricted SSH key. The VM accepts that key only for the fixed

@@ -31,7 +31,8 @@ fi
 for file in \
   /etc/aifit/aifit-api.env \
   /etc/aifit/aifit-api-bindings.json \
-  /etc/aifit/aifit-application-token; do
+  /etc/aifit/aifit-application-token \
+  /etc/aifit/aifit-model-policy.json; do
   if [[ ! -f "$file" || -L "$file" ]]; then
     echo "Required regular secret/config file is missing: $file" >&2
     exit 1
