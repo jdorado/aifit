@@ -31,6 +31,8 @@ services:
     volumes:
       - /etc/aifit/aifit-api-bindings.json:/run/secrets/aifit-api-bindings.json:ro
       - /etc/aifit/aifit-application-token:/run/secrets/aifit-application-token:ro
+      - /etc/aifit/aifit-application-token-ale:/run/secrets/aifit-application-token-ale:ro
+      - /etc/aifit/aifit-application-token-dad:/run/secrets/aifit-application-token-dad:ro
       - /etc/aifit/aifit-model-policy.json:/run/config/aifit-model-policy.json:ro
     command:
       - uvicorn
