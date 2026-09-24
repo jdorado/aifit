@@ -137,6 +137,24 @@ const actualToSetState = (actual: BackendWorkoutSet['actual']): SetState => {
   }
 }
 
+// Legacy inherit: an unlogged set starts from the last logged actual of the
+// same exercise, so reopening a workout shows what the user did last set
+// instead of the plan target. Skipped sets carry nothing and clear nothing.
+const buildSetStates = (sets: BackendWorkoutSet[]): SetState[] => {
+  let carried: { weight: string; metric: string } | null = null
+  return sets.map((set) => {
+    const state = actualToSetState(set.actual)
+    if (set.actual) {
+      if (set.actual.status === 'completed') {
+        carried = { weight: state.weight, metric: state.metric }
+      }
+      return state
+    }
+    if (!carried) return state
+    return { ...state, weight: carried.weight, metric: carried.metric, value_source: 'accepted_target' }
+  })
+}
+
 const sectionLabel = (kind: BackendSegment['kind']) => {
   switch (kind) {
     case 'straight_sets': return 'Strength'
@@ -269,7 +287,7 @@ export const backendWorkoutToSession = (
     for (const item of [...segment.items].sort((a, b) => a.order - b.order)) {
       const exercise = toExercise(segment, item)
       exercises.push(exercise)
-      setLogs[exercise.id] = item.sets.map((set) => actualToSetState(set.actual))
+      setLogs[exercise.id] = buildSetStates(item.sets)
       exerciseSummaries.push(summarizeActuals(item.sets, exercise.name, exercise.metric))
     }
   }

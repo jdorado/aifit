@@ -134,8 +134,11 @@ when ported they need canonical API contracts and the app/agent split above.
    always-visible buttons.
 3. **Fixed:** a typed rep/weight in the next-set hero did not carry to the
    remaining unlogged sets, so the following set fell back to the suggested
-   target. Restored the legacy propagation (hero inputs only; editing a logged
-   set stays local), covered by `web/scripts/workout_set_inherit_smoke.cjs`.
+   target. Restored both halves of the legacy behavior: hero typing propagates
+   to remaining unlogged sets (editing a logged set stays local), and the
+   canonical read carries the last logged actual into the following unlogged
+   sets, so reopening a workout shows the logged value instead of the plan
+   target. Covered by `web/scripts/workout_set_inherit_smoke.cjs`.
 4. **Open (owner: API/agent artifact):** an override on a partially logged day
    emits two segments with the same title — the preserved logged history and
    the new plan — so the UI shows the same circuit twice, one `Done`, one open.
