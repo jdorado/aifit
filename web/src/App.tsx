@@ -2397,28 +2397,33 @@ const App = () => {
     await mergeBackendChatHistory(await response.json() as ChatHistoryPayloadItem[])
   }, [getPrivyAuthHeaders, isBackendHealthy, mergeBackendChatHistory])
 
+  const fetchFreshModelControl = useCallback(async (scope?: string) => {
+    const url = scope ? `${API_BASE_URL}/chat/models?scope=${scope}` : `${API_BASE_URL}/chat/models`
+    const response = await apiFetch(url, {
+      headers: await getPrivyAuthHeaders(),
+    })
+    if (!response.ok) throw new Error(`Failed to load Ez models (${response.status})`)
+    return (await response.json()) as ModelControl
+  }, [getPrivyAuthHeaders])
+
   const refreshModelControl = useCallback(async () => {
     if (!privyReady || !privyAuthenticated) {
       setModelControl(null)
       return
     }
-    const response = await apiFetch(`${API_BASE_URL}/chat/models`, {
-      headers: await getPrivyAuthHeaders(),
-    })
-    if (!response.ok) throw new Error(`Failed to load Ez models (${response.status})`)
-    setModelControl(await response.json() as ModelControl)
-  }, [getPrivyAuthHeaders, privyAuthenticated, privyReady])
+    setModelControl(await fetchFreshModelControl())
+  }, [fetchFreshModelControl, privyAuthenticated, privyReady])
 
   const handleModelSelection = useCallback(async (value: string) => {
     const option = modelOptions.find((item) => item.value === value)
     if (!option || !modelControl || modelSelectionPending) return
     setModelSelectionPending(true)
-    try {
+    const postModelChoice = async (expectedSession: string | null) => {
       const response = await apiFetch(`${API_BASE_URL}/chat/models`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...await getPrivyAuthHeaders() },
         body: JSON.stringify({
-          expected_session: modelControl.active_session_id,
+          expected_session: expectedSession,
           cli: option.cli,
           provider: option.provider,
           model: option.model,
@@ -2426,7 +2431,23 @@ const App = () => {
         }),
       })
       if (!response.ok) throw new Error(`Failed to select Ez model (${response.status})`)
-      setModelControl(await response.json() as ModelControl)
+      return (await response.json()) as ModelControl
+    }
+    try {
+      try {
+        setModelControl(await postModelChoice(modelControl.active_session_id))
+      } catch {
+        // The stored active session can go stale (another tab or a prior
+        // switch rotated it) and Ez rejects the guarded POST. Reload the
+        // fresh control and retry once with its session instead of leaving
+        // the picker stuck on the old model.
+        const fresh = await fetchFreshModelControl()
+        if (selectedModelValueFor(fresh) === value) {
+          setModelControl(fresh)
+        } else {
+          setModelControl(await postModelChoice(fresh.active_session_id))
+        }
+      }
       setMessages([])
       setChatInput('')
     } catch (error) {
@@ -2435,30 +2456,26 @@ const App = () => {
     } finally {
       setModelSelectionPending(false)
     }
-  }, [getPrivyAuthHeaders, modelControl, modelOptions, modelSelectionPending, refreshModelControl])
+  }, [fetchFreshModelControl, getPrivyAuthHeaders, modelControl, modelOptions, modelSelectionPending, refreshModelControl])
 
   const refreshMiniModelControl = useCallback(async () => {
     if (!privyReady || !privyAuthenticated) {
       setMiniModelControl(null)
       return
     }
-    const response = await apiFetch(`${API_BASE_URL}/chat/models?scope=${MINI_CHAT_SCOPE}`, {
-      headers: await getPrivyAuthHeaders(),
-    })
-    if (!response.ok) throw new Error(`Failed to load mini-chat Ez models (${response.status})`)
-    setMiniModelControl(await response.json() as ModelControl)
-  }, [getPrivyAuthHeaders, privyAuthenticated, privyReady])
+    setMiniModelControl(await fetchFreshModelControl(MINI_CHAT_SCOPE))
+  }, [fetchFreshModelControl, privyAuthenticated, privyReady])
 
   const handleMiniModelSelection = useCallback(async (value: string) => {
     const option = miniModelOptions.find((item) => item.value === value)
     if (!option || !miniModelControl || miniModelSelectionPending) return
     setMiniModelSelectionPending(true)
-    try {
+    const postMiniModelChoice = async (expectedSession: string | null) => {
       const response = await apiFetch(`${API_BASE_URL}/chat/models`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...await getPrivyAuthHeaders() },
         body: JSON.stringify({
-          expected_session: miniModelControl.active_session_id,
+          expected_session: expectedSession,
           scope: MINI_CHAT_SCOPE,
           cli: option.cli,
           provider: option.provider,
@@ -2467,14 +2484,28 @@ const App = () => {
         }),
       })
       if (!response.ok) throw new Error(`Failed to select mini-chat Ez model (${response.status})`)
-      setMiniModelControl(await response.json() as ModelControl)
+      return (await response.json()) as ModelControl
+    }
+    try {
+      try {
+        setMiniModelControl(await postMiniModelChoice(miniModelControl.active_session_id))
+      } catch {
+        // Same stale-session recovery as the main picker: reload the fresh
+        // scope control and retry once with its session.
+        const fresh = await fetchFreshModelControl(MINI_CHAT_SCOPE)
+        if (selectedModelValueFor(fresh) === value) {
+          setMiniModelControl(fresh)
+        } else {
+          setMiniModelControl(await postMiniModelChoice(fresh.active_session_id))
+        }
+      }
     } catch (error) {
       console.error('Mini-chat model selection failed:', error)
       await refreshMiniModelControl().catch(() => undefined)
     } finally {
       setMiniModelSelectionPending(false)
     }
-  }, [getPrivyAuthHeaders, miniModelControl, miniModelOptions, miniModelSelectionPending, refreshMiniModelControl])
+  }, [fetchFreshModelControl, getPrivyAuthHeaders, miniModelControl, miniModelOptions, miniModelSelectionPending, refreshMiniModelControl])
 
   const handleAiReply = useCallback(async (reply: string, messageId?: string | null, modelLabel?: string) => {
     const displayMessage = reply.trim()
