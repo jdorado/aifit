@@ -16,6 +16,7 @@ const planListSource = readSource('src', 'components', 'workout', 'WorkoutPlanLi
 const stringsSource = readSource('src', 'i18n', 'strings.ts')
 const adapterSource = readSource('src', 'utils', 'backendWorkoutAdapter.ts')
 const testWorkoutSource = readSource('src', 'data', 'testWorkout.ts')
+const styleSource = readSource('src', 'style.css')
 
 const has = (haystack, needle, message) => assert.ok(haystack.includes(needle), `${message} (missing: ${needle})`)
 
@@ -95,7 +96,18 @@ has(planListSource, 'moveExerciseInList', 'the optimistic preview must reuse the
 has(planListSource, 'orderExercisesBySegments', 'the optimistic preview must reuse the block order transform')
 has(planListSource, 'onPointerDown={(event) => beginDrag(event, payload)}', 'the grip must start the drag on pointer down')
 has(planListSource, 'setPointerCapture(event.pointerId)', 'the drag must capture the pointer')
+has(planListSource, 'if (commit) onTap?.()', 'a tap on the grip must fall through to the row')
 assert.ok(!planListSource.includes('onPointerDown={canEditPlan'), 'drag starts must not fire outside edit mode')
+
+// 8c. The grip is invisible: no icon, no layout width, still draggable.
+assert.ok(!planListSource.includes('GripIcon'), 'the grip must not render an icon')
+const gripRuleStart = styleSource.indexOf('.plan-drag-handle {')
+assert.ok(gripRuleStart >= 0, 'the grip must keep a drag zone')
+const gripRule = styleSource.slice(gripRuleStart, styleSource.indexOf('}', gripRuleStart))
+assert.ok(gripRule.includes('position: absolute'), 'the grip must stay out of the card layout')
+assert.ok(gripRule.includes('opacity: 0'), 'the grip must stay invisible')
+assert.ok(gripRule.includes('touch-action: none'), 'the grip must not scroll the list while dragging')
+assert.ok(!styleSource.includes('.plan-drag-handle.compact'), 'the grip must not have a visible variant')
 
 // 9. The circuit-key fix must stay intact.
 has(planListSource, 'key={`circuit-row-${groupKey}`}', 'the circuit-key fix must remain')

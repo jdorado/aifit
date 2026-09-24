@@ -104,17 +104,6 @@ const TrashIcon = () => (
   </svg>
 )
 
-const GripIcon = () => (
-  <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true" focusable="false">
-    <circle cx="9" cy="6" r="1.7" />
-    <circle cx="15" cy="6" r="1.7" />
-    <circle cx="9" cy="12" r="1.7" />
-    <circle cx="15" cy="12" r="1.7" />
-    <circle cx="9" cy="18" r="1.7" />
-    <circle cx="15" cy="18" r="1.7" />
-  </svg>
-)
-
 const findScrollContainer = (element: HTMLElement): HTMLElement | null => {
   let node = element.parentElement
   while (node) {
@@ -264,6 +253,24 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
       [sectionKey]: !current[sectionKey],
     }))
   }, [])
+
+  const handleRowTap = (id: string, type: ActiveEntryType) => {
+    if (planSwipeIgnoreClickRef.current) return
+    if (planSwipeActiveId !== null) {
+      setPlanSwipeActiveId(null)
+      return
+    }
+    onSelectEntry(id, type)
+  }
+
+  const handleStageTap = (sectionKey: string) => {
+    if (planSwipeIgnoreClickRef.current) return
+    if (planSwipeActiveId !== null) {
+      setPlanSwipeActiveId(null)
+      return
+    }
+    toggleSection(sectionKey)
+  }
 
   const handleRemoveExercise = useCallback((exercise: WorkoutExercise) => {
     if (!window.confirm(t('workout.removeExerciseConfirm', { name: exercise.name }))) return
@@ -509,7 +516,7 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
     updateDragTarget(event.clientY)
   }
 
-  const finishDrag = (event: ReactPointerEvent<HTMLButtonElement>, commit: boolean) => {
+  const finishDrag = (event: ReactPointerEvent<HTMLButtonElement>, commit: boolean, onTap?: () => void) => {
     const live = liveDragRef.current
     if (!live || event.pointerId !== live.pointerId) return
     liveDragRef.current = null
@@ -518,7 +525,11 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
     if (handle.hasPointerCapture?.(event.pointerId)) {
       handle.releasePointerCapture(event.pointerId)
     }
-    if (!commit || !live.moved) return
+    if (!commit || !live.moved) {
+      // The grip is invisible, so a tap on it must behave like a tap on the row.
+      if (commit) onTap?.()
+      return
+    }
     void commitDrag(live)
   }
 
@@ -548,28 +559,27 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
     return () => cancelAnimationFrame(frame)
   }, [drag !== null])
 
+  // Invisible grip: the drag zone keeps the card design untouched, so it has no
+  // icon and no layout width. A tap on it stays a tap on the row.
   const renderDragHandle = (
     payload: DragPayload,
     label: string,
-    className: string,
     testId: string,
+    onTap: () => void,
   ) => (
     <button
-      className={className}
+      className="plan-drag-handle"
       type="button"
       data-plan-drag={testId}
       aria-label={label}
-      title={label}
       onPointerDown={(event) => beginDrag(event, payload)}
       onPointerMove={handleDragPointerMove}
-      onPointerUp={(event) => finishDrag(event, true)}
+      onPointerUp={(event) => finishDrag(event, true, onTap)}
       onPointerCancel={(event) => finishDrag(event, false)}
       onTouchStart={(event) => event.stopPropagation()}
       onTouchEnd={(event) => event.stopPropagation()}
       onClick={(event) => event.preventDefault()}
-    >
-      <GripIcon />
-    </button>
+    />
   )
 
   const renderStageHeader = (stage: SectionInfo, key: string, colorSlot: number, blockId: string, sectionSegmentIds: string[]) => {
@@ -597,7 +607,14 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
         onTouchStart={canEditPlan ? handlePlanTouchStart(stageSwipeId) : undefined}
         onTouchEnd={canEditPlan ? handlePlanTouchEnd(stageSwipeId) : undefined}
       >
-        {canRemoveSection ? renderDragHandle({ kind: 'block', blockId, segmentIds: sectionSegmentIds }, t('workout.moveSection'), 'plan-drag-handle', 'block') : null}
+        {canRemoveSection
+          ? renderDragHandle(
+            { kind: 'block', blockId, segmentIds: sectionSegmentIds },
+            t('workout.moveSection'),
+            'block',
+            () => handleStageTap(stage.key),
+          )
+          : null}
         <button
           className={`workout-stage ${collapsed ? 'is-collapsed' : ''}`}
           type="button"
@@ -764,7 +781,12 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
                         : undefined}
                     >
                       {canEditPlan
-                        ? renderDragHandle({ kind: 'item', itemId: item.id, segmentId: circuitSegmentId }, t('workout.moveExercise'), 'plan-drag-handle compact', 'item')
+                        ? renderDragHandle(
+                          { kind: 'item', itemId: item.id, segmentId: circuitSegmentId },
+                          t('workout.moveExercise'),
+                          'item',
+                          () => handleRowTap(item.id, 'exercise'),
+                        )
                         : null}
                       <button
                         className="circuit-preview-btn"
@@ -845,7 +867,12 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
           onTouchEnd={canEditPlan ? handlePlanTouchEnd(exercise.id) : undefined}
         >
           {canEditPlan && segmentId
-            ? renderDragHandle({ kind: 'item', itemId: exercise.id, segmentId }, t('workout.moveExercise'), 'plan-drag-handle', 'item')
+            ? renderDragHandle(
+              { kind: 'item', itemId: exercise.id, segmentId },
+              t('workout.moveExercise'),
+              'item',
+              () => handleRowTap(exercise.id, 'exercise'),
+            )
             : null}
           <button
             className={`workout-card ${exercise.status === 'skip' ? 'is-skip' : ''} ${isCompleted ? 'is-completed' : ''}`}

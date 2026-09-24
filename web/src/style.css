@@ -1375,33 +1375,27 @@ p {
   overflow: hidden;
   border-radius: var(--radius-md);
   margin-bottom: 12px;
-  display: flex;
-  align-items: center;
-  gap: 4px;
 }
 
 .plan-row .workout-card {
-  flex: 1;
-  min-width: 0;
   margin-bottom: 0;
   transition: transform 0.2s ease;
 }
 
-/* Reorder affordance: a grip the user holds to drag a section, circuit or
-   exercise up/down. touch-action keeps the gesture from scrolling the list. */
+/* Reorder affordance without touching the card design: an invisible strip on
+   the row's left edge. touch-action keeps the gesture from scrolling the list,
+   and a tap on the strip stays a tap on the row. */
 .plan-drag-handle {
-  flex: 0 0 auto;
-  align-self: stretch;
-  width: 32px;
-  min-height: 44px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 30px;
+  z-index: 3;
   padding: 0;
   border: none;
-  border-radius: var(--radius-md);
   background: transparent;
-  color: var(--ink-tertiary);
+  opacity: 0;
   cursor: grab;
   touch-action: none;
   -webkit-user-select: none;
@@ -1413,22 +1407,11 @@ p {
 .plan-row.show-actions .plan-drag-handle,
 .workout-stage-row.show-actions .plan-drag-handle,
 .circuit-preview-item.show-actions .plan-drag-handle {
-  opacity: 0;
   pointer-events: none;
 }
 
 .plan-drag-handle:active {
   cursor: grabbing;
-  color: var(--ink-secondary);
-}
-
-.plan-drag-handle svg {
-  pointer-events: none;
-}
-
-.plan-drag-handle.compact {
-  width: 26px;
-  min-height: 34px;
 }
 
 .plan-row.is-dragging,
