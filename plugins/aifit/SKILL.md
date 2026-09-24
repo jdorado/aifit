@@ -40,7 +40,7 @@ Its `run.application.context` carries only these references:
 
 - `workoutId`: the `wrk_...` record holding the instance
 - `exerciseInstanceId`: the `wex_...` target item inside that record
-- `scopeId`: the app's opaque thread key for this exercise, not an ID to parse
+- `scopeId`: the app's opaque thread key for this slot (stable across swaps), not an ID to parse
 - `referenceDate`: the `YYYY-MM-DD` training day
 - `expectedRevision`: the current workout revision for revision-guarded writes
 

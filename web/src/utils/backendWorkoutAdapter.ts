@@ -240,6 +240,7 @@ const toExercise = (segment: BackendSegment, item: BackendWorkoutItem): WorkoutE
   return {
     id: item.exercise_instance_id,
     segmentId: segment.segment_id,
+    slotId: item.slot_id,
     name: snapshot.name,
     standardName: snapshot.name,
     exerciseKey: snapshot.exercise_id,

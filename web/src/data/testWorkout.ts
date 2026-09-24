@@ -74,6 +74,10 @@ export type WorkoutExercise = {
     // this to address `POST /segments/{segment_id}/remove`; display grouping
     // still uses circuitGroupKey().
     segmentId?: string
+    // Canonical blueprint slot identity. Stable across swaps (a swap keeps
+    // slot_id while the exercise instance id may change), so mini-chat
+    // threads key on this with id as fallback.
+    slotId?: string
     name: string
     standardName?: string
     exerciseKey?: string

@@ -2275,7 +2275,12 @@ const App = () => {
 
   const getCoachScopeId = useCallback((exerciseId: string) => {
     const sessionId = currentWorkoutSessionIdRef.current || getWorkoutSessionId()
-    return `coach:${sessionId}:${exerciseId}`
+    // Key the thread by blueprint slot (stable across swaps) with the
+    // exercise instance as fallback for slot-less items. The payload still
+    // sends the current exercise_instance_id so the agent answers from the
+    // exercise the user sees.
+    const slotId = workoutExercisesRef.current.find((exercise) => exercise.id === exerciseId)?.slotId
+    return `coach:${sessionId}:${slotId || exerciseId}`
   }, [])
 
   const handleCoachReply = useCallback(async (
