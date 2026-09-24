@@ -2567,8 +2567,12 @@ const App = () => {
         const tombstone = clearedWorkoutAtRef.current[session.date]
         return !tombstone || (session.updated_at ? session.updated_at > tombstone : false)
       })
+    const ownerId = coachActAsOwnerId ?? currentUserId
     sessions.forEach((session) => {
-      const ownerKey = `${currentUserId}:${session.date}`
+      // Coach mode must register the canonical refs under the act-as owner:
+      // every act-as read/edit resolves them through that key, so keying by
+      // the coach's user id left logging and plan edits disabled.
+      const ownerKey = `${ownerId}:${session.date}`
       // Never resurrect refs for a deleted record either; newer sessions
       // already passed the tombstone filter above.
       const tombstone = clearedWorkoutAtRef.current[session.date]
@@ -2580,6 +2584,7 @@ const App = () => {
     return sessions
   }, [
     canQuerySavedWorkoutSessions,
+    coachActAsOwnerId,
     currentUserId,
     getPrivyAuthHeaders,
     privyAuthenticated,
