@@ -6,6 +6,7 @@ type WorkoutOverflowMenuProps = {
   canGenerateWithCoach: boolean
   canCopyLastWeek: boolean
   canClearWorkout: boolean
+  onShowHistory: () => void
   onGenerateWorkout: () => void
   onGenerateWithCoach: () => void
   onCopyLastWeek: () => void
@@ -18,6 +19,7 @@ const WorkoutOverflowMenu: FC<WorkoutOverflowMenuProps> = ({
   canGenerateWithCoach,
   canCopyLastWeek,
   canClearWorkout,
+  onShowHistory,
   onGenerateWorkout,
   onGenerateWithCoach,
   onCopyLastWeek,
@@ -97,6 +99,27 @@ const WorkoutOverflowMenu: FC<WorkoutOverflowMenuProps> = ({
       </button>
       {open ? (
         <div className="header-menu-panel" role="menu">
+          <button className="header-menu-item" type="button" role="menuitem" onClick={() => closeAfter(onShowHistory)}>
+            <svg className="header-menu-item-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M3 12a9 9 0 1 0 3-6.7L3 8"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.6"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+              <path
+                d="M3 3v5h5M12 7v5l3 2"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.6"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+            <span>{t('workout.workoutHistoryAction')}</span>
+          </button>
           <button className="header-menu-item" type="button" role="menuitem" onClick={() => closeAfter(onRefresh)}>
             <svg className="header-menu-item-icon" viewBox="0 0 24 24" aria-hidden="true">
               <path

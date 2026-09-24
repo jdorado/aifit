@@ -4,8 +4,9 @@ import { marked } from 'marked'
 import { formatDurationForDisplay, normalizeWorkoutTargetText } from './utils/workoutDisplay'
 import type { WorkoutExercise, WorkoutExtra, WorkoutFeedbackPreset } from './data/testWorkout'
 import { circuitGroupKey } from './data/testWorkout'
-import { backendWorkoutToSession, type BackendWorkoutReceipt } from './utils/backendWorkoutAdapter'
+import { backendWorkoutToSession, type BackendWorkout, type BackendWorkoutReceipt } from './utils/backendWorkoutAdapter'
 import { fetchSwapCandidates, readApiError, swapErrorKey, SwapCandidatesError, type SwapCandidate, type SwapCandidates } from './utils/swapCandidates'
+import { fetchWorkoutHistory } from './utils/workoutHistory'
 import { I18nProvider, createI18n } from './i18n'
 import { normalizeLanguage, type Language } from './i18n/strings'
 import TabBar from './components/TabBar'
@@ -16,6 +17,7 @@ import WorkoutView from './views/WorkoutView'
 import ProfileView, { type CoachActAsTarget, type CoachPermissions } from './views/ProfileView'
 import TelegramLink from './components/profile/TelegramLink'
 import WorkoutOverflowMenu from './components/workout/WorkoutOverflowMenu'
+import WorkoutHistorySheet from './components/workout/WorkoutHistorySheet'
 import ChatOverflowMenu from './components/chat/ChatOverflowMenu'
 import type {
   ActiveEntryType,
@@ -984,6 +986,11 @@ const App = () => {
   const [swapError, setSwapError] = useState<string | null>(null)
   const [swapCandidates, setSwapCandidates] = useState<SwapCandidate[]>([])
   const [swappingCandidateId, setSwappingCandidateId] = useState<string | null>(null)
+  const [workoutHistoryOpen, setWorkoutHistoryOpen] = useState(false)
+  const [workoutHistoryLoading, setWorkoutHistoryLoading] = useState(false)
+  const [workoutHistoryError, setWorkoutHistoryError] = useState<string | null>(null)
+  const [workoutHistoryItems, setWorkoutHistoryItems] = useState<BackendWorkout[]>([])
+  const workoutHistoryRequestRef = useRef(0)
   const swapResponseRef = useRef<SwapCandidates | null>(null)
   const swapExerciseIdRef = useRef<string | null>(null)
   const [chatInput, setChatInput] = useState('')
@@ -2567,8 +2574,12 @@ const App = () => {
         const tombstone = clearedWorkoutAtRef.current[session.date]
         return !tombstone || (session.updated_at ? session.updated_at > tombstone : false)
       })
+    const ownerId = coachActAsOwnerId ?? currentUserId
     sessions.forEach((session) => {
-      const ownerKey = `${currentUserId}:${session.date}`
+      // Coach mode must register the canonical refs under the act-as owner:
+      // every act-as read/edit resolves them through that key, so keying by
+      // the coach's user id left logging and plan edits disabled.
+      const ownerKey = `${ownerId}:${session.date}`
       // Never resurrect refs for a deleted record either; newer sessions
       // already passed the tombstone filter above.
       const tombstone = clearedWorkoutAtRef.current[session.date]
@@ -2580,6 +2591,7 @@ const App = () => {
     return sessions
   }, [
     canQuerySavedWorkoutSessions,
+    coachActAsOwnerId,
     currentUserId,
     getPrivyAuthHeaders,
     privyAuthenticated,
@@ -2589,7 +2601,7 @@ const App = () => {
 
   const applySavedWorkoutSessionsToWeek = useCallback((
     sessions: WorkoutSession[],
-    options: { preserveSelectedDate?: boolean, preserveActiveEntry?: boolean } = {},
+    options: { preserveSelectedDate?: boolean, selectedDate?: string, preserveActiveEntry?: boolean } = {},
   ) => {
     if (sessions.length === 0) return false
 
@@ -2652,9 +2664,14 @@ const App = () => {
     })
 
     if (appliedDates.length === 0) return false
-    const selectedDate = options.preserveSelectedDate
-      ? (selectedDay?.date ?? todayId)
-      : appliedDates[appliedDates.length - 1]
+    // An explicit selectedDate wins: callers that just navigated (e.g. the
+    // history timeline) pin the date the user tapped. preserveSelectedDate
+    // reads selectedDay from the closure, which is stale inside a fetch
+    // continuation and would yank the view back to the pre-click day.
+    const selectedDate = options.selectedDate
+      ?? (options.preserveSelectedDate
+        ? (selectedDay?.date ?? todayId)
+        : appliedDates[appliedDates.length - 1])
     const previousHydrationState = sessionHydrationInProgressRef.current
     sessionHydrationInProgressRef.current = true
     try {
@@ -2846,31 +2863,6 @@ const App = () => {
     todayId,
     weekStartDayIndex,
   ])
-
-  // Agent-side changes (new blueprint revision, override) arrive with no
-  // push signal, and the initial hydration runs once per session. Revalidate
-  // the visible strip when the app regains focus so an externally published
-  // revision replaces the stale snapshot. Cooldown keeps background tab
-  // churn to one cheap range fetch per minute at most.
-  const lastFocusRefreshRef = useRef(0)
-  useEffect(() => {
-    if (!currentUserId || !canQuerySavedWorkoutSessions || !isBackendHealthy) return
-    const revalidate = () => {
-      const now = Date.now()
-      if (now - lastFocusRefreshRef.current < 60_000) return
-      lastFocusRefreshRef.current = now
-      void refreshVisibleWorkoutSessions().catch(() => {})
-    }
-    const onVisibility = () => {
-      if (document.visibilityState === 'visible') revalidate()
-    }
-    window.addEventListener('focus', revalidate)
-    document.addEventListener('visibilitychange', onVisibility)
-    return () => {
-      window.removeEventListener('focus', revalidate)
-      document.removeEventListener('visibilitychange', onVisibility)
-    }
-  }, [currentUserId, canQuerySavedWorkoutSessions, isBackendHealthy, refreshVisibleWorkoutSessions])
 
   const restoreSetState = useCallback((exerciseId: string, index: number, previous?: SetSyncRevert | null) => {
     const currentList = setLogsRef.current[exerciseId]
@@ -3217,22 +3209,57 @@ const App = () => {
     }
   }, [canQuerySavedWorkoutSessions, currentUserId, fetchBackendChatHistory, refreshVisibleWorkoutSessions])
 
-  useEffect(() => {
-    // Agent changes can land outside this tab (e.g. Telegram) with no chat
-    // completion here to trigger a refresh. Re-pull the visible strip when
-    // the tab becomes visible again; the refresh itself is a no-op while
-    // signed out and merges idempotently.
-    const onVisible = () => {
-      if (document.visibilityState !== 'visible') return
-      void refreshVisibleWorkoutSessions().catch(() => {})
+  const handleOpenWorkoutHistory = useCallback(() => {
+    if (!canQuerySavedWorkoutSessions) return
+    setWorkoutHistoryOpen(true)
+    setWorkoutHistoryLoading(true)
+    setWorkoutHistoryError(null)
+    const requestId = workoutHistoryRequestRef.current + 1
+    workoutHistoryRequestRef.current = requestId
+    fetchWorkoutHistory({
+      apiBaseUrl: API_BASE_URL,
+      getHeaders: getPrivyAuthHeaders,
+      actAsLinkId: coachActAsLinkId,
+      daysBack: 90,
+      endDateId: todayId,
+    })
+      .then((workouts) => {
+        if (workoutHistoryRequestRef.current !== requestId) return
+        setWorkoutHistoryItems(workouts)
+      })
+      .catch(() => {
+        if (workoutHistoryRequestRef.current !== requestId) return
+        setWorkoutHistoryItems([])
+        setWorkoutHistoryError(t('workout.workoutHistoryError'))
+      })
+      .finally(() => {
+        if (workoutHistoryRequestRef.current === requestId) setWorkoutHistoryLoading(false)
+      })
+  }, [canQuerySavedWorkoutSessions, coachActAsLinkId, getPrivyAuthHeaders, t, todayId])
+
+  const handleSelectWorkoutHistoryDate = useCallback((dateId: string) => {
+    setWorkoutHistoryOpen(false)
+    handleActiveViewChange('workout')
+    handleSelectDay(-1, dateId)
+    if (canQuerySavedWorkoutSessions) {
+      fetchWorkoutSessionsByDates([dateId])
+        .then((sessions) => {
+          if (sessions.length > 0) {
+            applySavedWorkoutSessionsToWeek(sessions, {
+              selectedDate: dateId,
+              preserveActiveEntry: true,
+            })
+          }
+        })
+        .catch(() => {})
     }
-    document.addEventListener('visibilitychange', onVisible)
-    window.addEventListener('focus', onVisible)
-    return () => {
-      document.removeEventListener('visibilitychange', onVisible)
-      window.removeEventListener('focus', onVisible)
-    }
-  }, [refreshVisibleWorkoutSessions])
+  }, [
+    applySavedWorkoutSessionsToWeek,
+    canQuerySavedWorkoutSessions,
+    fetchWorkoutSessionsByDates,
+    handleActiveViewChange,
+    handleSelectDay,
+  ])
 
   const fetchChatReply = useCallback(async (
     payload: ChatRequestPayload,
@@ -4750,6 +4777,9 @@ const App = () => {
             getAuthHeaders={getPrivyAuthHeaders}
             weekDays={weekDaySummaries}
             selectedDayLabel={selectedDayLabel}
+            selectedDateId={selectedDay?.date ?? null}
+            todayId={todayId}
+            onBackToToday={() => handleSelectDay(-1, todayId)}
             hasWeekWorkouts={hasWeekWorkouts}
             loading={sessionLoading}
             exercises={workoutExercisesRef.current}
@@ -4883,6 +4913,7 @@ const App = () => {
               canGenerateWithCoach={canGenerateWorkoutSelectedDay && canQuerySavedWorkoutSessions && isBackendHealthy && coachChatEnabled}
               canCopyLastWeek={canGenerateWorkoutSelectedDay && canQuerySavedWorkoutSessions && isBackendHealthy}
               canClearWorkout={canClearSelectedDay && isBackendHealthy}
+              onShowHistory={handleOpenWorkoutHistory}
               onGenerateWorkout={handleGenerateDayWorkout}
               onGenerateWithCoach={handleGenerateDayWorkoutWithCoach}
               onCopyLastWeek={handleCopyLastWeek}
@@ -4899,6 +4930,15 @@ const App = () => {
           onToggleAutoStart={setRestAutoStart}
         />
         <MiniTimer restState={restState} onMaximize={maximizeRest} />
+        <WorkoutHistorySheet
+          open={workoutHistoryOpen}
+          loading={workoutHistoryLoading}
+          error={workoutHistoryError}
+          workouts={workoutHistoryItems}
+          selectedDate={selectedDay?.date ?? null}
+          onSelectDate={handleSelectWorkoutHistoryDate}
+          onClose={() => setWorkoutHistoryOpen(false)}
+        />
       </div>
     </I18nProvider>
   )

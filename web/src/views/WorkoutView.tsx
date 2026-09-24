@@ -63,6 +63,9 @@ type WorkoutViewProps = {
   actAsLinkId?: string | null
   weekDays: WeekDaySummary[]
   selectedDayLabel: string
+  selectedDateId?: string | null
+  todayId?: string
+  onBackToToday?: () => void
   hasWeekWorkouts: boolean
   loading: boolean
   exercises: WorkoutExercise[]
@@ -144,6 +147,9 @@ const WorkoutView: FC<WorkoutViewProps> = ({
   actAsLinkId = null,
   weekDays,
   selectedDayLabel,
+  selectedDateId = null,
+  todayId = null,
+  onBackToToday,
   hasWeekWorkouts,
   loading,
   exercises,
@@ -195,7 +201,7 @@ const WorkoutView: FC<WorkoutViewProps> = ({
   onMoveItem,
   onExtractItem,
 }) => {
-  const { t } = useI18n()
+  const { t, language } = useI18n()
   const [coachChatOpen, setCoachChatOpen] = useState(false)
   const [coachDraft, setCoachDraft] = useState('')
   const [historyOpen, setHistoryOpen] = useState(false)
@@ -223,9 +229,27 @@ const WorkoutView: FC<WorkoutViewProps> = ({
       : null
   ), [activeEntryType, activeEntryId, extras])
 
+  // The strip only covers the current week. When history jumps to an older
+  // date there is no strip cell to mark, so fall back to null instead of
+  // faking the first day — the viewing banner below owns that state.
   const activeWeekDay = useMemo(() => (
-    weekDays.find((day) => day.isSelected) ?? weekDays[0]
+    weekDays.find((day) => day.isSelected) ?? null
   ), [weekDays])
+  const isViewingOtherDay = Boolean(selectedDateId && todayId && selectedDateId !== todayId)
+  const viewingDateLabel = useMemo(() => {
+    if (!isViewingOtherDay || !selectedDateId) return null
+    const parsed = new Date(`${selectedDateId}T12:00:00`)
+    if (Number.isNaN(parsed.getTime())) return selectedDateId
+    try {
+      return new Intl.DateTimeFormat(language === 'es' ? 'es' : undefined, {
+        weekday: 'long',
+        month: 'short',
+        day: 'numeric',
+      }).format(parsed)
+    } catch {
+      return selectedDateId
+    }
+  }, [isViewingOtherDay, language, selectedDateId])
   const detailTitle = activeExercise?.name ?? activeExtra?.name ?? ''
   const detailSectionColorSlot = useMemo(() => {
     if (activeExercise) {
@@ -586,6 +610,19 @@ const WorkoutView: FC<WorkoutViewProps> = ({
       ) : null}
 
       <WeekStrip days={weekDays} onSelectDay={onSelectDay} />
+
+      {isViewingOtherDay && viewingDateLabel ? (
+        <div className="workout-viewing-banner" role="status">
+          <span className="workout-viewing-text">
+            {t('workout.viewingDate', { date: viewingDateLabel })}
+          </span>
+          {onBackToToday ? (
+            <button type="button" className="workout-viewing-action" onClick={onBackToToday}>
+              {t('workout.backToToday')}
+            </button>
+          ) : null}
+        </div>
+      ) : null}
 
       <WorkoutPlanList
         activeEntryId={activeEntryId}
