@@ -4,6 +4,7 @@ from aifit_api import main
 from aifit_api.workouts import (
     PlanEntryRemoveInput,
     PlanItemMoveInput,
+    PlanItemExtractInput,
     PlanReorderInput,
     SetAddInput,
     SetRemoveInput,
@@ -636,6 +637,42 @@ async def test_move_item_moves_across_segments_and_drops_the_empty_source():
     assert moved["sets"][0]["actual"]["reps"] == 10
     assert moved["sets"][0]["target"] == make_set("set_a1", logged=True)["target"]
     assert moved["exercise_snapshot"] == make_item("wex_a", 1, [])["exercise_snapshot"]
+
+
+@pytest.mark.asyncio
+async def test_extract_bike_between_circuit_and_recovery_keeps_sets_and_membership():
+    database = FakeDatabase()
+    arms = make_segment("seg_arms", 1, [make_item("wex_arm", 1, [make_set("set_arm", logged=True)])])
+    arms["kind"] = "circuit"
+    recovery = make_segment("seg_recovery", 2, [
+        make_item("wex_bike", 1, [make_set("set_bike")]),
+        make_item("wex_stretch", 2, [make_set("set_stretch")]),
+    ])
+    recovery["title"] = "Evening Recovery"
+    insert_workout(database, [arms, recovery])
+    service = WorkoutService(database)
+
+    response = await service.extract_item(
+        "acc_one", "wrk_manual", "wex_bike",
+        PlanItemExtractInput(before_segment_id="seg_recovery", expected_revision=REV, request_id="extract-bike-001"),
+    )
+
+    segments = response["workout"]["segments"]
+    assert response["effect"] == "item_extracted"
+    assert [segment["order"] for segment in segments] == [1, 2, 3]
+    assert [segment["segment_id"] for segment in (segments[0], segments[2])] == ["seg_arms", "seg_recovery"]
+    assert segments[1]["kind"] == "straight_sets"
+    assert segments[1]["title"] == "wex_bike"
+    assert [item["exercise_instance_id"] for item in segments[1]["items"]] == ["wex_bike"]
+    assert [item["exercise_instance_id"] for item in segments[2]["items"]] == ["wex_stretch"]
+    assert segments[1]["items"][0]["sets"][0]["set_id"] == "set_bike"
+    assert segments[0]["items"][0]["sets"][0]["actual"]["reps"] == 10
+
+    replayed = await service.extract_item(
+        "acc_one", "wrk_manual", "wex_bike",
+        PlanItemExtractInput(before_segment_id="seg_recovery", expected_revision=REV, request_id="extract-bike-001"),
+    )
+    assert replayed == response
 
 
 @pytest.mark.asyncio

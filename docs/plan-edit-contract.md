@@ -142,6 +142,13 @@ Body `PlanItemMoveInput`:
 
 ## Browser consumption
 
+Dragging an exercise into the gap between segments uses
+`POST /v1/workouts/{workout_id}/exercises/{exercise_instance_id}/extract` with
+`before_segment_id` (or `null` for the end), `expected_revision`, and
+`request_id`. It creates a standalone `straight_sets` segment titled with the
+exercise name, keeps the item's sets verbatim, and leaves adjacent circuit and
+recovery segments intact. The receipt effect is `item_extracted`.
+
 After a successful mutation the app applies the returned workout with the same
 path it already uses for swap and clear:
 
@@ -167,4 +174,5 @@ same way `clear` does.
 | Remove circuit / section | `POST …/segments/{segment_id}/remove` |
 | Reorder blocks | `POST …/segments/reorder` |
 | Reorder / move an item | `POST …/exercises/{id}/move` |
+| Move an item into its own slot | `POST …/exercises/{id}/extract` |
 | Remove extra | Not applicable: canonical workouts have no extras |

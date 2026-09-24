@@ -410,6 +410,14 @@ class PlanItemMoveInput(StrictModel):
     request_id: str = Field(min_length=1, max_length=160, pattern=r"^[A-Za-z0-9_.:-]+$")
 
 
+class PlanItemExtractInput(StrictModel):
+    """Give an item its own segment before another segment, or at the end."""
+
+    before_segment_id: str | None = Field(default=None, max_length=160)
+    expected_revision: str = Field(pattern=r"^rev_[a-f0-9]{32}$")
+    request_id: str = Field(min_length=1, max_length=160, pattern=r"^[A-Za-z0-9_.:-]+$")
+
+
 class WorkoutNotesInput(StrictModel):
     notes: str = Field(max_length=4_000)
     expected_revision: str = Field(pattern=r"^rev_[a-f0-9]{32}$")
@@ -1296,6 +1304,44 @@ class WorkoutService:
             workout["segments"].remove(source_segment)
         return await self._replace_or_delete_workout(
             account_id, workout_id, input.expected_revision, input.request_id, fingerprint, "item_moved", workout,
+        )
+
+    @transactional_mutation
+    async def extract_item(self, account_id: str, workout_id: str, exercise_instance_id: str, input: PlanItemExtractInput) -> dict[str, Any]:
+        """Move an item into its own non-circuit slot without changing its sets."""
+        fingerprint = _fingerprint({"workout_id": workout_id, "exercise_instance_id": exercise_instance_id, **input.model_dump(mode="json")})
+        prior = await self._receipt(account_id, input.request_id, fingerprint)
+        if prior:
+            return prior
+        workout = await self._editable_workout(account_id, workout_id, input.expected_revision)
+        source = next((segment for segment in workout["segments"] if any(
+            item["exercise_instance_id"] == exercise_instance_id for item in segment["items"]
+        )), None)
+        if source is None:
+            raise WorkoutDomainError("exercise_instance_not_found", "Workout exercise was not found.", 404)
+        if input.before_segment_id is not None and not any(
+            segment["segment_id"] == input.before_segment_id for segment in workout["segments"]
+        ):
+            raise WorkoutDomainError("segment_not_found", "Workout segment was not found.", 404)
+        before_id = input.before_segment_id
+        if before_id == source["segment_id"] and len(source["items"]) == 1:
+            source_index = workout["segments"].index(source)
+            before_id = (workout["segments"][source_index + 1]["segment_id"]
+                         if source_index + 1 < len(workout["segments"]) else None)
+        item = next(item for item in source["items"] if item["exercise_instance_id"] == exercise_instance_id)
+        source["items"].remove(item)
+        if not source["items"]:
+            workout["segments"].remove(source)
+        new_segment = {
+            "segment_id": new_id("seg"), "order": 0, "kind": "straight_sets",
+            "title": item["exercise_snapshot"]["name"], "rounds": 1,
+            "rest_after_round_seconds": 0, "items": [item],
+        }
+        insert_at = next((index for index, segment in enumerate(workout["segments"])
+                          if segment["segment_id"] == before_id), len(workout["segments"]))
+        workout["segments"].insert(insert_at, new_segment)
+        return await self._replace_or_delete_workout(
+            account_id, workout_id, input.expected_revision, input.request_id, fingerprint, "item_extracted", workout,
         )
 
     @transactional_mutation

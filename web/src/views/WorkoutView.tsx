@@ -118,6 +118,7 @@ type WorkoutViewProps = {
   onRemoveSection: (segmentIds: string[]) => void
   onReorderSegments: (segmentIds: string[]) => Promise<boolean>
   onMoveItem: (exerciseId: string, targetSegmentId: string, targetIndex: number) => Promise<boolean>
+  onExtractItem: (exerciseId: string, beforeSegmentId: string | null) => Promise<boolean>
 }
 
 const getSectionToneFromText = (rawHaystack: string): SectionTone => {
@@ -192,6 +193,7 @@ const WorkoutView: FC<WorkoutViewProps> = ({
   onRemoveSection,
   onReorderSegments,
   onMoveItem,
+  onExtractItem,
 }) => {
   const { t } = useI18n()
   const [coachChatOpen, setCoachChatOpen] = useState(false)
@@ -606,6 +608,7 @@ const WorkoutView: FC<WorkoutViewProps> = ({
         onRemoveSection={onRemoveSection}
         onReorderSegments={onReorderSegments}
         onMoveItem={onMoveItem}
+        onExtractItem={onExtractItem}
       />
 
       <section className={`workout-detail ${activeEntryId ? 'active' : ''}`} data-section-color={detailSectionColorSlot}>

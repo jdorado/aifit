@@ -3990,6 +3990,19 @@ const App = () => {
     )
   }, [requireEditContext, runStructuralMutation])
 
+  const handleExtractItem = useCallback(async (exerciseId: string, beforeSegmentId: string | null): Promise<boolean> => {
+    const context = requireEditContext()
+    if (!context) return false
+    return runStructuralMutation(
+      context.workoutId,
+      `/exercises/${encodeURIComponent(exerciseId)}/extract`,
+      'POST',
+      { before_segment_id: beforeSegmentId, expected_revision: context.revision, request_id: crypto.randomUUID() },
+      context.targetDate,
+      context.ownerKey,
+    )
+  }, [requireEditContext, runStructuralMutation])
+
   const handleCommitSetTarget = useCallback(async (exerciseId: string, index: number, field: 'weight' | 'metric') => {
     const context = requireEditContext()
     if (!context) return
@@ -4828,6 +4841,7 @@ const App = () => {
             onRemoveSection={handleRemoveSection}
             onReorderSegments={handleReorderSegments}
             onMoveItem={handleMoveItem}
+            onExtractItem={handleExtractItem}
             actAsLinkId={coachActAsLinkId}
           />
           <ProfileView

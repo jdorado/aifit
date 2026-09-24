@@ -43,6 +43,7 @@ from .workouts import (
     PlanEntryRemoveInput,
     PlanInput,
     PlanItemMoveInput,
+    PlanItemExtractInput,
     PlanReorderInput,
     PublishInput,
     SetAddInput,
@@ -860,6 +861,12 @@ async def reorder_workout_segments_v1(workout_id: str, body: PlanReorderInput,
 async def move_workout_item_v1(workout_id: str, exercise_instance_id: str, body: PlanItemMoveInput,
                                account: dict = Depends(require_edit_account)) -> dict:
     return await workouts().move_item(account["account_id"], workout_id, exercise_instance_id, body)
+
+
+@app.post("/v1/workouts/{workout_id}/exercises/{exercise_instance_id}/extract")
+async def extract_workout_item_v1(workout_id: str, exercise_instance_id: str, body: PlanItemExtractInput,
+                                  account: dict = Depends(require_edit_account)) -> dict:
+    return await workouts().extract_item(account["account_id"], workout_id, exercise_instance_id, body)
 
 
 @app.patch("/v1/workouts/{workout_id}/notes")

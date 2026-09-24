@@ -53,6 +53,7 @@ type DragState = {
   dropSegmentId: string | null
   dropBeforeItemId: string | null
   dropBeforeBlockId: string | null
+  dropBeforeSegmentId: string | null | undefined
 }
 
 type RenderBlock = {
@@ -90,6 +91,7 @@ type WorkoutPlanListProps = {
   onRemoveSection: (segmentIds: string[]) => void
   onReorderSegments: (segmentIds: string[]) => Promise<boolean>
   onMoveItem: (exerciseId: string, targetSegmentId: string, targetIndex: number) => Promise<boolean>
+  onExtractItem: (exerciseId: string, beforeSegmentId: string | null) => Promise<boolean>
 }
 
 const DEFAULT_COLLAPSED_SECTIONS: Record<string, boolean> = {}
@@ -163,6 +165,7 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
   onRemoveSection,
   onReorderSegments,
   onMoveItem,
+  onExtractItem,
 }) => {
   const { t } = useI18n()
   const [planNotesOpen, setPlanNotesOpen] = useState(false)
@@ -394,6 +397,28 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
     if (!live || !live.moved) return
     if (live.payload.kind === 'item') {
       const draggedId = live.payload.itemId
+      const segmentBounds = new Map<string, { top: number, bottom: number }>()
+      document.querySelectorAll<HTMLElement>('[data-drag-segment-container]').forEach((element) => {
+        if (element.dataset.dragItem === draggedId) return
+        const id = element.dataset.dragSegmentContainer
+        if (!id) return
+        const rect = element.getBoundingClientRect()
+        const previous = segmentBounds.get(id)
+        segmentBounds.set(id, { top: Math.min(previous?.top ?? rect.top, rect.top), bottom: Math.max(previous?.bottom ?? rect.bottom, rect.bottom) })
+      })
+      const segments = [...segmentBounds].sort((a, b) => a[1].top - b[1].top)
+      const beforeSegment = segments.find(([, bounds]) => pointerY < bounds.top)
+      const previousSegment = beforeSegment
+        ? segments[segments.findIndex(([id]) => id === beforeSegment[0]) - 1]
+        : segments[segments.length - 1]
+      if (segments.length && (!previousSegment || pointerY > previousSegment[1].bottom)
+        && (!beforeSegment || pointerY < beforeSegment[1].top)) {
+        const next: DragState = { ...live, deltaY: pointerY - live.startY,
+          dropSegmentId: null, dropBeforeItemId: null, dropBeforeSegmentId: beforeSegment?.[0] ?? null }
+        liveDragRef.current = next
+        setDrag(next)
+        return
+      }
       const elements = Array.from(document.querySelectorAll<HTMLElement>('[data-drag-item]'))
       const others = elements.filter((element) => element.dataset.dragItem !== draggedId)
       let beforeElement: HTMLElement | null = null
@@ -410,6 +435,7 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
         deltaY: pointerY - live.startY,
         dropSegmentId: beforeElement?.dataset.dragSegment ?? lastOther?.dataset.dragSegment ?? null,
         dropBeforeItemId: beforeElement?.dataset.dragItem ?? null,
+        dropBeforeSegmentId: undefined,
       }
       liveDragRef.current = next
       setDrag(next)
@@ -458,6 +484,7 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
       dropSegmentId: payload.kind === 'item' ? payload.segmentId : null,
       dropBeforeItemId: null,
       dropBeforeBlockId: payload.kind === 'block' ? payload.blockId : null,
+      dropBeforeSegmentId: undefined,
     }
     liveDragRef.current = initial
     setPlanSwipeActiveId(null)
@@ -469,6 +496,10 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
   const commitDrag = useCallback(async (live: DragState) => {
     if (live.payload.kind === 'item') {
       const { itemId } = live.payload
+      if (live.dropBeforeSegmentId !== undefined) {
+        await onExtractItem(itemId, live.dropBeforeSegmentId)
+        return
+      }
       const targetSegmentId = live.dropSegmentId
       if (!targetSegmentId) return
       const current = orderedExercisesRef.current
@@ -504,7 +535,7 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
     setPendingSegmentOrder(nextOrder)
     const ok = await onReorderSegments(nextOrder)
     if (!ok) setPendingSegmentOrder(null)
-  }, [onMoveItem, onReorderSegments])
+  }, [onExtractItem, onMoveItem, onReorderSegments])
 
   const handleDragPointerMove = (event: ReactPointerEvent<HTMLButtonElement>) => {
     const live = liveDragRef.current
@@ -726,7 +757,8 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
           <div
             key={`circuit-row-${groupKey}`}
             data-drag-block={block.id}
-            className={`plan-row ${canEditPlan && planSwipeActiveId === circuitSwipeId ? 'show-actions' : ''} ${isDraggingBlock ? 'is-dragging' : ''} ${isItemDragFromCircuit ? 'drag-open' : ''}`}
+            data-drag-segment-container={circuitSegmentId}
+            className={`plan-row ${canEditPlan && planSwipeActiveId === circuitSwipeId ? 'show-actions' : ''} ${isDraggingBlock ? 'is-dragging' : ''} ${isItemDragFromCircuit ? 'drag-open' : ''} ${drag?.dropBeforeSegmentId === circuitSegmentId ? 'drop-before' : ''}`}
             style={blockTransform}
             onTouchStart={canEditPlan ? handlePlanTouchStart(circuitSwipeId) : undefined}
             onTouchEnd={canEditPlan ? handlePlanTouchEnd(circuitSwipeId) : undefined}
@@ -861,7 +893,8 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
           data-drag-block={block.id}
           data-drag-item={exercise.id}
           data-drag-segment={segmentId}
-          className={`plan-row ${canEditPlan && planSwipeActiveId === exercise.id ? 'show-actions' : ''} ${isDraggingItem || isDraggingBlock ? 'is-dragging' : ''} ${isDropBefore ? 'drop-before' : ''} ${isDropAfter ? 'drop-after' : ''}`}
+          data-drag-segment-container={segmentId}
+          className={`plan-row ${canEditPlan && planSwipeActiveId === exercise.id ? 'show-actions' : ''} ${isDraggingItem || isDraggingBlock ? 'is-dragging' : ''} ${isDropBefore || (drag?.dropBeforeSegmentId === segmentId && segmentItems[0]?.id === exercise.id) ? 'drop-before' : ''} ${isDropAfter ? 'drop-after' : ''}`}
           style={activeRowDrag ? { transform: `translateY(${activeRowDrag.deltaY}px)` } : undefined}
           onTouchStart={canEditPlan ? handlePlanTouchStart(exercise.id) : undefined}
           onTouchEnd={canEditPlan ? handlePlanTouchEnd(exercise.id) : undefined}
