@@ -22,7 +22,8 @@ services:
     env_file:
       - /etc/aifit/aifit-api.env
     environment:
-      MONGO_DB: aifit_dev
+      # MONGO_URL and MONGO_DB come from /etc/aifit/aifit-api.env so prod and
+      # dev can share one database without a hardcoded name in this repo.
       EZ_BINDINGS_FILE: /run/secrets/aifit-api-bindings.json
       AIFIT_AGENT_API_BASE_URL: ${AIFIT_AGENT_API_BASE_URL:-http://127.0.0.1:18182}
       PORT: "18182"
