@@ -1,9 +1,15 @@
-import { useCallback, useState, type FC } from 'react'
+import { useCallback, useEffect, useRef, useState, type FC, type MouseEvent as ReactMouseEvent, type TouchEvent } from 'react'
 import { useI18n } from '../../i18n'
 import type { WorkoutExercise, WorkoutExtra } from '../../data/testWorkout'
 import { circuitGroupKey } from '../../data/testWorkout'
 import type { ActiveEntryType, SetState } from '../../types/app'
 import PlanNotes from './PlanNotes'
+
+type PlanSwipeState = {
+  startX: number
+  startY: number
+  rowId: string
+}
 
 type SectionTone = 'default' | 'warmup' | 'main' | 'conditioning' | 'circuit' | 'rehab' | 'cooldown' | 'recovery' | 'night'
 
@@ -87,6 +93,55 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
   const { t } = useI18n()
   const [planNotesOpen, setPlanNotesOpen] = useState(false)
   const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>(() => ({ ...DEFAULT_COLLAPSED_SECTIONS }))
+  const [planSwipeActiveId, setPlanSwipeActiveId] = useState<string | null>(null)
+  const planSwipeRef = useRef<PlanSwipeState | null>(null)
+  const planSwipeIgnoreClickRef = useRef(false)
+
+  useEffect(() => {
+    setPlanSwipeActiveId(null)
+  }, [canEditPlan, exercises])
+
+  const handlePlanTouchStart = (rowId: string) => (event: TouchEvent<HTMLElement>) => {
+    if (!canEditPlan) return
+    const touch = event.touches[0]
+    planSwipeRef.current = { startX: touch.clientX, startY: touch.clientY, rowId }
+  }
+
+  const handlePlanTouchEnd = (rowId: string) => (event: TouchEvent<HTMLElement>) => {
+    if (!canEditPlan) return
+    if (!planSwipeRef.current) return
+    const touch = event.changedTouches[0]
+    const deltaX = touch.clientX - planSwipeRef.current.startX
+    const deltaY = touch.clientY - planSwipeRef.current.startY
+    const isHorizontal = Math.abs(deltaX) > Math.abs(deltaY)
+
+    if (isHorizontal && Math.abs(deltaX) > 50) {
+      planSwipeIgnoreClickRef.current = true
+      if (deltaX < 0) {
+        setPlanSwipeActiveId(rowId)
+      } else if (deltaX > 0) {
+        setPlanSwipeActiveId((current) => (current === rowId ? null : current))
+      }
+      window.setTimeout(() => {
+        planSwipeIgnoreClickRef.current = false
+      }, 250)
+    }
+
+    planSwipeRef.current = null
+  }
+
+  const handlePlanCardClick = (id: string, type: ActiveEntryType) => (event: ReactMouseEvent<HTMLButtonElement>) => {
+    const target = event.target as HTMLElement
+    if (target.closest('[data-plan-action]')) return
+    if (planSwipeIgnoreClickRef.current) return
+
+    if (planSwipeActiveId !== null) {
+      setPlanSwipeActiveId(null)
+      return
+    }
+
+    onSelectEntry(id, type)
+  }
 
   const toggleSection = useCallback((sectionKey: string) => {
     setCollapsedSections((current) => ({
@@ -97,16 +152,19 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
 
   const handleRemoveExercise = useCallback((exercise: WorkoutExercise) => {
     if (!window.confirm(t('workout.removeExerciseConfirm', { name: exercise.name }))) return
+    setPlanSwipeActiveId(null)
     onRemoveExercise(exercise.id)
   }, [onRemoveExercise, t])
 
   const handleRemoveCircuit = useCallback((segmentId: string, circuitName: string) => {
     if (!window.confirm(t('workout.removeCircuitConfirm', { name: circuitName }))) return
+    setPlanSwipeActiveId(null)
     onRemoveCircuit(segmentId)
   }, [onRemoveCircuit, t])
 
   const handleRemoveSection = useCallback((sectionLabel: string, segmentIds: string[]) => {
     if (!window.confirm(t('workout.removeSectionConfirm', { name: sectionLabel }))) return
+    setPlanSwipeActiveId(null)
     onRemoveSection(segmentIds)
   }, [onRemoveSection, t])
 
@@ -198,12 +256,15 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
   const renderStageHeader = (stage: SectionInfo, key: string, colorSlot: number, sectionSegmentIds?: string[]) => {
     const collapsed = Boolean(collapsedSections[stage.key])
     const canRemoveSection = canEditPlan && Boolean(sectionSegmentIds?.length)
+    const stageSwipeId = `section:${stage.key}`
     return (
       <div
         key={key}
         data-stage={stage.tone}
         data-section-color={colorSlot}
-        className="workout-stage-row"
+        className={`workout-stage-row ${canEditPlan && planSwipeActiveId === stageSwipeId ? 'show-actions' : ''}`}
+        onTouchStart={canEditPlan ? handlePlanTouchStart(stageSwipeId) : undefined}
+        onTouchEnd={canEditPlan ? handlePlanTouchEnd(stageSwipeId) : undefined}
       >
         <button
           className={`workout-stage ${collapsed ? 'is-collapsed' : ''}`}
@@ -211,21 +272,34 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
           data-stage={stage.tone}
           data-section-color={colorSlot}
           aria-expanded={!collapsed}
-          onClick={() => toggleSection(stage.key)}
+          onClick={() => {
+            if (planSwipeIgnoreClickRef.current) return
+            if (planSwipeActiveId !== null) {
+              setPlanSwipeActiveId(null)
+              return
+            }
+            toggleSection(stage.key)
+          }}
         >
           <span className="workout-stage-label">{stage.label}</span>
           <span className="workout-stage-chevron" aria-hidden="true">&gt;</span>
         </button>
         {canRemoveSection ? (
-          <button
-            className="stage-trash-btn"
-            type="button"
-            title={t('workout.removeSection')}
-            aria-label={t('workout.removeSection')}
-            onClick={() => handleRemoveSection(stage.label, sectionSegmentIds ?? [])}
-          >
-            <TrashIcon />
-          </button>
+          <div className="workout-stage-actions">
+            <button
+              className="plan-row-action danger"
+              type="button"
+              data-plan-action="remove"
+              title={t('workout.removeSection')}
+              aria-label={t('workout.removeSection')}
+              onClick={() => handleRemoveSection(stage.label, sectionSegmentIds ?? [])}
+            >
+              <span className="plan-row-action-icon" aria-hidden="true">
+                <TrashIcon />
+              </span>
+              <span className="plan-row-action-label">{t('workout.deleteAction')}</span>
+            </button>
+          </div>
         ) : null}
       </div>
     )
@@ -301,10 +375,13 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
       ].filter(Boolean).join(' · ')
       const nextExercise = getNextCircuitExercise(exercisesInCircuit)
 
+      const circuitSwipeId = `circuit:${groupKey}`
       cards.push(
         <div
           key={`circuit-row-${groupKey}`}
-          className="plan-row"
+          className={`plan-row ${canEditPlan && planSwipeActiveId === circuitSwipeId ? 'show-actions' : ''}`}
+          onTouchStart={canEditPlan ? handlePlanTouchStart(circuitSwipeId) : undefined}
+          onTouchEnd={canEditPlan ? handlePlanTouchEnd(circuitSwipeId) : undefined}
         >
           <div
             className={`workout-card circuit-group ${isCompleted ? 'is-completed' : ''}`}
@@ -316,7 +393,7 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
             <button
               className="circuit-group-start"
               type="button"
-              onClick={() => onSelectEntry((nextExercise || exercisesInCircuit[0]).id, 'exercise')}
+              onClick={handlePlanCardClick((nextExercise || exercisesInCircuit[0]).id, 'exercise')}
             >
               <div>
                 <p className="card-label">{t('workout.circuit')}</p>
@@ -325,7 +402,7 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
               </div>
               <div className="card-meta">
                 <span className={`badge ${isCompleted ? 'completed-badge' : ''}`}>{progress}</span>
-                {canEditPlan ? null : <span className="chevron">&gt;</span>}
+                <span className="chevron">&gt;</span>
               </div>
             </button>
             <ol className="circuit-preview">
@@ -334,26 +411,44 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
                 return (
                   <li
                     key={`${item.id}-preview`}
-                    className="circuit-preview-item"
+                    className={`circuit-preview-item ${canEditPlan && planSwipeActiveId === item.id ? 'show-actions' : ''}`}
+                    onTouchStart={canEditPlan
+                      ? (event) => {
+                        event.stopPropagation()
+                        handlePlanTouchStart(item.id)(event)
+                      }
+                      : undefined}
+                    onTouchEnd={canEditPlan
+                      ? (event) => {
+                        event.stopPropagation()
+                        handlePlanTouchEnd(item.id)(event)
+                      }
+                      : undefined}
                   >
                     <button
                       className="circuit-preview-btn"
                       type="button"
-                      onClick={() => onSelectEntry(item.id, 'exercise')}
+                      onClick={handlePlanCardClick(item.id, 'exercise')}
                     >
                       <span className="circuit-preview-index">{order}</span>
                       <span className="circuit-preview-name">{item.name}</span>
                     </button>
                     {canEditPlan ? (
-                      <button
-                        className="circuit-preview-delete"
-                        type="button"
-                        title={t('workout.removeExercise')}
-                        aria-label={t('workout.removeExercise')}
-                        onClick={() => handleRemoveExercise(item)}
-                      >
-                        <TrashIcon />
-                      </button>
+                      <div className="circuit-preview-actions">
+                        <button
+                          className="plan-row-action danger"
+                          type="button"
+                          data-plan-action="remove"
+                          title={t('workout.removeExercise')}
+                          aria-label={t('workout.removeExercise')}
+                          onClick={() => handleRemoveExercise(item)}
+                        >
+                          <span className="plan-row-action-icon" aria-hidden="true">
+                            <TrashIcon />
+                          </span>
+                          <span className="plan-row-action-label">{t('workout.deleteAction')}</span>
+                        </button>
+                      </div>
                     ) : null}
                   </li>
                 )
@@ -361,15 +456,21 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
             </ol>
           </div>
           {canEditPlan ? (
-            <button
-              className="plan-trash-btn"
-              type="button"
-              title={t('workout.removeCircuit')}
-              aria-label={t('workout.removeCircuit')}
-              onClick={() => handleRemoveCircuit(groupKey, circuitName)}
-            >
-              <TrashIcon />
-            </button>
+            <div className="plan-row-actions">
+              <button
+                className="plan-row-action danger"
+                type="button"
+                data-plan-action="remove"
+                title={t('workout.removeCircuit')}
+                aria-label={t('workout.removeCircuit')}
+                onClick={() => handleRemoveCircuit(groupKey, circuitName)}
+              >
+                <span className="plan-row-action-icon" aria-hidden="true">
+                  <TrashIcon />
+                </span>
+                <span className="plan-row-action-label">{t('workout.deleteAction')}</span>
+              </button>
+            </div>
           ) : null}
         </div>
       )
@@ -394,12 +495,14 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
     cards.push(
       <div
         key={exercise.id}
-        className="plan-row"
+        className={`plan-row ${canEditPlan && planSwipeActiveId === exercise.id ? 'show-actions' : ''}`}
+        onTouchStart={canEditPlan ? handlePlanTouchStart(exercise.id) : undefined}
+        onTouchEnd={canEditPlan ? handlePlanTouchEnd(exercise.id) : undefined}
       >
         <button
           className={`workout-card ${exercise.status === 'skip' ? 'is-skip' : ''} ${isCompleted ? 'is-completed' : ''}`}
           type="button"
-          onClick={() => onSelectEntry(exercise.id, 'exercise')}
+          onClick={handlePlanCardClick(exercise.id, 'exercise')}
           data-stage={stage.tone}
           data-section-color={colorSlot}
         >
@@ -412,19 +515,25 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
             <span className={`badge ${isCompleted ? 'completed-badge' : ''}`}>
               {exercise.status === 'skip' ? t('workout.skip') : progress}
             </span>
-            {canEditPlan ? null : <span className="chevron">&gt;</span>}
+            <span className="chevron">&gt;</span>
           </div>
         </button>
         {canEditPlan ? (
-          <button
-            className="plan-trash-btn"
-            type="button"
-            title={t('workout.removeExercise')}
-            aria-label={t('workout.removeExercise')}
-            onClick={() => handleRemoveExercise(exercise)}
-          >
-            <TrashIcon />
-          </button>
+          <div className="plan-row-actions">
+            <button
+              className="plan-row-action danger"
+              type="button"
+              data-plan-action="remove"
+              title={t('workout.removeExercise')}
+              aria-label={t('workout.removeExercise')}
+              onClick={() => handleRemoveExercise(exercise)}
+            >
+              <span className="plan-row-action-icon" aria-hidden="true">
+                <TrashIcon />
+              </span>
+              <span className="plan-row-action-label">{t('workout.deleteAction')}</span>
+            </button>
+          </div>
         ) : null}
       </div>
     )

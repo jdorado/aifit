@@ -57,13 +57,18 @@ has(adapterSource, 'segmentId: segment.segment_id', 'the adapter must expose the
 has(testWorkoutSource, 'segmentId?: string', 'the exercise type must carry an optional segment id')
 has(adapterSource, 'workout?: BackendWorkout | null', 'the receipt type must allow a null workout')
 
-// 8. Component wiring: add set, remove set, target commit, plan trash actions.
+// 8. Component wiring: add set, remove set, target commit, swipe-hidden plan
+//    delete actions (legacy mobile UX: no always-visible trash at load).
 has(setListSource, 'add-set-btn', 'the set list must render the add-set button')
 has(setListSource, 'data-set-action="remove-set"', 'unlogged set rows must render a remove-set trash action')
 has(setListSource, 'onCommitSetTarget', 'the set inputs must commit target edits on blur')
-has(planListSource, 'plan-trash-btn', 'plan rows must render always-visible trash actions')
-has(planListSource, 'stage-trash-btn', 'section headers must render a remove-section trash action')
-has(planListSource, 'circuit-preview-delete', 'circuit preview items must render a remove-exercise trash action')
+has(planListSource, 'plan-row-actions', 'plan rows must hide delete actions behind swipe')
+has(planListSource, 'workout-stage-actions', 'section headers must hide remove-section behind swipe')
+has(planListSource, 'circuit-preview-actions', 'circuit preview items must hide remove-exercise behind swipe')
+has(planListSource, 'planSwipeActiveId', 'plan delete actions must only show for the swiped row')
+assert.ok(!planListSource.includes('plan-trash-btn'), 'plan rows must not render always-visible trash buttons')
+assert.ok(!planListSource.includes('stage-trash-btn'), 'section headers must not render always-visible trash buttons')
+assert.ok(!planListSource.includes('circuit-preview-delete'), 'circuit preview items must not render always-visible trash buttons')
 has(planListSource, 'window.confirm(t(\'workout.removeExerciseConfirm\'', 'exercise removal must confirm')
 has(planListSource, 'window.confirm(t(\'workout.removeCircuitConfirm\'', 'circuit removal must confirm')
 has(planListSource, 'window.confirm(t(\'workout.removeSectionConfirm\'', 'section removal must confirm')

@@ -50,6 +50,8 @@ const exercises = [
 const hooks = {
   useState: (initial) => [typeof initial === 'function' ? initial() : initial, () => undefined],
   useCallback: (fn) => fn,
+  useEffect: () => undefined,
+  useRef: (initial) => ({ current: initial }),
 }
 
 const collectKeys = (node, keys, pathLabel) => {
