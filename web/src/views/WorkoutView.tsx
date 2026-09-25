@@ -14,6 +14,7 @@ import VideoGallery from '../components/workout/VideoGallery'
 import WeekStrip from '../components/workout/WeekStrip'
 import WorkoutMiniBar from '../components/workout/WorkoutMiniBar'
 import WorkoutPlanList from '../components/workout/WorkoutPlanList'
+import PlanNotes from '../components/workout/PlanNotes'
 import type { WorkoutExercise, WorkoutExtra, WorkoutFeedbackPreset } from '../data/testWorkout'
 import { circuitGroupKey } from '../data/testWorkout'
 import { getNextCircuitSet } from '../utils/circuitProgress'
@@ -224,6 +225,7 @@ const WorkoutView: FC<WorkoutViewProps> = ({
 }) => {
   const { t, language } = useI18n()
   const [addExerciseOpen, setAddExerciseOpen] = useState(false)
+  const [planNotesOpen, setPlanNotesOpen] = useState(false)
   useEffect(() => { setAddExerciseOpen(false) }, [selectedDateId, actAsLinkId, active])
   const progressionKey = `${actAsLinkId ?? 'self'}:${workoutId ?? ''}:${workoutRevision ?? ''}`
   const [progressionState, setProgressionState] = useState<{ key: string; data: WorkoutProgression | null; error: boolean } | null>(null)
@@ -651,6 +653,25 @@ const WorkoutView: FC<WorkoutViewProps> = ({
         onSelectDay={onSelectDay}
       />
 
+      {!activeEntryId ? (
+        <div className="workout-day-actions">
+          {canEditPlan && canLogDay && !loading ? (
+            <button type="button" className="workout-add-exercise" onClick={() => setAddExerciseOpen(true)}>
+              <span className="workout-day-action-icon" aria-hidden="true">＋</span>
+              <span>{t('workout.addExercise')}</span>
+            </button>
+          ) : null}
+          <PlanNotes
+            notes={planNotes}
+            open={planNotesOpen}
+            canEdit={canLogDay}
+            saving={savingDayNote}
+            onToggle={() => setPlanNotesOpen((open) => !open)}
+            onSave={onSaveDayNote}
+          />
+        </div>
+      ) : null}
+
       {isViewingOtherDay && viewingDateLabel ? (
         <div className="workout-viewing-banner" role="status">
           <span className="workout-viewing-text">
@@ -673,16 +694,10 @@ const WorkoutView: FC<WorkoutViewProps> = ({
         exercises={exercises}
         extras={extras}
         setLogs={setLogs}
-        planNotes={planNotes}
-        canEditPlanNotes={canLogDay}
-        savingPlanNotes={savingDayNote}
-        onSavePlanNotes={onSaveDayNote}
         circuitGroups={circuitGroups}
         getNextCircuitExercise={getNextCircuitExercise}
         onSelectEntry={onSelectEntry}
         canEditPlan={canEditPlan}
-        canAddExercise={canEditPlan && canLogDay && !loading}
-        onAddExercise={() => setAddExerciseOpen(true)}
         onRemoveExercise={onRemoveExercise}
         onRemoveCircuit={onRemoveCircuit}
         onRemoveSection={onRemoveSection}
