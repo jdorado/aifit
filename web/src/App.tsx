@@ -1092,6 +1092,7 @@ const App = () => {
   const pendingTargetEditsRef = useRef(new Map<string, Promise<boolean>>())
   const syncLoggedSetRef = useRef<((exerciseId: string, index: number, previous?: SetSyncRevert | null) => void) | null>(null)
   const pendingWorkoutDatesRef = useRef(new Set<string>())
+  const [structuralEditPending, setStructuralEditPending] = useState(false)
   // Delete tombstones: date -> server timestamp of a clear that removed the
   // record. Any fetched session at or before that time is pre-delete state
   // and must never resurrect the day, no matter which stale closure applies
@@ -3108,22 +3109,6 @@ const App = () => {
     syncLoggedSetRef.current = syncLoggedSet
   }, [syncLoggedSet])
 
-  const skipSet = useCallback((exerciseId: string, index: number) => {
-    if (!canLogSelectedDay) return
-    const exercise = getExercise(exerciseId)
-    const stateList = setLogsRef.current[exerciseId]
-    const setItem = stateList?.[index]
-    if (!exercise || !setItem || setItem.done) return
-    const previous: SetSyncRevert = { ...setItem }
-    setItem.weight = ''
-    setItem.metric = ''
-    setItem.value_source = undefined
-    setItem.done = true
-    setItem.skipped = true
-    bumpData()
-    void syncLoggedSetRef.current?.(exerciseId, index, previous)
-  }, [bumpData, canLogSelectedDay, getExercise])
-
   const unlogSet = useCallback((exerciseId: string, index: number) => {
     if (!canLogSelectedDay) return
     const exercise = getExercise(exerciseId)
@@ -3881,15 +3866,19 @@ const App = () => {
   // applying it never wipes what the user is mid-way through typing. Logged
   // sets still come from the receipt (done), untouched here.
   const mergeUnloggedSetInputs = useCallback((targetDate: string, session: WorkoutSession) => {
+    const previousDay = weekPlanRef.current.days.find((day) => day.date === targetDate)
     const previousLogs = weekSetLogsRef.current[targetDate]
     const nextLogs = session.workout?.set_logs
     if (!previousLogs || !nextLogs) return
     for (const exercise of session.workout?.exercises ?? []) {
       const previousStates = previousLogs[exercise.id]
+      const previousExercise = previousDay?.exercises.find((item) => item.id === exercise.id)
       const nextStates = nextLogs[exercise.id]
-      if (!previousStates || !nextStates) continue
+      if (!previousStates || !previousExercise || !nextStates) continue
       nextStates.forEach((nextState, index) => {
-        const previous = previousStates[index]
+        const setId = exercise.sets[index]?.setId
+        const previousIndex = previousExercise.sets.findIndex((set) => set.setId === setId)
+        const previous = previousStates[previousIndex]
         if (!previous || nextState.done || previous.done) return
         nextState.weight = previous.weight
         nextState.metric = previous.metric
@@ -3911,8 +3900,7 @@ const App = () => {
       if (nextRevision) workoutRevisionByOwnerDateRef.current[ownerKey] = nextRevision
       const session = backendWorkoutToSession(receipt.workout, currentUserId)
       mergeUnloggedSetInputs(targetDate, session)
-      // Release the in-flight guard only for the synchronous apply; callers
-      // re-hold it before the refresh that follows.
+      // The receipt is canonical; apply it without another full-week fetch.
       pendingWorkoutDatesRef.current.delete(targetDate)
       applySavedWorkoutSessionsToWeek([session], { preserveSelectedDate: true, preserveActiveEntry: true })
       return
@@ -3962,8 +3950,6 @@ const App = () => {
     )
     if (response.status === 409) {
       delete workoutRevisionByOwnerDateRef.current[ownerKey]
-      await refreshVisibleWorkoutSessions().catch(() => false)
-      window.alert(t('workout.editStale'))
       return null
     }
     if (!response.ok) {
@@ -3973,7 +3959,7 @@ const App = () => {
       throw new Error(message || t('workout.editFailed'))
     }
     return await response.json() as BackendWorkoutReceipt
-  }, [getPrivyAuthHeaders, refreshVisibleWorkoutSessions, t, withCoachActAs])
+  }, [getPrivyAuthHeaders, t, withCoachActAs])
 
   const runStructuralMutation = useCallback(async (
     workoutId: string,
@@ -3982,26 +3968,33 @@ const App = () => {
     body: Record<string, unknown>,
     targetDate: string,
     ownerKey: string,
+    preview?: () => () => void,
   ): Promise<boolean> => {
     if (pendingWorkoutDatesRef.current.has(targetDate)) return false
     pendingWorkoutDatesRef.current.add(targetDate)
+    setStructuralEditPending(true)
+    let rollback: (() => void) | undefined
     try {
+      rollback = preview?.()
       const receipt = await mutateWorkout(workoutId, pathSuffix, method, body, ownerKey)
-      if (!receipt) return false
-      applyStructuralReceipt(receipt, targetDate, ownerKey)
-      pendingWorkoutDatesRef.current.add(targetDate)
-      try {
-        await refreshVisibleWorkoutSessions()
-      } catch {
-        // The receipt apply above already reflects the canonical record.
+      if (!receipt) {
+        rollback?.()
+        rollback = undefined
+        pendingWorkoutDatesRef.current.delete(targetDate)
+        await refreshVisibleWorkoutSessions().catch(() => false)
+        window.alert(t('workout.editStale'))
+        return false
       }
+      applyStructuralReceipt(receipt, targetDate, ownerKey)
       return true
     } catch (error) {
+      rollback?.()
       console.warn('Workout plan edit failed:', error)
       window.alert(error instanceof Error ? error.message : t('workout.editFailed'))
       return false
     } finally {
       pendingWorkoutDatesRef.current.delete(targetDate)
+      setStructuralEditPending(false)
     }
   }, [
     applyStructuralReceipt,
@@ -4032,6 +4025,10 @@ const App = () => {
   const handleAddSet = useCallback(async (exerciseId: string) => {
     const context = requireEditContext()
     if (!context) return
+    const exercise = getExercise(exerciseId)
+    const stateList = setLogsRef.current[exerciseId]
+    const source = exercise && ([...exercise.sets].reverse().find((set) => !set.isWarmup) ?? exercise.sets[exercise.sets.length - 1])
+    if (!exercise || !source || !stateList) return
     await runStructuralMutation(
       context.workoutId,
       `/exercises/${encodeURIComponent(exerciseId)}/sets`,
@@ -4039,15 +4036,34 @@ const App = () => {
       { expected_revision: context.revision, request_id: crypto.randomUUID() },
       context.targetDate,
       context.ownerKey,
+      () => {
+        const previousSets = [...exercise.sets]
+        const previousStates = [...stateList]
+        const lastActual = [...stateList].reverse().find((set) => set.done && !set.skipped)
+        exercise.sets.push({ ...source, setId: undefined })
+        stateList.push({
+          weight: lastActual?.weight ?? '', metric: lastActual?.metric ?? '', done: false,
+          ...(lastActual ? { value_source: 'accepted_target' as const } : {}),
+        })
+        updateExerciseSummary(exercise)
+        bumpData()
+        return () => {
+          exercise.sets = previousSets
+          stateList.splice(0, stateList.length, ...previousStates)
+          updateExerciseSummary(exercise)
+          bumpData()
+        }
+      },
     )
-  }, [requireEditContext, runStructuralMutation])
+  }, [bumpData, getExercise, requireEditContext, runStructuralMutation])
 
   const handleRemoveSet = useCallback(async (exerciseId: string, index: number) => {
     const context = requireEditContext()
     if (!context) return
     const exercise = getExercise(exerciseId)
+    const stateList = setLogsRef.current[exerciseId]
     const setId = exercise?.sets[index]?.setId
-    if (!setId) return
+    if (!exercise || !stateList || stateList[index]?.done || !setId) return
     await runStructuralMutation(
       context.workoutId,
       `/sets/${encodeURIComponent(setId)}/remove`,
@@ -4055,8 +4071,25 @@ const App = () => {
       { expected_revision: context.revision, request_id: crypto.randomUUID() },
       context.targetDate,
       context.ownerKey,
+      () => {
+        const previousSets = [...exercise.sets]
+        const previousStates = [...stateList]
+        exercise.sets.splice(index, 1)
+        stateList.splice(index, 1)
+        setEditingSet(null)
+        setEditingSetSnapshot(null)
+        resetHoldTimer()
+        updateExerciseSummary(exercise)
+        bumpData()
+        return () => {
+          exercise.sets = previousSets
+          stateList.splice(0, stateList.length, ...previousStates)
+          updateExerciseSummary(exercise)
+          bumpData()
+        }
+      },
     )
-  }, [getExercise, requireEditContext, runStructuralMutation])
+  }, [bumpData, getExercise, requireEditContext, resetHoldTimer, runStructuralMutation])
 
   const handleRemoveExercise = useCallback(async (exerciseId: string) => {
     const context = requireEditContext()
@@ -4882,8 +4915,8 @@ const App = () => {
           />
           <WorkoutView
             active={activeView === 'workout'}
-            canLogDay={canLogSelectedDay}
-            canEditPlan={canEditPlanSelectedDay}
+            canLogDay={canLogSelectedDay && !structuralEditPending}
+            canEditPlan={canEditPlanSelectedDay && !structuralEditPending}
             coachChatEnabled={coachChatEnabled}
             apiBaseUrl={API_BASE_URL}
             getAuthHeaders={getPrivyAuthHeaders}
@@ -4914,7 +4947,6 @@ const App = () => {
             onSelectDay={handleSelectDay}
             onBack={hideWorkoutDetail}
             onLogSet={logNextSet}
-            onSkipSet={skipSet}
             onUnlogSet={unlogSet}
             onStartEditingSet={(exerciseId, index) => {
               const stateList = setLogsRef.current[exerciseId]
