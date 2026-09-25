@@ -33,14 +33,14 @@ has(appSource, 'target_index: targetIndex', 'an item move must send the 1-based 
 
 // 2. Shared mutation envelope: expected revision + fresh request id.
 has(appSource, 'expected_revision: context.revision', 'mutations must send the current revision')
-has(appSource, 'expected_revision: expectedRevision', 'set logging must send the post-target-edit revision')
+has(appSource, 'expected_revision: revision, request_id: requestId', 'queued writes read the revision when dispatched')
 has(appSource, 'request_id: crypto.randomUUID()', 'mutations must send a fresh request id')
 
 // 3. Target editing: full target, propagation, no day replacement.
 has(appSource, 'apply_to_remaining: true', 'target edit must propagate to remaining pending sets')
 has(appSource, 'applyTargetEditToSets(exercise, stateList, index, field, value)', 'target edit must update the local target optimistically')
 has(appSource, 'restoreTargetEditSnapshot', 'failed target edit must restore the previous targets')
-has(appSource, 'pendingTargetEditsRef', 'logging must await an in-flight target edit for the same set')
+has(appSource, 'workoutWriteQueueRef.current.enqueue', 'target edits and logging share an ordered queue')
 
 // 4. Structural receipts: apply via the session path, preserve unlogged inputs,
 //    and handle `workout: null` the same way clear does.
@@ -50,8 +50,8 @@ has(appSource, 'mergeUnloggedSetInputs(targetDate, session)', 'structural receip
 has(appSource, 'autoFillSuppressedAt: clearedWorkoutAtRef.current[targetDate]', 'a null workout must empty the day like clear')
 
 // 5. 409 stale_revision reconciles and surfaces a message.
-has(appSource, "window.alert(t('workout.editStale'))", 'a stale revision must surface a message')
-has(appSource, 'response.status === 409', 'mutations must recognise stale_revision')
+has(appSource, 'setWorkoutSaveError(true)', 'a failed save must surface a message')
+has(appSource, 'fetchWorkoutSessionsByDates([targetDate])', 'failed writes including stale revisions reconcile their originating day')
 
 // 6. Gating: editable date + edit-program permission.
 has(appSource, 'canEditPlanSelectedDay', 'plan editing must be gated by an editable-date flag')
