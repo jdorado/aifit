@@ -980,9 +980,9 @@ const App = () => {
   const [sessionLoading, setSessionLoading] = useState(true)
   const [serverSessionLoadSettledKey, setServerSessionLoadSettledKey] = useState<string | null>(null)
   const [messages, setMessages] = useState<ChatMessage[]>([])
-  const [modelControl, setModelControl] = useState<ModelControl | null>(null)
+  const [modelControlState, setModelControlState] = useState<{ linkId: string | null, control: ModelControl } | null>(null)
   const [modelSelectionPending, setModelSelectionPending] = useState(false)
-  const [miniModelControl, setMiniModelControl] = useState<ModelControl | null>(null)
+  const [miniModelControlState, setMiniModelControlState] = useState<{ linkId: string | null, control: ModelControl } | null>(null)
   const [miniModelSelectionPending, setMiniModelSelectionPending] = useState(false)
   const [coachMessagesByScope, setCoachMessagesByScope] = useState<Record<string, ChatMessage[]>>({})
   const [swapOpen, setSwapOpen] = useState(false)
@@ -1069,10 +1069,22 @@ const App = () => {
   const { t } = i18n
   // Coach chat in the trainee's context follows the legacy rule: the link
   // must carry view_progress, and edit_programs implies coach chat
-  // (chat_as_coach has no new-schema equivalent). The home tab stays the
-  // coach's own and remains unavailable in coach mode.
+  // (chat_as_coach has no new-schema equivalent). Both chat surfaces and
+  // their model controls use the authorized trainee conversation.
   const coachChatEnabled = !coachActAsLinkId
     || (coachActAsPermissions?.view_progress === true && coachActAsPermissions?.edit_programs === true)
+  const modelControl = modelControlState?.linkId === coachActAsLinkId ? modelControlState.control : null
+  const miniModelControl = miniModelControlState?.linkId === coachActAsLinkId ? miniModelControlState.control : null
+  const setModelControl = useCallback((control: ModelControl | null) => {
+    if (coachActAsLinkIdRef.current === coachActAsLinkId) {
+      setModelControlState(control ? { linkId: coachActAsLinkId, control } : null)
+    }
+  }, [coachActAsLinkId])
+  const setMiniModelControl = useCallback((control: ModelControl | null) => {
+    if (coachActAsLinkIdRef.current === coachActAsLinkId) {
+      setMiniModelControlState(control ? { linkId: coachActAsLinkId, control } : null)
+    }
+  }, [coachActAsLinkId])
   const selectedModelPreset = modelControl?.presets.find((preset) => preset.id === modelControl.selected_id)
   const selectedModelLabel = presetLabel(selectedModelPreset, modelControl?.models)
   const modelOptions = useMemo(() => buildModelOptions(modelControl), [modelControl])
@@ -2373,21 +2385,25 @@ const App = () => {
   }, [getPrivyAuthHeaders, isBackendHealthy, mergeBackendChatHistory])
 
   const fetchFreshModelControl = useCallback(async (scope?: string) => {
-    const url = scope ? `${API_BASE_URL}/chat/models?scope=${scope}` : `${API_BASE_URL}/chat/models`
+    const params = new URLSearchParams({
+      ...(scope ? { scope } : {}),
+      ...(coachActAsLinkId ? { act_as_link_id: coachActAsLinkId } : {}),
+    })
+    const url = `${API_BASE_URL}/chat/models?${params}`
     const response = await apiFetch(url, {
       headers: await getPrivyAuthHeaders(),
     })
     if (!response.ok) throw new Error(`Failed to load Ez models (${response.status})`)
     return (await response.json()) as ModelControl
-  }, [getPrivyAuthHeaders])
+  }, [coachActAsLinkId, getPrivyAuthHeaders])
 
   const refreshModelControl = useCallback(async () => {
-    if (!privyReady || !privyAuthenticated) {
+    if (!privyReady || !privyAuthenticated || !coachChatEnabled) {
       setModelControl(null)
       return
     }
     setModelControl(await fetchFreshModelControl())
-  }, [fetchFreshModelControl, privyAuthenticated, privyReady])
+  }, [coachChatEnabled, fetchFreshModelControl, privyAuthenticated, privyReady, setModelControl])
 
   const handleModelSelection = useCallback(async (value: string) => {
     const option = modelOptions.find((item) => item.value === value)
@@ -2399,6 +2415,7 @@ const App = () => {
         headers: { 'Content-Type': 'application/json', ...await getPrivyAuthHeaders() },
         body: JSON.stringify({
           expected_session: expectedSession,
+          ...(coachActAsLinkId ? { act_as_link_id: coachActAsLinkId } : {}),
           cli: option.cli,
           provider: option.provider,
           model: option.model,
@@ -2416,6 +2433,7 @@ const App = () => {
         // switch rotated it) and Ez rejects the guarded POST. Reload the
         // fresh control and retry once with its session instead of leaving
         // the picker stuck on the old model.
+        if (coachActAsLinkIdRef.current !== coachActAsLinkId) return
         const fresh = await fetchFreshModelControl()
         if (selectedModelValueFor(fresh) === value) {
           setModelControl(fresh)
@@ -2423,23 +2441,29 @@ const App = () => {
           setModelControl(await postModelChoice(fresh.active_session_id))
         }
       }
-      setMessages([])
-      setChatInput('')
+      if (coachActAsLinkIdRef.current === coachActAsLinkId) {
+        if (coachActAsLinkId) {
+          setCoachMessagesByScope((prev) => ({ ...prev, [`coach-link:${coachActAsLinkId}`]: [] }))
+        } else {
+          setMessages([])
+        }
+        setChatInput('')
+      }
     } catch (error) {
       console.error('Ez model selection failed:', error)
       await refreshModelControl().catch(() => undefined)
     } finally {
       setModelSelectionPending(false)
     }
-  }, [fetchFreshModelControl, getPrivyAuthHeaders, modelControl, modelOptions, modelSelectionPending, refreshModelControl])
+  }, [coachActAsLinkId, fetchFreshModelControl, getPrivyAuthHeaders, modelControl, modelOptions, modelSelectionPending, refreshModelControl, setModelControl])
 
   const refreshMiniModelControl = useCallback(async () => {
-    if (!privyReady || !privyAuthenticated) {
+    if (!privyReady || !privyAuthenticated || !coachChatEnabled) {
       setMiniModelControl(null)
       return
     }
     setMiniModelControl(await fetchFreshModelControl(MINI_CHAT_SCOPE))
-  }, [fetchFreshModelControl, privyAuthenticated, privyReady])
+  }, [coachChatEnabled, fetchFreshModelControl, privyAuthenticated, privyReady, setMiniModelControl])
 
   const handleMiniModelSelection = useCallback(async (value: string) => {
     const option = miniModelOptions.find((item) => item.value === value)
@@ -2451,6 +2475,7 @@ const App = () => {
         headers: { 'Content-Type': 'application/json', ...await getPrivyAuthHeaders() },
         body: JSON.stringify({
           expected_session: expectedSession,
+          ...(coachActAsLinkId ? { act_as_link_id: coachActAsLinkId } : {}),
           scope: MINI_CHAT_SCOPE,
           cli: option.cli,
           provider: option.provider,
@@ -2467,6 +2492,7 @@ const App = () => {
       } catch {
         // Same stale-session recovery as the main picker: reload the fresh
         // scope control and retry once with its session.
+        if (coachActAsLinkIdRef.current !== coachActAsLinkId) return
         const fresh = await fetchFreshModelControl(MINI_CHAT_SCOPE)
         if (selectedModelValueFor(fresh) === value) {
           setMiniModelControl(fresh)
@@ -2480,7 +2506,7 @@ const App = () => {
     } finally {
       setMiniModelSelectionPending(false)
     }
-  }, [fetchFreshModelControl, getPrivyAuthHeaders, miniModelControl, miniModelOptions, miniModelSelectionPending, refreshMiniModelControl])
+  }, [coachActAsLinkId, fetchFreshModelControl, getPrivyAuthHeaders, miniModelControl, miniModelOptions, miniModelSelectionPending, refreshMiniModelControl, setMiniModelControl])
 
   const handleAiReply = useCallback(async (reply: string, messageId?: string | null, modelLabel?: string) => {
     const displayMessage = reply.trim()
@@ -2515,7 +2541,7 @@ const App = () => {
       throw new Error('Async chat endpoint unavailable. Restart the backend so /chat/async is available.')
     }
     if (!enqueueResponse.ok) {
-      throw new Error(`Chat enqueue failed (${enqueueResponse.status})`)
+      throw readApiError(await enqueueResponse.json().catch(() => null), enqueueResponse.status, 'Chat could not start.')
     }
 
     const queued = (await enqueueResponse.json()) as ChatJobResponsePayload
@@ -4201,7 +4227,7 @@ const App = () => {
     } catch (error) {
       console.warn('New chat failed:', error)
     }
-  }, [coachChatEnabled, currentUserId, getPrivyAuthHeaders, modelControl?.active_session_id])
+  }, [coachChatEnabled, currentUserId, getPrivyAuthHeaders, modelControl?.active_session_id, setModelControl])
 
   const setUserEmail = useCallback((email: string | null, userIdOverride?: string | null) => {
     const normalized = email && email.includes('@') ? email.trim().toLowerCase() : null
@@ -4357,7 +4383,7 @@ const App = () => {
       document.removeEventListener('visibilitychange', onVisible)
       window.removeEventListener('focus', onVisible)
     }
-  }, [isBackendHealthy, privyAuthenticated, privyReady, refreshModelControl, refreshMiniModelControl])
+  }, [isBackendHealthy, privyAuthenticated, privyReady, refreshModelControl, refreshMiniModelControl, setModelControl, setMiniModelControl])
 
   const handleAuthClick = useCallback(async () => {
     if (!privyReady) return
@@ -4819,10 +4845,10 @@ const App = () => {
             inputValue={chatInput}
             inputDisabled={!coachChatEnabled}
             canStartNewChat={!coachActAsLinkId}
-            modelOptions={coachActAsLinkId ? [] : modelOptions}
+            modelOptions={modelOptions}
             showModelLabels
             selectedModel={selectedModelValue}
-            modelSelectionDisabled={modelSelectionPending || Boolean(coachActAsLinkId) || messages.some((message) => message.thinking)}
+            modelSelectionDisabled={modelSelectionPending || !coachChatEnabled || (coachActAsLinkId ? (coachMessagesByScope[`coach-link:${coachActAsLinkId}`] ?? []) : messages).some((message) => message.thinking)}
             onModelChange={handleModelSelection}
             onInputChange={setChatInput}
             onSend={handleSend}
@@ -4866,7 +4892,7 @@ const App = () => {
             showModelLabels
             miniModelOptions={miniModelOptions}
             miniSelectedModel={miniSelectedModelValue}
-            miniModelSelectionDisabled={miniModelSelectionPending || Boolean(coachActAsLinkId)}
+            miniModelSelectionDisabled={miniModelSelectionPending || !coachChatEnabled}
             onMiniModelChange={handleMiniModelSelection}
             onSelectEntry={handleSelectEntry}
             onSelectDay={handleSelectDay}
