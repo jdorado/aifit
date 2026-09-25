@@ -319,6 +319,40 @@ def test_routes_recheck_the_link_per_request(monkeypatch):
         main.app.dependency_overrides.clear()
 
 
+def test_edit_route_uses_the_linked_trainee_account(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    service = CoachLinkService(FakeDatabase())
+    link = _run(active_link(service))
+    writes = []
+
+    class EditableWorkoutService:
+        async def log_set(self, account_id, workout_id, set_id, body):
+            writes.append((account_id, workout_id, set_id))
+            return {"account_id": account_id, "revision": "rev_1"}
+
+    monkeypatch.setattr(main, "coach_links", lambda: service)
+    monkeypatch.setattr(main, "workouts", lambda: EditableWorkoutService())
+    monkeypatch.setattr(main, "browser_account", lambda _identity: _async_value(COACH))
+    main.app.dependency_overrides[main.require_identity] = lambda: Identity(
+        subject="did:privy:coach", email="coach@example.com",
+    )
+    try:
+        result = TestClient(main.app).patch(
+            f"/v1/workouts/wrk_0123456789abcdef0123456789abcdef/sets/set_1?act_as_link_id={link['link_id']}",
+            json={
+                "actual": {"status": "skipped"},
+                "expected_revision": "rev_0123456789abcdef0123456789abcdef",
+                "request_id": "coach-edit-1",
+            },
+        )
+        assert result.status_code == 200
+        assert result.json()["account_id"] == TRAINEE["account_id"]
+        assert writes == [(TRAINEE["account_id"], "wrk_0123456789abcdef0123456789abcdef", "set_1")]
+    finally:
+        main.app.dependency_overrides.clear()
+
+
 def _async_value(value):
     async def result():
         return value
