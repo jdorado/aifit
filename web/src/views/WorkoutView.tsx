@@ -91,7 +91,6 @@ type WorkoutViewProps = {
   onLogSet: (exerciseId?: string) => void
   onCompleteTimedExercise: (exerciseId: string) => void
   completingTimedExerciseId: string | null
-  onSkipSet: (exerciseId: string, index: number) => void
   onUnlogSet: (exerciseId: string, index: number) => void
   onStartEditingSet: (exerciseId: string, index: number) => void
   onSaveEditingSet: () => void
@@ -177,7 +176,6 @@ const WorkoutView: FC<WorkoutViewProps> = ({
   onLogSet,
   onCompleteTimedExercise,
   completingTimedExerciseId,
-  onSkipSet,
   onUnlogSet,
   onStartEditingSet,
   onSaveEditingSet,
@@ -450,7 +448,7 @@ const WorkoutView: FC<WorkoutViewProps> = ({
       return null
     }
 
-    const isSkipped = activeExercise.sets.length === 0
+    const hasNoSets = activeExercise.sets.length === 0
     const isCircuitMove = Boolean(activeCircuit)
     const setLabel = isCircuitMove ? t('workout.roundLabel') : t('workout.setLabel')
     const exerciseCues = Array.isArray(activeExercise.cues) ? activeExercise.cues : []
@@ -458,8 +456,8 @@ const WorkoutView: FC<WorkoutViewProps> = ({
     return (
       <>
         <div className="detail-summary-card detail-target-card">
-          <p className="card-label">{isSkipped ? `${activeExercise.section} • ${t('workout.skipped')}` : t('workout.targetLabel')}</p>
-          {isSkipped ? null : <p className="card-sub">{activeExercise.summary}</p>}
+          <p className="card-label">{hasNoSets ? `${activeExercise.section} • ${t('workout.noSets')}` : t('workout.targetLabel')}</p>
+          {hasNoSets ? null : <p className="card-sub">{activeExercise.summary}</p>}
         </div>
         {activeExercise.exerciseKey ? (
           <VideoGallery
@@ -506,7 +504,6 @@ const WorkoutView: FC<WorkoutViewProps> = ({
           holdPrepSec={holdPrepSec}
           canLogDay={canLogDay && !completingTimedExercise}
           canEditPlan={canEditPlan}
-          onSkipSet={onSkipSet}
           onUnlogSet={onUnlogSet}
           onStartEditingSet={onStartEditingSet}
           onSaveEditingSet={onSaveEditingSet}

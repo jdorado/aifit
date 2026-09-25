@@ -36,7 +36,6 @@ type ExerciseSetListProps = {
   onStartEditingSet: (exerciseId: string, index: number) => void
   onSaveEditingSet: () => void
   onCancelEditingSet: () => void
-  onSkipSet: (exerciseId: string, index: number) => void
   onUnlogSet: (exerciseId: string, index: number) => void
   onUpdateSetField: (exerciseId: string, index: number, field: 'weight' | 'metric', value: string, propagate?: boolean) => void
   onCommitSetTarget: (exerciseId: string, index: number, field: 'weight' | 'metric') => void
@@ -67,7 +66,6 @@ const ExerciseSetList: FC<ExerciseSetListProps> = ({
   onStartEditingSet,
   onSaveEditingSet,
   onCancelEditingSet,
-  onSkipSet,
   onUnlogSet,
   onUpdateSetField,
   onCommitSetTarget,
@@ -207,11 +205,11 @@ const ExerciseSetList: FC<ExerciseSetListProps> = ({
                     <button
                       className="hero-skip-btn"
                       type="button"
-                      data-set-action="skip"
-                      title={t('workout.skipSet')}
-                      aria-label={t('workout.skipSet')}
-                      disabled={!canLogDay}
-                      onClick={canLogDay ? () => onSkipSet(exercise.id, index) : undefined}
+                      data-set-action="remove-set"
+                      title={t('workout.removeSet')}
+                      aria-label={t('workout.removeSet')}
+                      disabled={!canEditPlan}
+                      onClick={canEditPlan ? () => onRemoveSet(exercise.id, index) : undefined}
                     >
                       <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M18 6 6 18" />
@@ -445,20 +443,6 @@ const ExerciseSetList: FC<ExerciseSetListProps> = ({
                     </button>
                   ) : (
                     <>
-                      <button
-                        className="set-row-action"
-                        type="button"
-                        data-set-action="skip"
-                        title={t('workout.skipSet')}
-                        aria-label={t('workout.skipSet')}
-                        disabled={!canLogDay}
-                        onClick={canLogDay ? () => onSkipSet(exercise.id, index) : undefined}
-                      >
-                        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M18 6 6 18" />
-                          <path d="m6 6 12 12" />
-                        </svg>
-                      </button>
                       <button
                         className="set-row-action danger"
                         type="button"
