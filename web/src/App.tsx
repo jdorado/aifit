@@ -962,6 +962,7 @@ const App = () => {
   const workoutExtrasRef = useRef<WorkoutExtra[]>(initialDay?.extras ?? [])
   const setLogsRef = useRef<Record<string, SetState[]>>(initialSetLogs)
   const [dataVersion, setDataVersion] = useState(0)
+  const [completingTimedExerciseId, setCompletingTimedExerciseId] = useState<string | null>(null)
   const [logPending, setLogPending] = useState(false)
   const logPendingRef = useRef(false)
   const [activeView, setActiveView] = useState<'home' | 'workout' | 'profile'>('workout')
@@ -3031,6 +3032,40 @@ const App = () => {
     todayId,
   ])
 
+  const completeTimedExercise = useCallback(async (exerciseId: string) => {
+    if (!canLogSelectedDay || logPendingRef.current) return
+    const exercise = getExercise(exerciseId)
+    if (!exercise || exercise.metric !== 'time' || exercise.status === 'skip') return
+    const stateList = ensureExerciseStateList(exercise)
+    const unfinished = exercise.sets.map((set, index) => ({ set, index }))
+      .filter(({ index }) => !stateList[index]?.done)
+    if (!unfinished.length) return
+
+    logPendingRef.current = true
+    setLogPending(true)
+    setCompletingTimedExerciseId(exerciseId)
+    resetHoldTimer()
+    try {
+      for (const { set, index } of unfinished) {
+        const state = stateList[index]
+        if (!state || state.done) continue
+        const previous: SetSyncRevert = { ...state }
+        const duration = parseDurationToSeconds(set.targetTime) ?? 60
+        state.metric = `${duration}s`
+        state.weight = normalizeWorkoutTargetText(state.weight || set.targetWeight) ?? ''
+        if (state.weight && !state.value_source) state.value_source = 'accepted_target'
+        state.skipped = false
+        state.done = true
+        bumpData()
+        if (!await syncLoggedSet(exerciseId, index, previous)) break
+      }
+    } finally {
+      logPendingRef.current = false
+      setLogPending(false)
+      setCompletingTimedExerciseId(null)
+    }
+  }, [bumpData, canLogSelectedDay, ensureExerciseStateList, getExercise, resetHoldTimer, syncLoggedSet])
+
   const unlogLoggedSet = useCallback(async (exerciseId: string, index: number, previous?: SetSyncRevert | null) => {
     // Undo removes the canonical actual, then the local state returns to
     // pending; a failed undo restores the logged state.
@@ -4913,6 +4948,8 @@ const App = () => {
             onSelectDay={handleSelectDay}
             onBack={hideWorkoutDetail}
             onLogSet={logNextSet}
+            onCompleteTimedExercise={(exerciseId) => { void completeTimedExercise(exerciseId) }}
+            completingTimedExerciseId={completingTimedExerciseId}
             onSkipSet={skipSet}
             onUnlogSet={unlogSet}
             onStartEditingSet={(exerciseId, index) => {

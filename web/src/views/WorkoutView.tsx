@@ -89,6 +89,8 @@ type WorkoutViewProps = {
   onSelectDay: (index: number, date: string) => void
   onBack: () => void
   onLogSet: (exerciseId?: string) => void
+  onCompleteTimedExercise: (exerciseId: string) => void
+  completingTimedExerciseId: string | null
   onSkipSet: (exerciseId: string, index: number) => void
   onUnlogSet: (exerciseId: string, index: number) => void
   onStartEditingSet: (exerciseId: string, index: number) => void
@@ -173,6 +175,8 @@ const WorkoutView: FC<WorkoutViewProps> = ({
   onSelectDay,
   onBack,
   onLogSet,
+  onCompleteTimedExercise,
+  completingTimedExerciseId,
   onSkipSet,
   onUnlogSet,
   onStartEditingSet,
@@ -352,6 +356,7 @@ const WorkoutView: FC<WorkoutViewProps> = ({
     })
     : hasNext
   const holdTimerEnabled = Boolean(activeExercise && activeExercise.metric === 'time' && activeExercise.timer?.enabled)
+  const completingTimedExercise = completingTimedExerciseId !== null
   const isAllDone = Boolean(activeExercise && !circuitHasPending && !hasLogTarget)
   const footerTitle = isAllDone ? detailTitle : (logTargetExercise?.name ?? detailTitle)
 
@@ -499,7 +504,7 @@ const WorkoutView: FC<WorkoutViewProps> = ({
           holdTimerEnabled={holdTimerEnabled}
           holdTargetSec={holdTargetSec}
           holdPrepSec={holdPrepSec}
-          canLogDay={canLogDay}
+          canLogDay={canLogDay && !completingTimedExercise}
           canEditPlan={canEditPlan}
           onSkipSet={onSkipSet}
           onUnlogSet={onUnlogSet}
@@ -583,7 +588,10 @@ const WorkoutView: FC<WorkoutViewProps> = ({
         </>
       ) : null}
 
-      <WeekStrip days={weekDays} onSelectDay={onSelectDay} />
+      <WeekStrip
+        days={completingTimedExercise ? weekDays.map((day) => ({ ...day, isSelectable: false })) : weekDays}
+        onSelectDay={onSelectDay}
+      />
 
       {isViewingOtherDay && viewingDateLabel ? (
         <div className="workout-viewing-banner" role="status">
@@ -591,7 +599,7 @@ const WorkoutView: FC<WorkoutViewProps> = ({
             {t('workout.viewingDate', { date: viewingDateLabel })}
           </span>
           {onBackToToday ? (
-            <button type="button" className="workout-viewing-action" onClick={onBackToToday}>
+            <button type="button" className="workout-viewing-action" onClick={onBackToToday} disabled={completingTimedExercise}>
               {t('workout.backToToday')}
             </button>
           ) : null}
@@ -624,7 +632,7 @@ const WorkoutView: FC<WorkoutViewProps> = ({
 
       <section className={`workout-detail ${activeEntryId ? 'active' : ''}`} data-section-color={detailSectionColorSlot}>
         <div className="detail-header-bar">
-          <button className="back-btn" type="button" onClick={onBack}>
+          <button className="back-btn" type="button" onClick={onBack} disabled={completingTimedExercise}>
             <span className="icon-back">‹</span> {t('common.back')}
           </button>
           <div className="detail-title-block">
@@ -632,12 +640,27 @@ const WorkoutView: FC<WorkoutViewProps> = ({
           </div>
           {activeExercise ? (
             <div className="detail-header-actions">
+              {activeExercise.metric === 'time' && activeExercise.status !== 'skip' && hasNext ? (
+                <button
+                  type="button"
+                  className="detail-complete-btn"
+                  aria-label={t('workout.completeTimedExercise')}
+                  title={t('workout.completeTimedExercise')}
+                  disabled={!canLogDay || completingTimedExerciseId !== null}
+                  onClick={() => onCompleteTimedExercise(activeExercise.id)}
+                >
+                  <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                    <path d="M5 12.5l4.5 4.5L19 7" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </button>
+              ) : null}
               {activeExercise.exerciseKey ? (
                 <button
                   type="button"
                   className={`detail-history-btn${historyOpen ? ' active' : ''}`}
                   aria-label={t('workout.historyTitle')}
                   aria-expanded={historyOpen}
+                  disabled={completingTimedExercise}
                   onClick={openExerciseHistory}
                 >
                   <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -651,7 +674,7 @@ const WorkoutView: FC<WorkoutViewProps> = ({
                 className={`detail-coach-btn${coachChatOpen ? ' active' : ''}`}
                 aria-label={t('workout.askCoach')}
                 aria-expanded={coachChatOpen}
-                disabled={!coachChatEnabled}
+                disabled={!coachChatEnabled || completingTimedExercise}
                 onClick={() => {
                   setHistoryOpen(false)
                   setCoachChatOpen((current) => !current)
@@ -685,7 +708,7 @@ const WorkoutView: FC<WorkoutViewProps> = ({
               type="button"
               aria-label={`${isAllDone ? t('common.done') : t('workout.now')} ${footerTitle}: ${nextActionLabel}`}
               onClick={isAllDone ? onBack : () => onLogSet(logTargetExercise?.id)}
-              disabled={!canLogDay || (!isAllDone && !hasLogTarget)}
+              disabled={!canLogDay || completingTimedExerciseId !== null || (!isAllDone && !hasLogTarget)}
             >
               <span className="detail-log-main">
                 <span>{isAllDone ? t('common.done') : t('workout.now')}</span>

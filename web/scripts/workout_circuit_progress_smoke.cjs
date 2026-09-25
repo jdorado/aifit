@@ -168,7 +168,7 @@ async function main() {
     apiFetch: () => new Promise(resolve => { respond = resolve }), crypto: { randomUUID: () => 'request1' },
     refreshVisibleWorkoutSessions: async () => false, bumpData() {}, console: { warn() {} },
   }
-  const sync = callback('syncLoggedSet', 'unlogLoggedSet', syncEnv)
+  const sync = callback('syncLoggedSet', 'completeTimedExercise', syncEnv)
   const failure = sync('a', 0)
   await Promise.resolve()
   const differentDay = { done: true, metric: '12' }
