@@ -3926,6 +3926,16 @@ const App = () => {
     ownerKey: string,
     preview?: () => () => void,
   ): Promise<boolean> => {
+    // Tapping add/remove blurs the target input first. Let that save settle
+    // instead of dropping the tap or sending its now-stale revision.
+    const targetEdits = [...pendingTargetEditsRef.current.entries()]
+      .filter(([key]) => key.startsWith(`${workoutId}:`))
+      .map(([, promise]) => promise)
+    if (targetEdits.length > 0) {
+      const saved = await Promise.all(targetEdits)
+      if (saved.some((ok) => !ok)) return false
+      body = { ...body, expected_revision: workoutRevisionByOwnerDateRef.current[ownerKey] }
+    }
     if (pendingWorkoutDatesRef.current.has(targetDate)) return false
     pendingWorkoutDatesRef.current.add(targetDate)
     setStructuralEditPending(true)

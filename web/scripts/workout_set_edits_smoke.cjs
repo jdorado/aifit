@@ -16,6 +16,7 @@ function harness() {
   const exercise = { id: 'ex_one', sets, summary: '' }
   const states = [{ weight: '41kg', metric: '11', done: false }, { weight: '52kg', metric: '9', done: false }]
   const pending = new Set()
+  const targetEdits = new Map()
   const h = { exercise, states, pending, calls: [], refreshes: 0, alerts: [], busy: false, applied: [], paints: 0 }
   const env = {
     useCallback: fn => fn,
@@ -27,6 +28,7 @@ function harness() {
     weekSetLogsRef: { current: { [context.targetDate]: { [exercise.id]: states } } },
     setLogsRef: { current: { [exercise.id]: states } },
     pendingWorkoutDatesRef: { current: pending },
+    pendingTargetEditsRef: { current: targetEdits },
     setStructuralEditPending: value => { h.busy = value },
     getPrivyAuthHeaders: async () => ({}), withCoachActAs: value => value, API_BASE_URL: 'https://example.test',
     apiFetch: (url, options) => {
@@ -47,6 +49,8 @@ function harness() {
     console: { warn() {} }, crypto: require('node:crypto').webcrypto,
   }
   Object.assign(h, new Function(...Object.keys(env), `${compiled}; return { handleAddSet, handleRemoveSet, mergeUnloggedSetInputs }`)(...Object.values(env)))
+  h.targetEdits = targetEdits
+  h.revisions = env.workoutRevisionByOwnerDateRef.current
   h.reply = async (status = 200) => {
     // Auth acquisition yields once before the request is sent.
     await Promise.resolve()
@@ -72,6 +76,22 @@ async function main() {
   assert.equal(h.refreshes, 0, 'receipt avoids a redundant full-week refresh')
   assert.equal(h.applied.length, 1)
   assert.equal(h.busy, false)
+
+  h = harness()
+  let saveTarget
+  h.pending.add(context.targetDate)
+  h.targetEdits.set('wrk_one:s1', new Promise(resolve => { saveTarget = resolve }))
+  task = h.handleAddSet('ex_one')
+  assert.equal(h.calls.length, 0, 'add waits for a target blur save')
+  h.revisions[context.ownerKey] = 'rev_after_target'
+  h.pending.delete(context.targetDate)
+  h.targetEdits.clear()
+  saveTarget(true)
+  await Promise.resolve()
+  await Promise.resolve()
+  await h.reply()
+  await task
+  assert.equal(h.calls[0].body.expected_revision, 'rev_after_target', 'blur must not drop the tap or cause a stale revision')
 
   for (const action of ['handleAddSet', 'handleRemoveSet']) {
     h = harness()
