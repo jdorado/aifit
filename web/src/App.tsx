@@ -2587,6 +2587,8 @@ const App = () => {
 
   const fetchWorkoutSessionsByDates = useCallback(async (dateIds: string[]): Promise<WorkoutSession[]> => {
     if (!currentUserId || !canQuerySavedWorkoutSessions || dateIds.length === 0) return []
+    const ownerId = coachActAsOwnerId ?? currentUserId
+    const revisionsAtStart = { ...workoutRevisionByOwnerDateRef.current }
     const sortedDates = [...dateIds].sort()
     const headers = await getPrivyAuthHeaders()
 
@@ -2600,16 +2602,22 @@ const App = () => {
     }
     const requestedDates = new Set(dateIds)
     const workouts = await response.json() as Array<NonNullable<BackendWorkoutReceipt['workout']>>
+    if (coachActAsLinkIdRef.current !== coachActAsOwnerId) return []
     const sessions = workouts
       .filter((workout) => requestedDates.has(workout.date))
       .map((workout) => backendWorkoutToSession(workout, currentUserId))
       .filter((session) => {
+        // A drag/log receipt or a newer read may have landed while this GET
+        // was in flight. Never replace it with this older snapshot: doing so
+        // also makes the next write send an obsolete expected_revision.
+        const ownerKey = `${ownerId}:${session.date}`
+        const currentRevision = workoutRevisionByOwnerDateRef.current[ownerKey]
+        if (currentRevision !== revisionsAtStart[ownerKey] && session.revision !== currentRevision) return false
         // Drop pre-delete snapshots: the record they describe is gone and
         // applying them would resurrect a cleared day.
         const tombstone = clearedWorkoutAtRef.current[session.date]
         return !tombstone || (session.updated_at ? session.updated_at > tombstone : false)
       })
-    const ownerId = coachActAsOwnerId ?? currentUserId
     sessions.forEach((session) => {
       // Coach mode must register the canonical refs under the act-as owner:
       // every act-as read/edit resolves them through that key, so keying by
@@ -2636,7 +2644,7 @@ const App = () => {
 
   const applySavedWorkoutSessionsToWeek = useCallback((
     sessions: WorkoutSession[],
-    options: { preserveSelectedDate?: boolean, selectedDate?: string, preserveActiveEntry?: boolean } = {},
+    options: { preserveSelectedDate?: boolean, selectedDate?: string, preserveActiveEntry?: boolean, fromRead?: boolean } = {},
   ) => {
     if (sessions.length === 0) return false
 
@@ -2648,6 +2656,10 @@ const App = () => {
     sessions.forEach((session) => {
       const targetDate = normalizeDateId(session.date) ?? normalizeDateId(session.session_id)
       if (!targetDate || pendingWorkoutDatesRef.current.has(targetDate)) return
+      const ownerKey = `${ownerId}:${targetDate}`
+      // A receipt can also land between a read resolving and its caller
+      // applying the result. Keep both the visible record and revision fresh.
+      if (options.fromRead && session.revision !== workoutRevisionByOwnerDateRef.current[ownerKey]) return
       const exercises = normalizeWorkoutExercises(session.workout?.exercises)
       const extras = normalizeWorkoutExtras(session.workout?.extras)
       exercises.forEach((exercise) => {
@@ -2690,7 +2702,6 @@ const App = () => {
 
       const storedLogs = session.workout?.set_logs ?? {}
       nextLogs[targetDate] = buildSetLogsForExercises(exercises, storedLogs)
-      const ownerKey = `${ownerId}:${targetDate}`
       if (session.session_id) workoutIdByOwnerDateRef.current[ownerKey] = session.session_id
       if (session.revision) {
         workoutRevisionByOwnerDateRef.current[ownerKey] = session.revision
@@ -2772,6 +2783,8 @@ const App = () => {
           const targetDate = normalizeDateId(session.date) ?? normalizeDateId(session.session_id)
           if (!targetDate) return
           if (pendingWorkoutDatesRef.current.has(targetDate)) return
+          const ownerKey = `${coachActAsOwnerId ?? currentUserId}:${targetDate}`
+          if (session.revision !== workoutRevisionByOwnerDateRef.current[ownerKey]) return
           const savedExercises = normalizeWorkoutExercises(session.workout?.exercises)
           const savedExtras = normalizeWorkoutExtras(session.workout?.extras)
           const savedLogs = session.workout?.set_logs ?? {}
@@ -2885,6 +2898,7 @@ const App = () => {
       .map((date) => getDateId(date))
     const sessions = await fetchWorkoutSessionsByDates(visibleDates)
     await applySavedWorkoutSessionsToWeek(sessions, {
+      fromRead: true,
       preserveSelectedDate: true,
       preserveActiveEntry: true,
     })
@@ -3290,6 +3304,7 @@ const App = () => {
         .then((sessions) => {
           if (sessions.length > 0) {
             applySavedWorkoutSessionsToWeek(sessions, {
+              fromRead: true,
               selectedDate: dateId,
               preserveActiveEntry: true,
             })
