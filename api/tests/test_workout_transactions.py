@@ -160,6 +160,15 @@ def matches(document, query):
                 return False
             continue
         if isinstance(value, dict):
+            if any(op in value for op in ("$gte", "$lte", "$lt", "$gt")):
+                field = document.get(key)
+                if field is None:
+                    return False
+                if "$gte" in value and field < value["$gte"] or "$lte" in value and field > value["$lte"]:
+                    return False
+                if "$lt" in value and field >= value["$lt"] or "$gt" in value and field <= value["$gt"]:
+                    return False
+                continue
             if "$exists" in value:
                 if (key in document) != value["$exists"]:
                     return False

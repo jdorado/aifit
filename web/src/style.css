@@ -10909,3 +10909,27 @@ body:has(.landing) {
   padding: 7px 12px;
   cursor: pointer;
 }
+
+/* Coaching feedback stays beside the existing set controls. */
+.progression-feedback {
+  margin: 16px 0;
+  padding: 14px 16px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+  border: 1px solid var(--glass-border);
+  color: var(--ink-primary);
+  font-size: 0.85rem;
+}
+.progression-heading { display: flex; flex-wrap: wrap; gap: 6px 16px; justify-content: space-between; }
+.progression-heading span, .progression-muted { color: var(--ink-secondary); }
+.progression-feedback p, .muscle-progress p { margin: 8px 0; }
+.progression-feedback summary, .muscle-progress summary { cursor: pointer; padding: 8px 0; }
+.progression-preview { color: var(--brand-primary); font-size: 0.85rem; line-height: 1.5; margin: 12px 0 0; }
+.progression-review { margin-top: 10px; padding: 10px 14px; min-height: 44px; border: 1px solid var(--glass-border); border-radius: 10px; color: var(--ink-primary); background: var(--glass-surface); }
+.set-effort { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding-top: 12px; color: var(--ink-secondary); font-size: 0.8rem; }
+.set-effort select { max-width: 100%; min-height: 44px; padding: 8px; border: 1px solid var(--glass-border); border-radius: 10px; color: var(--ink-primary); background: var(--bg-subtle); font: inherit; font-size: 16px; }
+.set-row.edit .set-effort { width: 100%; }
+.muscle-progress { font-size: 0.85rem; }
+.muscle-progress-row { padding: 12px 0; border-bottom: 1px solid var(--glass-border); }
+.muscle-progress-row h3 { margin: 0 0 8px; text-transform: capitalize; font-size: 1rem; }
+.exercise-history-tabs { flex-wrap: wrap; }

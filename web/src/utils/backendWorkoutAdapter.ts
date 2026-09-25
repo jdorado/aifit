@@ -11,6 +11,7 @@ type BackendRange = {
 type BackendTarget = {
   reps?: BackendRange
   duration_seconds?: BackendRange
+  rpe?: BackendRange
   load?: {
     value: number
     unit: 'kg' | 'lb'
@@ -27,7 +28,7 @@ type BackendActual = {
   reps?: number
   duration_seconds?: number
   load?: BackendLoad
-  rpe?: number
+  rpe?: number | null
   completed_at?: string
 }
 
@@ -134,6 +135,7 @@ const actualToSetState = (actual: BackendWorkoutSet['actual']): SetState => {
         : '',
     done: true,
     value_source: 'user_entered',
+    ...(typeof actual.rpe === 'number' ? { rpe: actual.rpe } : {}),
   }
 }
 

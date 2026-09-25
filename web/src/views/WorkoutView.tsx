@@ -6,6 +6,8 @@ import ExerciseFeedback from '../components/workout/ExerciseFeedback'
 import ExerciseHistorySheet from '../components/workout/ExerciseHistorySheet'
 import SwapCandidateSheet from '../components/workout/SwapCandidateSheet'
 import ExerciseSetList from '../components/workout/ExerciseSetList'
+import { ProgressionFeedback } from '../components/workout/ProgressionFeedback'
+import { previewLoad, type WorkoutProgression } from '../utils/progression'
 import VideoGallery from '../components/workout/VideoGallery'
 import WeekStrip from '../components/workout/WeekStrip'
 import WorkoutMiniBar from '../components/workout/WorkoutMiniBar'
@@ -59,6 +61,8 @@ type WorkoutViewProps = {
   canLogDay: boolean
   canEditPlan: boolean
   coachChatEnabled: boolean
+  workoutId?: string
+  workoutRevision?: string
   apiBaseUrl: string
   getAuthHeaders: () => Promise<Record<string, string>>
   actAsLinkId?: string | null
@@ -95,6 +99,7 @@ type WorkoutViewProps = {
   onStartEditingSet: (exerciseId: string, index: number) => void
   onSaveEditingSet: () => void
   onCancelEditingSet: () => void
+  onUpdateSetEffort: (exerciseId: string, index: number, rpe: number | undefined) => void
   onUpdateSetField: (exerciseId: string, index: number, field: 'weight' | 'metric', value: string, propagate?: boolean) => void
   onCommitSetTarget: (exerciseId: string, index: number, field: 'weight' | 'metric') => void
   onAddSet: (exerciseId: string) => void
@@ -144,6 +149,8 @@ const WorkoutView: FC<WorkoutViewProps> = ({
   canLogDay,
   canEditPlan,
   coachChatEnabled,
+  workoutId,
+  workoutRevision,
   apiBaseUrl,
   getAuthHeaders,
   actAsLinkId = null,
@@ -180,6 +187,7 @@ const WorkoutView: FC<WorkoutViewProps> = ({
   onStartEditingSet,
   onSaveEditingSet,
   onCancelEditingSet,
+  onUpdateSetEffort,
   onUpdateSetField,
   onCommitSetTarget,
   onAddSet,
@@ -205,6 +213,30 @@ const WorkoutView: FC<WorkoutViewProps> = ({
   onExtractItem,
 }) => {
   const { t, language } = useI18n()
+  const progressionKey = `${actAsLinkId ?? 'self'}:${workoutId ?? ''}:${workoutRevision ?? ''}`
+  const [progressionState, setProgressionState] = useState<{ key: string; data: WorkoutProgression | null; error: boolean } | null>(null)
+  const [progressionRetry, setProgressionRetry] = useState(0)
+  const progression = progressionState?.key === progressionKey ? progressionState.data : null
+  useEffect(() => {
+    if (!active || !workoutId) return
+    const controller = new AbortController()
+    setProgressionState(null)
+    void (async () => {
+      try {
+        const headers = await getAuthHeaders()
+        if (controller.signal.aborted) return
+        const query = actAsLinkId ? `?${new URLSearchParams({ act_as_link_id: actAsLinkId })}` : ''
+        const response = await fetch(`${apiBaseUrl}/v1/workouts/${encodeURIComponent(workoutId)}/progression${query}`, { headers, signal: controller.signal })
+        if (!response.ok) throw new Error('Progression unavailable')
+        const data = await response.json() as WorkoutProgression
+        if (!controller.signal.aborted && data.workout_id === workoutId) setProgressionState({ key: progressionKey, data, error: false })
+      } catch {
+        if (!controller.signal.aborted) setProgressionState({ key: progressionKey, data: null, error: true })
+      }
+    })()
+    return () => controller.abort()
+  }, [active, workoutId, progressionKey, actAsLinkId, apiBaseUrl, getAuthHeaders, progressionRetry])
+
   const [coachChatOpen, setCoachChatOpen] = useState(false)
   const [coachDraft, setCoachDraft] = useState('')
   const [historyOpen, setHistoryOpen] = useState(false)
@@ -448,6 +480,8 @@ const WorkoutView: FC<WorkoutViewProps> = ({
       return null
     }
 
+    const progress = progression?.exercises.find(item => item.exercise_instance_id === activeExercise.id)
+    const selectedWeight = stateList[nextIndex]?.weight || activeExercise.sets[nextIndex]?.targetWeight || ''
     const hasNoSets = activeExercise.sets.length === 0
     const isCircuitMove = Boolean(activeCircuit)
     const setLabel = isCircuitMove ? t('workout.roundLabel') : t('workout.setLabel')
@@ -492,8 +526,17 @@ const WorkoutView: FC<WorkoutViewProps> = ({
             </div>
           </div>
         ) : null}
+        {progress ? <ProgressionFeedback summary={progress}
+          onReview={coachChatEnabled ? () => {
+            setCoachDraft(t('progression.reviewPrompt'))
+            setCoachChatOpen(true)
+          } : undefined} /> : workoutId && activeExercise.metric === 'reps' && !progression ?
+          <p className="progression-muted">{t(progressionState?.key === progressionKey && progressionState.error ? 'progression.loadError' : 'progression.loading')}
+            {progressionState?.key === progressionKey && progressionState.error ? <button type="button" onClick={() => setProgressionRetry(value => value + 1)}>{t('common.retry')}</button> : null}
+          </p> : null}
         <ExerciseSetList
           exercise={activeExercise}
+          selectedLoadFeedback={progress && previewLoad(String(selectedWeight), progress) ? t(`progression.${previewLoad(String(selectedWeight), progress)}`) : undefined}
           setLabel={setLabel}
           stateList={stateList}
           nextIndex={nextIndex}
@@ -508,6 +551,7 @@ const WorkoutView: FC<WorkoutViewProps> = ({
           onStartEditingSet={onStartEditingSet}
           onSaveEditingSet={onSaveEditingSet}
           onCancelEditingSet={onCancelEditingSet}
+          onUpdateSetEffort={onUpdateSetEffort}
           onUpdateSetField={onUpdateSetField}
           onCommitSetTarget={onCommitSetTarget}
           onAddSet={() => onAddSet(activeExercise.id)}
@@ -724,6 +768,9 @@ const WorkoutView: FC<WorkoutViewProps> = ({
             exerciseName={activeExercise.name}
             sessions={historySessions}
             related={historyRelated}
+            muscles={progression?.muscles.filter(muscle => progression.exercises.find(item => item.exercise_instance_id === activeExercise.id)?.primary_muscles.includes(muscle.muscle)) ?? []}
+            progressionLoading={!progression && !progressionState?.error}
+            progressionError={Boolean(progressionState?.error)}
             onClose={() => setHistoryOpen(false)}
           />
         ) : null}

@@ -189,6 +189,7 @@ type ProfileState = {
 }
 
 type SetSyncRevert = {
+  rpe?: number
   weight: string
   metric: string
   done: boolean
@@ -973,6 +974,7 @@ const App = () => {
   const [dayNoteSaving, setDayNoteSaving] = useState(false)
   const [exerciseFeedbackSaving, setExerciseFeedbackSaving] = useState(false)
   const [editingSetSnapshot, setEditingSetSnapshot] = useState<{
+    rpe?: number
     weight: string
     metric: string
     value_source?: SetState['value_source']
@@ -2918,6 +2920,7 @@ const App = () => {
     const currentItem = currentList?.[index]
     if (!currentItem) return
     if (previous) {
+      currentItem.rpe = previous.rpe
       currentItem.weight = previous.weight
       currentItem.metric = previous.metric
       currentItem.done = previous.done
@@ -2960,7 +2963,7 @@ const App = () => {
     if (!skipped && !metric) { revertLocal(); return false }
 
     const setKey = `${workoutId}:${setTarget.setId}`
-    const fingerprint = JSON.stringify([skipped ? 'skipped' : metric, skipped ? null : load])
+    const fingerprint = JSON.stringify([skipped ? 'skipped' : metric, skipped ? null : load, skipped ? null : setItem.rpe])
     if (syncedSetKeysRef.current.get(setKey) === fingerprint) return true
 
     // A target edit on this set may still be in flight. Wait for it so the
@@ -2983,7 +2986,7 @@ const App = () => {
           method: 'PATCH',
           headers,
           body: JSON.stringify({
-            actual: skipped ? { status: 'skipped' } : { status: 'completed', ...metric, ...(load ? { load } : {}) },
+            actual: skipped ? { status: 'skipped' } : { status: 'completed', ...metric, ...(load ? { load } : {}), ...(setItem.rpe !== undefined ? { rpe: setItem.rpe } : {}) },
             expected_revision: expectedRevision,
             request_id: crypto.randomUUID(),
           }),
@@ -3003,6 +3006,7 @@ const App = () => {
       const nextRevision = receipt.revision ?? receipt.workout?.revision
       if (nextRevision) workoutRevisionByOwnerDateRef.current[ownerKey] = nextRevision
       syncedSetKeysRef.current.set(setKey, fingerprint)
+      bumpData()
       return true
     } catch (error) {
       console.warn('Canonical set log failed:', error)
@@ -3914,6 +3918,7 @@ const App = () => {
         if (!previous || nextState.done || previous.done) return
         nextState.weight = previous.weight
         nextState.metric = previous.metric
+        if (previous.rpe !== undefined) nextState.rpe = previous.rpe
         if (previous.value_source) nextState.value_source = previous.value_source
       })
     }
@@ -4965,6 +4970,8 @@ const App = () => {
             coachChatEnabled={coachChatEnabled}
             apiBaseUrl={API_BASE_URL}
             getAuthHeaders={getPrivyAuthHeaders}
+            workoutId={workoutIdByOwnerDateRef.current[`${coachActAsOwnerId ?? currentUserId}:${selectedDay?.date ?? todayId}`]}
+            workoutRevision={workoutRevisionByOwnerDateRef.current[`${coachActAsOwnerId ?? currentUserId}:${selectedDay?.date ?? todayId}`]}
             weekDays={weekDaySummaries}
             selectedDayLabel={selectedDayLabel}
             selectedDateId={selectedDay?.date ?? null}
@@ -4995,6 +5002,13 @@ const App = () => {
             onCompleteTimedExercise={(exerciseId) => { void completeTimedExercise(exerciseId) }}
             completingTimedExerciseId={completingTimedExerciseId}
             onUnlogSet={unlogSet}
+            onUpdateSetEffort={(exerciseId, index, rpe) => {
+              if (!canLogSelectedDay || logPendingRef.current) return
+              const setItem = setLogsRef.current[exerciseId]?.[index]
+              if (!setItem || (setItem.done && (editingSet?.exerciseId !== exerciseId || editingSet.index !== index))) return
+              setItem.rpe = rpe
+              bumpData()
+            }}
             onStartEditingSet={(exerciseId, index) => {
               const stateList = setLogsRef.current[exerciseId]
               const setItem = stateList?.[index]
@@ -5002,6 +5016,7 @@ const App = () => {
               setEditingSet({ exerciseId, index })
               setEditingSetSnapshot({
                 weight: setItem.weight,
+                rpe: setItem.rpe,
                 metric: setItem.metric,
                 value_source: setItem.value_source,
               })
@@ -5019,6 +5034,7 @@ const App = () => {
                   if (setItem.done) {
                     const previous = editingSetSnapshot
                       ? {
+                        rpe: editingSetSnapshot.rpe,
                         weight: editingSetSnapshot.weight,
                         metric: editingSetSnapshot.metric,
                         done: true,
@@ -5038,6 +5054,7 @@ const App = () => {
                 const stateList = setLogsRef.current[editingSet.exerciseId]
                 const setItem = stateList?.[editingSet.index]
                 if (setItem) {
+                  setItem.rpe = editingSetSnapshot.rpe
                   setItem.weight = editingSetSnapshot.weight
                   setItem.metric = editingSetSnapshot.metric
                   setItem.value_source = editingSetSnapshot.value_source
