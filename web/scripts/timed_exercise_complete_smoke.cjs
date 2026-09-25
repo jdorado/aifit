@@ -25,7 +25,8 @@ const run = async (failAt = -1) => {
   const env = {
     useCallback: (fn) => fn,
     canLogSelectedDay: true,
-    completingTimedExerciseRef: ref,
+    logPendingRef: ref,
+    setLogPending: () => {},
     setCompletingTimedExerciseId: () => {},
     resetHoldTimer: () => {},
     getExercise: () => exercise,

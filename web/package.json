@@ -7,9 +7,10 @@
   "scripts": {
     "dev": "node scripts/dev.cjs",
     "fe": "node scripts/dev.cjs",
-    "build": "node scripts/workout_timeline_contract.cjs && node scripts/workout_circuit_keys_smoke.cjs && node scripts/pwa_resume_contract.cjs && node scripts/plan_edit_contract.cjs && node scripts/coach_chat_act_as_contract.cjs && node scripts/workout_set_inherit_smoke.cjs && node scripts/timed_exercise_complete_smoke.cjs && tsc && webpack --config webpack.config.cjs --mode production",
+    "build": "node scripts/workout_timeline_contract.cjs && node scripts/workout_circuit_keys_smoke.cjs && node scripts/workout_circuit_progress_smoke.cjs && node scripts/pwa_resume_contract.cjs && node scripts/plan_edit_contract.cjs && node scripts/coach_chat_act_as_contract.cjs && node scripts/workout_set_inherit_smoke.cjs && node scripts/timed_exercise_complete_smoke.cjs && tsc && webpack --config webpack.config.cjs --mode production",
     "preview": "serve dist",
     "smoke:timeline-contract": "node scripts/workout_timeline_contract.cjs",
+    "smoke:circuit-progress": "node scripts/workout_circuit_progress_smoke.cjs",
     "smoke:circuit-keys": "node scripts/workout_circuit_keys_smoke.cjs",
     "smoke:pwa-resume": "node scripts/pwa_resume_contract.cjs",
     "smoke:plan-edit": "node scripts/plan_edit_contract.cjs",
