@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import logging
 import os
+import re
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 from urllib.parse import parse_qsl, quote, urlparse
@@ -9,7 +10,7 @@ from uuid import UUID
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field
 from pymongo import ASCENDING, AsyncMongoClient, ReturnDocument
@@ -31,7 +32,7 @@ from .coach_links import (
     CoachLinkService,
     CoachLinkUpdateInput,
 )
-from .ez import call as ez_call, provision_telegram, verified_binding
+from .ez import call as ez_call, provision_telegram, speech as ez_speech, verified_binding
 from .model_policy import filter_control, require_allowed
 from .workouts import (
     BlueprintInput,
@@ -665,6 +666,22 @@ async def chat_job(job_id: str, user_id: str, identity: Identity = Depends(requi
         raise
     request_id = current.get("requestId") if isinstance(current.get("requestId"), str) else job_id
     return public_turn_from_snapshot(job_id, request_id, current)
+
+
+@app.post("/chat/jobs/{job_id}/speech")
+async def chat_speech(job_id: str, user_id: str, identity: Identity = Depends(require_identity),
+                      act_as_link_id: str | None = Query(default=None, max_length=200)) -> Response:
+    account = await chat_account(identity, user_id, act_as_link_id)
+    if not re.fullmatch(r"r_app_[a-f0-9]{64}", job_id):
+        raise HTTPException(404, "Chat reply not found.")
+    binding = await verified_binding(account["account_id"])
+    current = await ez_call(binding, "GET", f"/v1/runs/{job_id}")
+    if current.get("scope") != chat_run_scope(MINI_CHAT_SCOPE, act_as_link_id):
+        raise HTTPException(404, "Chat reply not found.")
+    audio = await ez_speech(binding, job_id)
+    # Re-check a coach link in case access changed during synthesis.
+    await chat_account(identity, user_id, act_as_link_id)
+    return Response(audio, media_type="audio/wav", headers={"Cache-Control": "no-store"})
 
 
 @app.post("/chat/jobs/{job_id}/cancel")

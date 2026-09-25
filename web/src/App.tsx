@@ -221,6 +221,7 @@ type ChatRequestPayload = {
 }
 
 type ChatResponsePayload = {
+  job_id?: unknown
   reply?: unknown
   preset?: EzPreset
 }
@@ -3248,6 +3249,7 @@ const App = () => {
     } catch {
       // Chat remains usable while workout APIs are intentionally unsupported.
     }
+    return data
   }, [
     fetchChatJobResult,
     handleCoachReply,
@@ -3595,7 +3597,7 @@ const App = () => {
     }
 
     try {
-      await fetchCoachReply(payload, scopeId, exerciseId, thinkingId)
+      return await fetchCoachReply(payload, scopeId, exerciseId, thinkingId)
     } catch (error) {
       console.error('Coach Chat Error:', error)
       removeCoachMessage(scopeId, thinkingId)
@@ -3623,6 +3625,21 @@ const App = () => {
     t,
     todayId,
   ])
+
+  const handleCoachListen = useCallback(async (exerciseId: string): Promise<Blob> => {
+    const result = await handleCoachSend(exerciseId, t('workout.coachingAudioPrompt'))
+    if (typeof result?.job_id !== 'string') throw new Error(t('workout.coachingAudioFailed'))
+    const params = new URLSearchParams({
+      user_id: currentUserId,
+      ...(coachActAsLinkId ? { act_as_link_id: coachActAsLinkId } : {}),
+    })
+    const response = await apiFetch(`${API_BASE_URL}/chat/jobs/${encodeURIComponent(result.job_id)}/speech?${params}`, {
+      method: 'POST',
+      headers: await getPrivyAuthHeaders(),
+    })
+    if (!response.ok) throw readApiError(await response.json().catch(() => null), response.status, t('workout.coachingAudioFailed'))
+    return response.blob()
+  }, [handleCoachSend, t, currentUserId, coachActAsLinkId, getPrivyAuthHeaders])
 
   const handleCloseSwap = useCallback(() => {
     swapExerciseIdRef.current = null
@@ -4870,6 +4887,7 @@ const App = () => {
             onSaveDayNote={handleSaveDayNote}
             onSaveExerciseFeedback={handleSaveExerciseFeedback}
             onCoachSend={handleCoachSend}
+            onCoachListen={handleCoachListen}
             swapOpen={swapOpen}
             swapLoading={swapLoading}
             swappingCandidateId={swappingCandidateId}

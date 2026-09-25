@@ -83,6 +83,28 @@ async def verified_binding(principal_id: str, *, telegram: bool = False) -> dict
     return {**binding, "bindingId": binding_id}
 
 
+async def speech(binding: dict, run_id: str) -> bytes:
+    """Render an existing Ez reply; text and provider credentials stay with Ez."""
+    try:
+        async with httpx.AsyncClient(timeout=75) as client:
+            response = await client.post(
+                binding["url"].rstrip("/") + f"/v1/runs/{run_id}/speech",
+                headers={"Authorization": f"Bearer {_private_text(binding['tokenFile'])}"},
+            )
+        if response.status_code == 404:
+            raise HTTPException(503, "Audio coaching needs an Ez update.")
+        if response.status_code == 503:
+            raise HTTPException(503, "Audio coaching is not configured yet.")
+        response.raise_for_status()
+        audio = response.content
+        if (response.headers.get("content-type") != "audio/wav" or
+                len(audio) < 44 or audio[:4] != b"RIFF" or audio[8:12] != b"WAVE"):
+            raise ValueError("Invalid Ez speech response")
+        return audio
+    except (OSError, ValueError, httpx.HTTPError) as error:
+        raise HTTPException(502, "Could not create coaching audio. Try again.") from error
+
+
 def telegram_provisioning_configured(binding: dict) -> bool:
     try:
         setup = binding["telegramProvisioning"]

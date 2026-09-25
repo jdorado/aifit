@@ -2,6 +2,7 @@ import type { FC } from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useI18n } from '../i18n'
 import CoachChat from '../components/workout/CoachChat'
+import CoachingAudio from '../components/workout/CoachingAudio'
 import ExerciseFeedback from '../components/workout/ExerciseFeedback'
 import ExerciseHistorySheet from '../components/workout/ExerciseHistorySheet'
 import SwapCandidateSheet from '../components/workout/SwapCandidateSheet'
@@ -122,6 +123,7 @@ type WorkoutViewProps = {
   onSaveDayNote: (notes: string) => Promise<boolean>
   onSaveExerciseFeedback: (exerciseId: string, note: string, preset: WorkoutFeedbackPreset | null) => Promise<boolean>
   onCoachSend: (exerciseId: string, message: string) => void
+  onCoachListen: (exerciseId: string) => Promise<Blob>
   swapOpen: boolean
   swapLoading: boolean
   swappingCandidateId: string | null
@@ -208,6 +210,7 @@ const WorkoutView: FC<WorkoutViewProps> = ({
   onSaveDayNote,
   onSaveExerciseFeedback,
   onCoachSend,
+  onCoachListen,
   swapOpen,
   swapLoading,
   swappingCandidateId,
@@ -782,6 +785,13 @@ const WorkoutView: FC<WorkoutViewProps> = ({
         </div>
 
         <div className="detail-content">
+          {activeExercise ? (
+            <CoachingAudio
+              key={activeExercise.id}
+              disabled={!coachChatEnabled || coachMessages.some((message) => message.thinking)}
+              onListen={() => onCoachListen(activeExercise.id)}
+            />
+          ) : null}
           {renderDetailContent()}
         </div>
 
