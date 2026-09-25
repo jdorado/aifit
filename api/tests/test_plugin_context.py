@@ -45,6 +45,7 @@ def test_plugin_agent_surface_covers_the_canonical_reads_and_writes():
     }
     assert by_path["/v1/agent/workouts/{workout_id}/sets/{set_id}"] == {"PATCH"}
     assert by_path["/v1/agent/workouts"] == {"GET"}
+    assert by_path["/v1/agent/exercises"] == {"GET", "POST"}
 
 
 @pytest.mark.parametrize("value", [

@@ -979,6 +979,16 @@ async def agent_create_exercise_v1(
     )
 
 
+@app.get("/v1/agent/exercises")
+async def agent_list_exercises_v1(
+    after: str | None = Query(default=None, pattern=r"^ex_[a-z0-9_]{3,120}$"),
+    limit: int = Query(default=50, ge=1, le=100),
+    capability: AgentCapability = Depends(require_agent_capability),
+) -> dict:
+    require_agent_permission(capability, AGENT_READ)
+    return await workouts().list_exercises(capability.account_id, after, limit)
+
+
 @app.get("/v1/agent/exercises/{exercise_id}")
 async def agent_exercise_v1(
     exercise_id: str,
