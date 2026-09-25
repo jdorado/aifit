@@ -24,8 +24,9 @@ has(appSource, 'coachActAsPermissions?.view_progress === true && coachActAsPermi
 // 4. The mini-chat owner context resolves through the act-as owner.
 has(appSource, 'const ownerWorkoutKey = `${coachActAsOwnerId ?? currentUserId}:${selectedDay?.date ?? todayId}`', 'the mini-chat context must use the act-as owner')
 
-// 5. The mini model picker stays off in coach mode (the trainee default applies).
-has(appSource, 'miniModelSelectionDisabled={miniModelSelectionPending || Boolean(coachActAsLinkId)}', 'the mini model picker must stay off in coach mode')
+// 5. Authorized coaches can select the model in their trainee conversation.
+has(appSource, 'miniModelSelectionDisabled={miniModelSelectionPending || !coachChatEnabled}', 'the mini model picker must use coach permissions')
+has(appSource, 'modelOptions={modelOptions}', 'the main model picker must remain visible in coach mode')
 
 // 6. General chat is available in an authorized trainee view and sends the link.
 has(appSource, 'coachActAsLinkId && !coachChatEnabled', 'read-only trainee views must keep chat disabled')

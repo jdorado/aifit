@@ -199,7 +199,7 @@ const CoachChat: FC<CoachChatProps> = ({
             <span className="coach-chat-title">{t('workout.askCoach')}</span>
             <span className="coach-chat-subtitle">{subtitle || t('workout.coachSheetHint')}</span>
           </span>
-          {modelOptions.length > 1 && onModelChange ? (
+          {modelOptions.length > 0 && onModelChange ? (
             <label className="coach-chat-model-select">
               <select
                 value={selectedModel}
@@ -207,6 +207,7 @@ const CoachChat: FC<CoachChatProps> = ({
                 aria-label="AI model"
                 disabled={disabled || modelSelectionDisabled}
               >
+                <option value="" disabled>Select model</option>
                 {modelOptions.map((option) => (
                   <option key={option.value} value={option.value}>{option.label}</option>
                 ))}

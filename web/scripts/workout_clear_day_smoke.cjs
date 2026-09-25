@@ -129,4 +129,15 @@ assert.equal(clearedDayAfter.extras.length, 0, 'the cleared day must keep no ext
 const otherDay = state.plan.days.find((item) => item.date === OTHER_DATE)
 assert.equal(otherDay.exercises.length, 1, 'the fetched day must still merge in')
 
+// A read can finish before a save but be applied after its receipt.
+const saved = { ...session, revision: 'rev_saved', workout: { ...session.workout,
+  exercises: [{ id: 'bike', sets: [{}] }, { id: 'recovery', sets: [{}] }] } }
+assert.equal(run.applySavedWorkoutSessionsToWeek([saved]), true, 'a mutation receipt advances the record')
+assert.equal(run.applySavedWorkoutSessionsToWeek([session], { fromRead: true }), false,
+  'a stale read cannot undo the receipt between fetch and apply')
+assert.deepEqual(state.plan.days.find(d => d.date === OTHER_DATE).exercises.map(e => e.id), ['bike', 'recovery'])
+assert.equal(env.workoutRevisionByOwnerDateRef.current[`user_1:${OTHER_DATE}`], 'rev_saved')
+assert.equal(run.applySavedWorkoutSessionsToWeek([saved], { fromRead: true }), true,
+  'a read of the current revision still applies')
+
 console.log('clear-day merge smoke passed')

@@ -962,6 +962,7 @@ const App = () => {
   const workoutExtrasRef = useRef<WorkoutExtra[]>(initialDay?.extras ?? [])
   const setLogsRef = useRef<Record<string, SetState[]>>(initialSetLogs)
   const [dataVersion, setDataVersion] = useState(0)
+  const [completingTimedExerciseId, setCompletingTimedExerciseId] = useState<string | null>(null)
   const [logPending, setLogPending] = useState(false)
   const logPendingRef = useRef(false)
   const [activeView, setActiveView] = useState<'home' | 'workout' | 'profile'>('workout')
@@ -980,9 +981,9 @@ const App = () => {
   const [sessionLoading, setSessionLoading] = useState(true)
   const [serverSessionLoadSettledKey, setServerSessionLoadSettledKey] = useState<string | null>(null)
   const [messages, setMessages] = useState<ChatMessage[]>([])
-  const [modelControl, setModelControl] = useState<ModelControl | null>(null)
+  const [modelControlState, setModelControlState] = useState<{ linkId: string | null, control: ModelControl } | null>(null)
   const [modelSelectionPending, setModelSelectionPending] = useState(false)
-  const [miniModelControl, setMiniModelControl] = useState<ModelControl | null>(null)
+  const [miniModelControlState, setMiniModelControlState] = useState<{ linkId: string | null, control: ModelControl } | null>(null)
   const [miniModelSelectionPending, setMiniModelSelectionPending] = useState(false)
   const [coachMessagesByScope, setCoachMessagesByScope] = useState<Record<string, ChatMessage[]>>({})
   const [swapOpen, setSwapOpen] = useState(false)
@@ -1069,10 +1070,22 @@ const App = () => {
   const { t } = i18n
   // Coach chat in the trainee's context follows the legacy rule: the link
   // must carry view_progress, and edit_programs implies coach chat
-  // (chat_as_coach has no new-schema equivalent). The home tab stays the
-  // coach's own and remains unavailable in coach mode.
+  // (chat_as_coach has no new-schema equivalent). Both chat surfaces and
+  // their model controls use the authorized trainee conversation.
   const coachChatEnabled = !coachActAsLinkId
     || (coachActAsPermissions?.view_progress === true && coachActAsPermissions?.edit_programs === true)
+  const modelControl = modelControlState?.linkId === coachActAsLinkId ? modelControlState.control : null
+  const miniModelControl = miniModelControlState?.linkId === coachActAsLinkId ? miniModelControlState.control : null
+  const setModelControl = useCallback((control: ModelControl | null) => {
+    if (coachActAsLinkIdRef.current === coachActAsLinkId) {
+      setModelControlState(control ? { linkId: coachActAsLinkId, control } : null)
+    }
+  }, [coachActAsLinkId])
+  const setMiniModelControl = useCallback((control: ModelControl | null) => {
+    if (coachActAsLinkIdRef.current === coachActAsLinkId) {
+      setMiniModelControlState(control ? { linkId: coachActAsLinkId, control } : null)
+    }
+  }, [coachActAsLinkId])
   const selectedModelPreset = modelControl?.presets.find((preset) => preset.id === modelControl.selected_id)
   const selectedModelLabel = presetLabel(selectedModelPreset, modelControl?.models)
   const modelOptions = useMemo(() => buildModelOptions(modelControl), [modelControl])
@@ -2374,21 +2387,25 @@ const App = () => {
   }, [getPrivyAuthHeaders, isBackendHealthy, mergeBackendChatHistory])
 
   const fetchFreshModelControl = useCallback(async (scope?: string) => {
-    const url = scope ? `${API_BASE_URL}/chat/models?scope=${scope}` : `${API_BASE_URL}/chat/models`
+    const params = new URLSearchParams({
+      ...(scope ? { scope } : {}),
+      ...(coachActAsLinkId ? { act_as_link_id: coachActAsLinkId } : {}),
+    })
+    const url = `${API_BASE_URL}/chat/models?${params}`
     const response = await apiFetch(url, {
       headers: await getPrivyAuthHeaders(),
     })
     if (!response.ok) throw new Error(`Failed to load Ez models (${response.status})`)
     return (await response.json()) as ModelControl
-  }, [getPrivyAuthHeaders])
+  }, [coachActAsLinkId, getPrivyAuthHeaders])
 
   const refreshModelControl = useCallback(async () => {
-    if (!privyReady || !privyAuthenticated) {
+    if (!privyReady || !privyAuthenticated || !coachChatEnabled) {
       setModelControl(null)
       return
     }
     setModelControl(await fetchFreshModelControl())
-  }, [fetchFreshModelControl, privyAuthenticated, privyReady])
+  }, [coachChatEnabled, fetchFreshModelControl, privyAuthenticated, privyReady, setModelControl])
 
   const handleModelSelection = useCallback(async (value: string) => {
     const option = modelOptions.find((item) => item.value === value)
@@ -2400,6 +2417,7 @@ const App = () => {
         headers: { 'Content-Type': 'application/json', ...await getPrivyAuthHeaders() },
         body: JSON.stringify({
           expected_session: expectedSession,
+          ...(coachActAsLinkId ? { act_as_link_id: coachActAsLinkId } : {}),
           cli: option.cli,
           provider: option.provider,
           model: option.model,
@@ -2417,6 +2435,7 @@ const App = () => {
         // switch rotated it) and Ez rejects the guarded POST. Reload the
         // fresh control and retry once with its session instead of leaving
         // the picker stuck on the old model.
+        if (coachActAsLinkIdRef.current !== coachActAsLinkId) return
         const fresh = await fetchFreshModelControl()
         if (selectedModelValueFor(fresh) === value) {
           setModelControl(fresh)
@@ -2424,23 +2443,29 @@ const App = () => {
           setModelControl(await postModelChoice(fresh.active_session_id))
         }
       }
-      setMessages([])
-      setChatInput('')
+      if (coachActAsLinkIdRef.current === coachActAsLinkId) {
+        if (coachActAsLinkId) {
+          setCoachMessagesByScope((prev) => ({ ...prev, [`coach-link:${coachActAsLinkId}`]: [] }))
+        } else {
+          setMessages([])
+        }
+        setChatInput('')
+      }
     } catch (error) {
       console.error('Ez model selection failed:', error)
       await refreshModelControl().catch(() => undefined)
     } finally {
       setModelSelectionPending(false)
     }
-  }, [fetchFreshModelControl, getPrivyAuthHeaders, modelControl, modelOptions, modelSelectionPending, refreshModelControl])
+  }, [coachActAsLinkId, fetchFreshModelControl, getPrivyAuthHeaders, modelControl, modelOptions, modelSelectionPending, refreshModelControl, setModelControl])
 
   const refreshMiniModelControl = useCallback(async () => {
-    if (!privyReady || !privyAuthenticated) {
+    if (!privyReady || !privyAuthenticated || !coachChatEnabled) {
       setMiniModelControl(null)
       return
     }
     setMiniModelControl(await fetchFreshModelControl(MINI_CHAT_SCOPE))
-  }, [fetchFreshModelControl, privyAuthenticated, privyReady])
+  }, [coachChatEnabled, fetchFreshModelControl, privyAuthenticated, privyReady, setMiniModelControl])
 
   const handleMiniModelSelection = useCallback(async (value: string) => {
     const option = miniModelOptions.find((item) => item.value === value)
@@ -2452,6 +2477,7 @@ const App = () => {
         headers: { 'Content-Type': 'application/json', ...await getPrivyAuthHeaders() },
         body: JSON.stringify({
           expected_session: expectedSession,
+          ...(coachActAsLinkId ? { act_as_link_id: coachActAsLinkId } : {}),
           scope: MINI_CHAT_SCOPE,
           cli: option.cli,
           provider: option.provider,
@@ -2468,6 +2494,7 @@ const App = () => {
       } catch {
         // Same stale-session recovery as the main picker: reload the fresh
         // scope control and retry once with its session.
+        if (coachActAsLinkIdRef.current !== coachActAsLinkId) return
         const fresh = await fetchFreshModelControl(MINI_CHAT_SCOPE)
         if (selectedModelValueFor(fresh) === value) {
           setMiniModelControl(fresh)
@@ -2481,7 +2508,7 @@ const App = () => {
     } finally {
       setMiniModelSelectionPending(false)
     }
-  }, [fetchFreshModelControl, getPrivyAuthHeaders, miniModelControl, miniModelOptions, miniModelSelectionPending, refreshMiniModelControl])
+  }, [coachActAsLinkId, fetchFreshModelControl, getPrivyAuthHeaders, miniModelControl, miniModelOptions, miniModelSelectionPending, refreshMiniModelControl, setMiniModelControl])
 
   const handleAiReply = useCallback(async (reply: string, messageId?: string | null, modelLabel?: string) => {
     const displayMessage = reply.trim()
@@ -2516,7 +2543,7 @@ const App = () => {
       throw new Error('Async chat endpoint unavailable. Restart the backend so /chat/async is available.')
     }
     if (!enqueueResponse.ok) {
-      throw new Error(`Chat enqueue failed (${enqueueResponse.status})`)
+      throw readApiError(await enqueueResponse.json().catch(() => null), enqueueResponse.status, 'Chat could not start.')
     }
 
     const queued = (await enqueueResponse.json()) as ChatJobResponsePayload
@@ -2562,6 +2589,8 @@ const App = () => {
 
   const fetchWorkoutSessionsByDates = useCallback(async (dateIds: string[]): Promise<WorkoutSession[]> => {
     if (!currentUserId || !canQuerySavedWorkoutSessions || dateIds.length === 0) return []
+    const ownerId = coachActAsOwnerId ?? currentUserId
+    const revisionsAtStart = { ...workoutRevisionByOwnerDateRef.current }
     const sortedDates = [...dateIds].sort()
     const headers = await getPrivyAuthHeaders()
 
@@ -2575,16 +2604,22 @@ const App = () => {
     }
     const requestedDates = new Set(dateIds)
     const workouts = await response.json() as Array<NonNullable<BackendWorkoutReceipt['workout']>>
+    if (coachActAsLinkIdRef.current !== coachActAsOwnerId) return []
     const sessions = workouts
       .filter((workout) => requestedDates.has(workout.date))
       .map((workout) => backendWorkoutToSession(workout, currentUserId))
       .filter((session) => {
+        // A drag/log receipt or a newer read may have landed while this GET
+        // was in flight. Never replace it with this older snapshot: doing so
+        // also makes the next write send an obsolete expected_revision.
+        const ownerKey = `${ownerId}:${session.date}`
+        const currentRevision = workoutRevisionByOwnerDateRef.current[ownerKey]
+        if (currentRevision !== revisionsAtStart[ownerKey] && session.revision !== currentRevision) return false
         // Drop pre-delete snapshots: the record they describe is gone and
         // applying them would resurrect a cleared day.
         const tombstone = clearedWorkoutAtRef.current[session.date]
         return !tombstone || (session.updated_at ? session.updated_at > tombstone : false)
       })
-    const ownerId = coachActAsOwnerId ?? currentUserId
     sessions.forEach((session) => {
       // Coach mode must register the canonical refs under the act-as owner:
       // every act-as read/edit resolves them through that key, so keying by
@@ -2611,7 +2646,7 @@ const App = () => {
 
   const applySavedWorkoutSessionsToWeek = useCallback((
     sessions: WorkoutSession[],
-    options: { preserveSelectedDate?: boolean, selectedDate?: string, preserveActiveEntry?: boolean } = {},
+    options: { preserveSelectedDate?: boolean, selectedDate?: string, preserveActiveEntry?: boolean, fromRead?: boolean } = {},
   ) => {
     if (sessions.length === 0) return false
 
@@ -2623,6 +2658,10 @@ const App = () => {
     sessions.forEach((session) => {
       const targetDate = normalizeDateId(session.date) ?? normalizeDateId(session.session_id)
       if (!targetDate || pendingWorkoutDatesRef.current.has(targetDate)) return
+      const ownerKey = `${ownerId}:${targetDate}`
+      // A receipt can also land between a read resolving and its caller
+      // applying the result. Keep both the visible record and revision fresh.
+      if (options.fromRead && session.revision !== workoutRevisionByOwnerDateRef.current[ownerKey]) return
       const exercises = normalizeWorkoutExercises(session.workout?.exercises)
       const extras = normalizeWorkoutExtras(session.workout?.extras)
       exercises.forEach((exercise) => {
@@ -2665,7 +2704,6 @@ const App = () => {
 
       const storedLogs = session.workout?.set_logs ?? {}
       nextLogs[targetDate] = buildSetLogsForExercises(exercises, storedLogs)
-      const ownerKey = `${ownerId}:${targetDate}`
       if (session.session_id) workoutIdByOwnerDateRef.current[ownerKey] = session.session_id
       if (session.revision) {
         workoutRevisionByOwnerDateRef.current[ownerKey] = session.revision
@@ -2747,6 +2785,8 @@ const App = () => {
           const targetDate = normalizeDateId(session.date) ?? normalizeDateId(session.session_id)
           if (!targetDate) return
           if (pendingWorkoutDatesRef.current.has(targetDate)) return
+          const ownerKey = `${coachActAsOwnerId ?? currentUserId}:${targetDate}`
+          if (session.revision !== workoutRevisionByOwnerDateRef.current[ownerKey]) return
           const savedExercises = normalizeWorkoutExercises(session.workout?.exercises)
           const savedExtras = normalizeWorkoutExtras(session.workout?.extras)
           const savedLogs = session.workout?.set_logs ?? {}
@@ -2860,6 +2900,7 @@ const App = () => {
       .map((date) => getDateId(date))
     const sessions = await fetchWorkoutSessionsByDates(visibleDates)
     await applySavedWorkoutSessionsToWeek(sessions, {
+      fromRead: true,
       preserveSelectedDate: true,
       preserveActiveEntry: true,
     })
@@ -2991,6 +3032,40 @@ const App = () => {
     selectedDay?.date,
     todayId,
   ])
+
+  const completeTimedExercise = useCallback(async (exerciseId: string) => {
+    if (!canLogSelectedDay || logPendingRef.current) return
+    const exercise = getExercise(exerciseId)
+    if (!exercise || exercise.metric !== 'time' || exercise.status === 'skip') return
+    const stateList = ensureExerciseStateList(exercise)
+    const unfinished = exercise.sets.map((set, index) => ({ set, index }))
+      .filter(({ index }) => !stateList[index]?.done)
+    if (!unfinished.length) return
+
+    logPendingRef.current = true
+    setLogPending(true)
+    setCompletingTimedExerciseId(exerciseId)
+    resetHoldTimer()
+    try {
+      for (const { set, index } of unfinished) {
+        const state = stateList[index]
+        if (!state || state.done) continue
+        const previous: SetSyncRevert = { ...state }
+        const duration = parseDurationToSeconds(set.targetTime) ?? 60
+        state.metric = `${duration}s`
+        state.weight = normalizeWorkoutTargetText(state.weight || set.targetWeight) ?? ''
+        if (state.weight && !state.value_source) state.value_source = 'accepted_target'
+        state.skipped = false
+        state.done = true
+        bumpData()
+        if (!await syncLoggedSet(exerciseId, index, previous)) break
+      }
+    } finally {
+      logPendingRef.current = false
+      setLogPending(false)
+      setCompletingTimedExerciseId(null)
+    }
+  }, [bumpData, canLogSelectedDay, ensureExerciseStateList, getExercise, resetHoldTimer, syncLoggedSet])
 
   const unlogLoggedSet = useCallback(async (exerciseId: string, index: number, previous?: SetSyncRevert | null) => {
     // Undo removes the canonical actual, then the local state returns to
@@ -3248,6 +3323,7 @@ const App = () => {
         .then((sessions) => {
           if (sessions.length > 0) {
             applySavedWorkoutSessionsToWeek(sessions, {
+              fromRead: true,
               selectedDate: dateId,
               preserveActiveEntry: true,
             })
@@ -4244,7 +4320,7 @@ const App = () => {
     } catch (error) {
       console.warn('New chat failed:', error)
     }
-  }, [coachChatEnabled, currentUserId, getPrivyAuthHeaders, modelControl?.active_session_id])
+  }, [coachChatEnabled, currentUserId, getPrivyAuthHeaders, modelControl?.active_session_id, setModelControl])
 
   const setUserEmail = useCallback((email: string | null, userIdOverride?: string | null) => {
     const normalized = email && email.includes('@') ? email.trim().toLowerCase() : null
@@ -4400,7 +4476,7 @@ const App = () => {
       document.removeEventListener('visibilitychange', onVisible)
       window.removeEventListener('focus', onVisible)
     }
-  }, [isBackendHealthy, privyAuthenticated, privyReady, refreshModelControl, refreshMiniModelControl])
+  }, [isBackendHealthy, privyAuthenticated, privyReady, refreshModelControl, refreshMiniModelControl, setModelControl, setMiniModelControl])
 
   const handleAuthClick = useCallback(async () => {
     if (!privyReady) return
@@ -4862,10 +4938,10 @@ const App = () => {
             inputValue={chatInput}
             inputDisabled={!coachChatEnabled}
             canStartNewChat={!coachActAsLinkId}
-            modelOptions={coachActAsLinkId ? [] : modelOptions}
+            modelOptions={modelOptions}
             showModelLabels
             selectedModel={selectedModelValue}
-            modelSelectionDisabled={modelSelectionPending || Boolean(coachActAsLinkId) || messages.some((message) => message.thinking)}
+            modelSelectionDisabled={modelSelectionPending || !coachChatEnabled || (coachActAsLinkId ? (coachMessagesByScope[`coach-link:${coachActAsLinkId}`] ?? []) : messages).some((message) => message.thinking)}
             onModelChange={handleModelSelection}
             onInputChange={setChatInput}
             onSend={handleSend}
@@ -4910,12 +4986,14 @@ const App = () => {
             showModelLabels
             miniModelOptions={miniModelOptions}
             miniSelectedModel={miniSelectedModelValue}
-            miniModelSelectionDisabled={miniModelSelectionPending || Boolean(coachActAsLinkId)}
+            miniModelSelectionDisabled={miniModelSelectionPending || !coachChatEnabled}
             onMiniModelChange={handleMiniModelSelection}
             onSelectEntry={handleSelectEntry}
             onSelectDay={handleSelectDay}
             onBack={hideWorkoutDetail}
             onLogSet={logNextSet}
+            onCompleteTimedExercise={(exerciseId) => { void completeTimedExercise(exerciseId) }}
+            completingTimedExerciseId={completingTimedExerciseId}
             onUnlogSet={unlogSet}
             onStartEditingSet={(exerciseId, index) => {
               const stateList = setLogsRef.current[exerciseId]
