@@ -151,4 +151,14 @@ assert.equal(states[4].weight, '60kg', 'the carry follows the latest logged set'
 assert.equal(states[5].done, true, 'a skipped set stays logged')
 assert.equal(states[6].weight, '60kg', 'a skipped set does not clear the carried value')
 
+const roundWorkout = structuredClone(workout)
+roundWorkout.segments[0].kind = 'circuit'
+roundWorkout.segments[0].items[0].sets = [
+  { ...workoutSet('warmup'), kind: 'warmup' },
+  { ...workoutSet('replacement-round-3'), round: 3 },
+]
+const roundSets = backendWorkoutToSession(roundWorkout, 'user_1').workout.exercises[0].sets
+assert.equal(roundSets[0].isWarmup, true, 'canonical warmups stay outside working rounds')
+assert.equal(roundSets[1].round, 3, 'a replacement keeps its actual round instead of its array position')
+
 console.log('workout set inherit smoke passed')
