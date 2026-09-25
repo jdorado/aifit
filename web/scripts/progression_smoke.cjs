@@ -18,14 +18,11 @@ const env = {
   workoutRevisionByOwnerDateRef: { current: revisions },
   getExercise: () => ({ sets: [{ setId: 'set_one' }] }),
   parseActualLoad: () => ({ value: 40, unit: 'kg' }), parseActualMetric: () => ({ reps: 12 }),
-  syncedSetKeysRef: { current: new Map() }, pendingTargetEditsRef: { current: new Map() },
-  pendingSetSyncsByDateRef: { current: {} }, pendingWorkoutDatesRef: { current: new Set() },
-  getPrivyAuthHeaders: async () => ({}), withCoachActAs: value => value, API_BASE_URL: 'http://example.test',
-  apiFetch: async (url, options) => {
-    calls.push(JSON.parse(options.body))
-    return { ok: true, status: 200, json: async () => ({ revision: `rev_${calls.length + 1}` }) }
+  enqueueWorkoutWrite: async (_workoutId, _date, ownerKey, _path, _method, body) => {
+    calls.push({ ...body, expected_revision: revisions[ownerKey] })
+    revisions[ownerKey] = `rev_${calls.length + 1}`
+    return true
   },
-  crypto: require('node:crypto').webcrypto, refreshVisibleWorkoutSessions: async () => true,
 }
 const sync = new Function(...Object.keys(env), transpile(source.slice(start, end)) + '; return syncLoggedSet')(...Object.values(env))
 const previewExports = {}

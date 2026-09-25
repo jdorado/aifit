@@ -11002,3 +11002,22 @@ body:has(.landing) {
 .muscle-progress-row { padding: 12px 0; border-bottom: 1px solid var(--glass-border); }
 .muscle-progress-row h3 { margin: 0 0 8px; text-transform: capitalize; font-size: 1rem; }
 .exercise-history-tabs { flex-wrap: wrap; }
+.workout-save-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 12px;
+  font-size: 12px;
+  color: var(--ink-secondary);
+}
+.workout-save-status.has-error { color: var(--error); }
+.workout-save-status button {
+  flex-shrink: 0;
+  border: 0;
+  padding: 6px;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  text-decoration: underline;
+}

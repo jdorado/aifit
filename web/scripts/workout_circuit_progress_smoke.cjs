@@ -82,21 +82,18 @@ async function main() {
   const delayed = fixture({ a: [false, false], b: [false, false] }, 'a', {
     save: () => new Promise(resolve => { finish = resolve }),
   })
-  const saving = delayed.log('a')
-  await delayed.log('a')
-  assert.equal(delayed.result.saves.length, 1, 'double tap cannot log a second set while saving')
+  delayed.log('a')
+  assert.equal(delayed.navigation.current.id, 'b', 'navigation happens before the first save response')
+  delayed.log('a')
+  assert.equal(delayed.result.saves.length, 1, 'same-turn duplicate event cannot log another set')
+  await Promise.resolve()
+  delayed.log('b')
+  assert.equal(delayed.navigation.current.id, 'a', 'the next move is usable while saving')
+  assert.deepEqual(delayed.result.rests, [60], 'round rest starts without waiting for the server')
   delayed.env.showWorkoutDetail('b', 'exercise')
-  delayed.env.showWorkoutDetail('a', 'exercise')
   finish(true)
-  await saving
-  assert.equal(delayed.navigation.current.id, 'a', 'a late save cannot override manual navigation, even away and back')
-  assert.deepEqual(delayed.result.rests, [])
-
-  const failed = fixture({ a: [false], b: [false] }, 'a', { save: async () => false })
-  await failed.log('a')
-  assert.equal(failed.navigation.current.id, 'a', 'failed save must not advance')
-  assert.deepEqual(failed.result.rests, [])
-  assert.equal(failed.env.logPendingRef.current, false)
+  await Promise.resolve()
+  assert.equal(delayed.navigation.current.id, 'b', 'a late save never changes navigation')
 
   const manual = fixture({ a: [false, false], b: [true, false], c: [false, false] }, 'b')
   await manual.log('b')
@@ -151,41 +148,6 @@ async function main() {
   logHold()
   assert.equal(holdLogs, 0, 'timer completion cannot log another set after its set was skipped or already logged')
 
-  // The canonical sync reports success/failure to navigation and rolls back
-  // the original set, even after the user selects a different day.
-  const original = { done: true, weight: '', metric: '10' }
-  let respond
-  const syncEnv = {
-    useCallback: fn => fn, canQuerySavedWorkoutSessions: true, coachActAsOwnerId: null,
-    currentUserId: 'owner', selectedDay: { date: 'today' }, todayId: 'today',
-    workoutIdByOwnerDateRef: { current: { 'owner:today': 'workout' } },
-    workoutRevisionByOwnerDateRef: { current: { 'owner:today': 'rev1' } },
-    setLogsRef: { current: { a: [original] } }, getExercise: () => ({ sets: [{ setId: 'set1' }] }),
-    parseActualLoad: () => null, parseActualMetric: () => ({ reps: 10 }),
-    syncedSetKeysRef: { current: new Map() }, pendingTargetEditsRef: { current: new Map() },
-    pendingSetSyncsByDateRef: { current: {} }, pendingWorkoutDatesRef: { current: new Set() },
-    getPrivyAuthHeaders: async () => ({}), API_BASE_URL: 'https://fixture.invalid', withCoachActAs: url => url,
-    apiFetch: () => new Promise(resolve => { respond = resolve }), crypto: { randomUUID: () => 'request1' },
-    refreshVisibleWorkoutSessions: async () => false, bumpData() {}, console: { warn() {} },
-  }
-  const sync = callback('syncLoggedSet', 'completeTimedExercise', syncEnv)
-  const failure = sync('a', 0)
-  await Promise.resolve()
-  const differentDay = { done: true, metric: '12' }
-  syncEnv.setLogsRef.current = { a: [differentDay] }
-  respond({ ok: false, status: 500 })
-  assert.equal(await failure, false)
-  assert.equal(original.done, false, 'failed write rolls back the originating day')
-  assert.equal(differentDay.done, true, 'failed write does not change the newly selected day')
-  assert.equal(syncEnv.pendingWorkoutDatesRef.current.size, 0)
-
-  original.done = true
-  syncEnv.setLogsRef.current = { a: [original] }
-  const success = sync('a', 0)
-  await Promise.resolve()
-  respond({ ok: true, status: 200, json: async () => ({ revision: 'rev2' }) })
-  assert.equal(await success, true)
-  assert.equal(syncEnv.workoutRevisionByOwnerDateRef.current['owner:today'], 'rev2')
   console.log('workout circuit progress smoke passed')
 }
 main().catch(error => { console.error(error); process.exitCode = 1 })
