@@ -6533,6 +6533,7 @@ body:has(.view:is([data-view="workout"], [data-view="diet"], [data-view="health"
   gap: 18px;
   overflow-x: hidden;
   overflow-y: auto;
+  padding-bottom: max(24px, var(--safe-bottom));
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
   scrollbar-width: none;
