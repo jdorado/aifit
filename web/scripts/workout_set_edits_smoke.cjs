@@ -4,10 +4,11 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
 const ts = require('typescript')
+const { harness: writeHarness, tick } = require('./workout_write_harness.cjs')
 const source = fs.readFileSync(path.join(__dirname, '../src/App.tsx'), 'utf8')
 const block = (from, to) => source.slice(source.indexOf(`  const ${from} =`), source.indexOf(`  const ${to} =`))
 const handlers = block('mergeUnloggedSetInputs', 'applyStructuralReceipt')
-  + block('mutateWorkout', 'handleRemoveExercise')
+  + block('runStructuralMutation', 'handleRemoveExercise')
 const compiled = ts.transpile(handlers, { target: ts.ScriptTarget.ES2020 })
 const context = { targetDate: '2026-09-25', ownerKey: 'owner:2026-09-25', workoutId: 'wrk_one', revision: 'rev_one' }
 
@@ -16,7 +17,6 @@ function harness() {
   const exercise = { id: 'ex_one', sets, summary: '' }
   const states = [{ weight: '41kg', metric: '11', done: false }, { weight: '52kg', metric: '9', done: false }]
   const pending = new Set()
-  const targetEdits = new Map()
   const h = { exercise, states, pending, calls: [], refreshes: 0, alerts: [], busy: false, applied: [], paints: 0 }
   const env = {
     useCallback: fn => fn,
@@ -28,18 +28,19 @@ function harness() {
     weekSetLogsRef: { current: { [context.targetDate]: { [exercise.id]: states } } },
     setLogsRef: { current: { [exercise.id]: states } },
     pendingWorkoutDatesRef: { current: pending },
-    pendingTargetEditsRef: { current: targetEdits },
+    structuralEditPendingRef: { current: false },
+    workoutWriteScopeRef: { current: 'owner:' },
     setStructuralEditPending: value => { h.busy = value },
     getPrivyAuthHeaders: async () => ({}), withCoachActAs: value => value, API_BASE_URL: 'https://example.test',
     apiFetch: (url, options) => {
       h.calls.push({ url, ...options, body: JSON.parse(options.body) })
       return new Promise((resolve, reject) => { h.respond = resolve; h.reject = reject })
     },
-    refreshVisibleWorkoutSessions: async () => {
+    fetchWorkoutSessionsByDates: async () => {
       assert.equal(pending.has(context.targetDate), false, 'conflict readback must be allowed to apply')
       assert.equal(exercise.sets.length, 2, 'rollback precedes conflict readback')
       h.refreshes++
-      return true
+      return []
     },
     applyStructuralReceipt: receipt => { h.applied.push(receipt) },
     getExercise: () => exercise, bumpData: () => { h.paints++ },
@@ -48,12 +49,14 @@ function harness() {
     t: value => value, window: { alert: value => h.alerts.push(value) },
     console: { warn() {} }, crypto: require('node:crypto').webcrypto,
   }
+  const writer = writeHarness({ ...env, setWorkoutSaveError: value => { if (value) h.alerts.push('saveFailed') } })
+  env.enqueueWorkoutWrite = writer.enqueue
+  h.enqueue = writer.enqueue
   Object.assign(h, new Function(...Object.keys(env), `${compiled}; return { handleAddSet, handleRemoveSet, mergeUnloggedSetInputs }`)(...Object.values(env)))
-  h.targetEdits = targetEdits
   h.revisions = env.workoutRevisionByOwnerDateRef.current
   h.reply = async (status = 200) => {
     // Auth acquisition yields once before the request is sent.
-    await Promise.resolve()
+    await tick()
     h.respond({ status, ok: status === 200, json: async () => status === 200 ? { revision: 'rev_two', workout: {} } : { detail: 'Save failed' } })
   }
   return h
@@ -78,20 +81,16 @@ async function main() {
   assert.equal(h.busy, false)
 
   h = harness()
-  let saveTarget
-  h.pending.add(context.targetDate)
-  h.targetEdits.set('wrk_one:s1', new Promise(resolve => { saveTarget = resolve }))
+  const savingTarget = h.enqueue(context.workoutId, context.targetDate, context.ownerKey, '/sets/s1/target', 'PATCH', {}, () => {})
   task = h.handleAddSet('ex_one')
-  assert.equal(h.calls.length, 0, 'add waits for a target blur save')
-  h.revisions[context.ownerKey] = 'rev_after_target'
-  h.pending.delete(context.targetDate)
-  h.targetEdits.clear()
-  saveTarget(true)
-  await Promise.resolve()
-  await Promise.resolve()
+  assert.equal(h.exercise.sets.length, 3, 'add previews immediately even while the blur save is pending')
+  await h.reply()
+  await savingTarget
+  await tick()
+  assert.equal(h.calls.length, 2)
+  assert.equal(h.calls[1].body.expected_revision, 'rev_two', 'add uses the acknowledged target revision')
   await h.reply()
   await task
-  assert.equal(h.calls[0].body.expected_revision, 'rev_after_target', 'blur must not drop the tap or cause a stale revision')
 
   for (const action of ['handleAddSet', 'handleRemoveSet']) {
     h = harness()
@@ -122,7 +121,7 @@ async function main() {
   await task
   assert.equal(h.refreshes, 1, 'stale revision performs one readback after rollback')
   assert.equal(h.applied.length, 0)
-  assert.equal(h.alerts[0], 'workout.editStale')
+  assert.equal(h.alerts[0], 'saveFailed')
 
   h = harness()
   h.states[0].done = true
@@ -139,7 +138,7 @@ async function main() {
   const setList = fs.readFileSync(path.join(__dirname, '../src/components/workout/ExerciseSetList.tsx'), 'utf8')
   assert.equal(setList.includes('onSkipSet'), false)
   assert.equal((setList.match(/data-set-action="remove-set"/g) || []).length, 2, 'hero and swipe both remove')
-  assert.ok(source.includes('canLogDay={canLogSelectedDay && !structuralEditPending && !logPending}'), 'cannot log an unsaved preview')
+  assert.ok(source.includes('canLogDay={canLogSelectedDay && !structuralEditPending}'), 'cannot log an unsaved preview')
   const view = fs.readFileSync(path.join(__dirname, '../src/views/WorkoutView.tsx'), 'utf8')
   assert.equal(view.includes("t('workout.skipped')"), false, 'removing the final set must not label the exercise skipped')
   console.log('workout set edits smoke passed: immediate add/remove, failures, conflict readback, identity, UI wiring')

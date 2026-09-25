@@ -56,6 +56,9 @@ const SECTION_TONE_COLOR_SLOTS: Partial<Record<SectionTone, number>> = {
 
 type WorkoutViewProps = {
   active: boolean
+  savePending: boolean
+  saveError: boolean
+  onDismissSaveError: () => void
   canLogDay: boolean
   canEditPlan: boolean
   coachChatEnabled: boolean
@@ -90,7 +93,6 @@ type WorkoutViewProps = {
   onBack: () => void
   onLogSet: (exerciseId?: string) => void
   onCompleteTimedExercise: (exerciseId: string) => void
-  completingTimedExerciseId: string | null
   onUnlogSet: (exerciseId: string, index: number) => void
   onStartEditingSet: (exerciseId: string, index: number) => void
   onSaveEditingSet: () => void
@@ -141,6 +143,9 @@ const getSectionToneFromText = (rawHaystack: string): SectionTone => {
 
 const WorkoutView: FC<WorkoutViewProps> = ({
   active,
+  savePending,
+  saveError,
+  onDismissSaveError,
   canLogDay,
   canEditPlan,
   coachChatEnabled,
@@ -175,7 +180,6 @@ const WorkoutView: FC<WorkoutViewProps> = ({
   onBack,
   onLogSet,
   onCompleteTimedExercise,
-  completingTimedExerciseId,
   onUnlogSet,
   onStartEditingSet,
   onSaveEditingSet,
@@ -354,7 +358,6 @@ const WorkoutView: FC<WorkoutViewProps> = ({
     })
     : hasNext
   const holdTimerEnabled = Boolean(activeExercise && activeExercise.metric === 'time' && activeExercise.timer?.enabled)
-  const completingTimedExercise = completingTimedExerciseId !== null
   const isAllDone = Boolean(activeExercise && !circuitHasPending && !hasLogTarget)
   const footerTitle = isAllDone ? detailTitle : (logTargetExercise?.name ?? detailTitle)
 
@@ -502,7 +505,7 @@ const WorkoutView: FC<WorkoutViewProps> = ({
           holdTimerEnabled={holdTimerEnabled}
           holdTargetSec={holdTargetSec}
           holdPrepSec={holdPrepSec}
-          canLogDay={canLogDay && !completingTimedExercise}
+          canLogDay={canLogDay}
           canEditPlan={canEditPlan}
           onUnlogSet={onUnlogSet}
           onStartEditingSet={onStartEditingSet}
@@ -574,6 +577,13 @@ const WorkoutView: FC<WorkoutViewProps> = ({
     )
   }
 
+  const saveStatus = savePending || saveError ? (
+    <div className={`workout-save-status${saveError ? ' has-error' : ''}`} role={saveError ? 'alert' : 'status'}>
+      <span>{saveError ? t('workout.saveFailed') : t('common.saving')}</span>
+      {saveError ? <button type="button" onClick={onDismissSaveError}>{t('common.close')}</button> : null}
+    </div>
+  ) : null
+
   return (
     <section className={`view ${active ? 'active' : ''}`} data-view="workout">
       {!activeEntryId ? (
@@ -586,7 +596,7 @@ const WorkoutView: FC<WorkoutViewProps> = ({
       ) : null}
 
       <WeekStrip
-        days={completingTimedExercise ? weekDays.map((day) => ({ ...day, isSelectable: false })) : weekDays}
+        days={weekDays}
         onSelectDay={onSelectDay}
       />
 
@@ -596,13 +606,14 @@ const WorkoutView: FC<WorkoutViewProps> = ({
             {t('workout.viewingDate', { date: viewingDateLabel })}
           </span>
           {onBackToToday ? (
-            <button type="button" className="workout-viewing-action" onClick={onBackToToday} disabled={completingTimedExercise}>
+            <button type="button" className="workout-viewing-action" onClick={onBackToToday}>
               {t('workout.backToToday')}
             </button>
           ) : null}
         </div>
       ) : null}
 
+      {!activeEntryId ? saveStatus : null}
       <WorkoutPlanList
         activeEntryId={activeEntryId}
         hasWeekWorkouts={hasWeekWorkouts}
@@ -629,7 +640,7 @@ const WorkoutView: FC<WorkoutViewProps> = ({
 
       <section className={`workout-detail ${activeEntryId ? 'active' : ''}`} data-section-color={detailSectionColorSlot}>
         <div className="detail-header-bar">
-          <button className="back-btn" type="button" onClick={onBack} disabled={completingTimedExercise}>
+          <button className="back-btn" type="button" onClick={onBack}>
             <span className="icon-back">‹</span> {t('common.back')}
           </button>
           <div className="detail-title-block">
@@ -643,7 +654,7 @@ const WorkoutView: FC<WorkoutViewProps> = ({
                   className="detail-complete-btn"
                   aria-label={t('workout.completeTimedExercise')}
                   title={t('workout.completeTimedExercise')}
-                  disabled={!canLogDay || completingTimedExerciseId !== null}
+                  disabled={!canLogDay}
                   onClick={() => onCompleteTimedExercise(activeExercise.id)}
                 >
                   <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -657,7 +668,6 @@ const WorkoutView: FC<WorkoutViewProps> = ({
                   className={`detail-history-btn${historyOpen ? ' active' : ''}`}
                   aria-label={t('workout.historyTitle')}
                   aria-expanded={historyOpen}
-                  disabled={completingTimedExercise}
                   onClick={openExerciseHistory}
                 >
                   <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -671,7 +681,7 @@ const WorkoutView: FC<WorkoutViewProps> = ({
                 className={`detail-coach-btn${coachChatOpen ? ' active' : ''}`}
                 aria-label={t('workout.askCoach')}
                 aria-expanded={coachChatOpen}
-                disabled={!coachChatEnabled || completingTimedExercise}
+                disabled={!coachChatEnabled}
                 onClick={() => {
                   setHistoryOpen(false)
                   setCoachChatOpen((current) => !current)
@@ -699,13 +709,14 @@ const WorkoutView: FC<WorkoutViewProps> = ({
         </div>
 
         <div className="detail-footer">
+          {saveStatus}
           <div className={`footer-actions ${activeExtra ? 'hidden' : ''}`}>
             <button
               className="primary large detail-log-button"
               type="button"
               aria-label={`${isAllDone ? t('common.done') : t('workout.now')} ${footerTitle}: ${nextActionLabel}`}
               onClick={isAllDone ? onBack : () => onLogSet(logTargetExercise?.id)}
-              disabled={!canLogDay || completingTimedExerciseId !== null || (!isAllDone && !hasLogTarget)}
+              disabled={!canLogDay || (!isAllDone && !hasLogTarget)}
             >
               <span className="detail-log-main">
                 <span>{isAllDone ? t('common.done') : t('workout.now')}</span>
