@@ -1,7 +1,9 @@
 import pytest
+import httpx
 from fastapi import HTTPException
 
 from aifit_api import main
+from aifit_api import ez
 from aifit_api.auth import Identity
 
 
@@ -45,3 +47,24 @@ async def test_speech_is_scoped_to_the_authenticated_coach(monkeypatch, link, ru
             await main.chat_speech(job_id, "owner", Identity(subject="owner", email=None), "es", link)
         assert error.value.status_code == 404
         assert not speech_calls
+
+
+@pytest.mark.asyncio
+async def test_speech_reports_depleted_credits_and_forwards_language(monkeypatch):
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(503, json={"code": "speech_credits_depleted"})
+
+    original_client = httpx.AsyncClient
+    transport = httpx.MockTransport(respond)
+    monkeypatch.setattr(ez.httpx, "AsyncClient", lambda **kwargs: original_client(transport=transport, **kwargs))
+    monkeypatch.setattr(ez, "_private_text", lambda _: "test-token")
+
+    with pytest.raises(HTTPException) as error:
+        await ez.speech({"url": "http://127.0.0.1:8793", "tokenFile": "/unused"}, "r_app_fixture", "es")
+
+    assert error.value.status_code == 503
+    assert error.value.detail["code"] == "speech_credits_depleted"
+    assert requests[0].content == b'{"language":"es"}'
