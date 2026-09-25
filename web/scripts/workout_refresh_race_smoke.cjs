@@ -23,6 +23,7 @@ function fixture(initialRevision = 'before-drag') {
     workoutIdByOwnerDateRef: { current: { [key]: 'workout' } },
     workoutRevisionByOwnerDateRef: { current: { [key]: initialRevision } },
     clearedWorkoutAtRef: { current: {} },
+    pendingWorkoutDatesRef: { current: new Set() },
   }
   const fetch = new Function(...Object.keys(env), `${code}; return fetchWorkoutSessionsByDates`)(...Object.values(env))
   return { env, fetch, respond: rows => respond({ ok: true, json: async () => rows }) }
@@ -39,6 +40,12 @@ async function main() {
     assert.equal(f.env.workoutRevisionByOwnerDateRef.current[key], receiptRevision,
       'the next save must use the acknowledged revision, never the delayed read')
   }
+  const optimistic = fixture()
+  const staleRead = optimistic.fetch([date])
+  optimistic.env.pendingWorkoutDatesRef.current.add(date)
+  optimistic.respond([workout('external-edit')])
+  assert.deepEqual(await staleRead, [], 'reads cannot update revisions or UI while optimistic writes are queued')
+  assert.equal(optimistic.env.workoutRevisionByOwnerDateRef.current[key], 'before-drag')
   const fresh = fixture()
   const pending = fresh.fetch([date])
   fresh.respond([workout('external-edit')])

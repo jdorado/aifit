@@ -24,8 +24,10 @@ def _absolute_regular_file(path_value: str) -> Path:
     return path
 
 
-def binding_for(principal_id: str) -> dict:
+def binding_for(principal_id: str, *, telegram: bool = False) -> dict:
     registry_path = os.getenv("EZ_BINDINGS_FILE", "")
+    if telegram:
+        registry_path = os.getenv("EZ_TELEGRAM_BINDINGS_FILE", "").strip() or registry_path
     try:
         registry = json.loads(_private_text(registry_path))
         if registry.get("version") != 1 or not isinstance(registry.get("bindings"), list):
@@ -69,9 +71,9 @@ async def call(binding: dict, method: str, path: str, body: dict | None = None) 
         raise HTTPException(503, "Ez is unavailable.") from error
 
 
-async def verified_binding(principal_id: str) -> dict:
+async def verified_binding(principal_id: str, *, telegram: bool = False) -> dict:
     """Resolve the private binding and prove it still belongs to this owner."""
-    binding = binding_for(principal_id)
+    binding = binding_for(principal_id, telegram=telegram)
     if binding.get("ownerId") != principal_id:
         raise HTTPException(503, "Chat binding does not match this account.")
     registration = await call(binding, "GET", "/v1/registration")
@@ -79,6 +81,35 @@ async def verified_binding(principal_id: str) -> dict:
     if registration.get("ownerId") != principal_id or not isinstance(binding_id, str) or not binding_id:
         raise HTTPException(503, "Chat binding does not match this account.")
     return {**binding, "bindingId": binding_id}
+
+
+async def speech(binding: dict, run_id: str, language: str = "en") -> bytes:
+    """Render an existing Ez reply; text and provider credentials stay with Ez."""
+    try:
+        async with httpx.AsyncClient(timeout=75) as client:
+            response = await client.post(
+                binding["url"].rstrip("/") + f"/v1/runs/{run_id}/speech",
+                headers={"Authorization": f"Bearer {_private_text(binding['tokenFile'])}"},
+                json={"language": language},
+            )
+        if response.status_code == 404:
+            raise HTTPException(503, "Audio coaching needs an Ez update.")
+        if response.status_code == 503:
+            try:
+                speech_error = response.json()
+            except ValueError:
+                speech_error = {}
+            if speech_error.get("code") == "speech_credits_depleted":
+                raise HTTPException(503, {"code": "speech_credits_depleted", "message": "Gemini speech credits are depleted."})
+            raise HTTPException(503, "Audio coaching is not configured yet.")
+        response.raise_for_status()
+        audio = response.content
+        if (response.headers.get("content-type") != "audio/wav" or
+                len(audio) < 44 or audio[:4] != b"RIFF" or audio[8:12] != b"WAVE"):
+            raise ValueError("Invalid Ez speech response")
+        return audio
+    except (OSError, ValueError, httpx.HTTPError) as error:
+        raise HTTPException(502, "Could not create coaching audio. Try again.") from error
 
 
 def telegram_provisioning_configured(binding: dict) -> bool:

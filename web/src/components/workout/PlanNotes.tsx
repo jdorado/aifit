@@ -45,19 +45,20 @@ const PlanNotes: FC<PlanNotesProps> = ({ notes, open, canEdit, saving, onToggle,
   }
 
   return (
-    <section className="plan-notes" aria-label={t('workout.dayNotesLabel')}>
+    <section className={`plan-notes ${open ? 'is-open' : ''}`} aria-label={t('workout.dayNotesLabel')}>
       <button
         className="plan-notes-toggle"
         type="button"
         onClick={onToggle}
         aria-expanded={open}
+        aria-label={t('workout.dayNotesLabel')}
       >
-        <span className="plan-notes-heading">
-          <span className="plan-notes-title">{t('workout.dayNotesLabel')}</span>
-          <span className="plan-notes-subtitle">{t('workout.dayNotesHint')}</span>
-        </span>
-        <span className="plan-notes-count">{lines.length}</span>
-        <span className={`plan-notes-chevron ${open ? 'open' : ''}`} aria-hidden="true">&gt;</span>
+        <svg className="workout-day-action-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M5 3.5h10l4 4V20a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1z" />
+          <path d="M15 3.5V8h4M8 12h8M8 16h6" />
+        </svg>
+        <span className="plan-notes-title">{t('workout.dayNotesLabel')}</span>
+        {lines.length > 0 ? <span className="plan-notes-count">{lines.length}</span> : null}
       </button>
       {open ? (
         <div className="plan-notes-panel">

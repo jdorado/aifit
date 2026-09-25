@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import logging
 import os
+import re
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 from urllib.parse import parse_qsl, quote, urlparse
@@ -9,7 +10,7 @@ from uuid import UUID
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field
 from pymongo import ASCENDING, AsyncMongoClient, ReturnDocument
@@ -31,7 +32,7 @@ from .coach_links import (
     CoachLinkService,
     CoachLinkUpdateInput,
 )
-from .ez import call as ez_call, provision_telegram, telegram_provisioning_configured, verified_binding
+from .ez import call as ez_call, provision_telegram, speech as ez_speech, verified_binding
 from .model_policy import filter_control, require_allowed
 from .workouts import (
     BlueprintInput,
@@ -44,6 +45,7 @@ from .workouts import (
     PlanInput,
     PlanItemMoveInput,
     PlanItemExtractInput,
+    ExerciseAddInput,
     PlanReorderInput,
     PublishInput,
     SetAddInput,
@@ -270,8 +272,9 @@ def public_telegram_connection(value: Any, needs_link: bool = False) -> dict:
     if not isinstance(value, dict) or not isinstance(value.get("connected"), bool):
         raise HTTPException(502, "Ez returned an invalid Telegram connection receipt.")
     if value["connected"]:
-        if set(value) not in ({"connected"}, {"connected", "ready"}) or ("ready" in value and value["ready"] is not True):
+        if set(value) not in ({"connected"}, {"connected", "ready"}) or ("ready" in value and not isinstance(value["ready"], bool)):
             raise HTTPException(502, "Ez returned an invalid Telegram connection receipt.")
+        # The saved pairing survives paused polling and transport outages.
         return {"state": "connected"}
     if not needs_link:
         if set(value) == {"connected"}:
@@ -474,27 +477,15 @@ async def get_account(identity: Identity = Depends(require_identity)) -> dict:
 @app.get("/account/telegram")
 async def get_telegram_connection(identity: Identity = Depends(require_identity)) -> dict:
     account = await account_for(identity)
-    binding = await verified_binding(account["account_id"])
-    try:
-        receipt = await ez_call(binding, "GET", "/v1/telegram")
-    except HTTPException as error:
-        if error.status_code in {400, 404, 503} and telegram_provisioning_configured(binding):
-            return {"state": "needs_bot"}
-        raise
-    try:
-        return public_telegram_connection(receipt)
-    except HTTPException as error:
-        if (error.status_code == 502 and telegram_provisioning_configured(binding)
-                and isinstance(receipt, dict) and receipt.get("connected") is True
-                and receipt.get("ready") is not True):
-            return {"state": "needs_bot"}
-        raise
+    binding = await verified_binding(account["account_id"], telegram=True)
+    receipt = await ez_call(binding, "GET", "/v1/telegram")
+    return public_telegram_connection(receipt)
 
 
 @app.post("/account/telegram/link")
 async def create_telegram_connection(identity: Identity = Depends(require_identity)) -> dict:
     account = await account_for(identity)
-    binding = await verified_binding(account["account_id"])
+    binding = await verified_binding(account["account_id"], telegram=True)
     try:
         connection = await ez_call(binding, "POST", "/v1/telegram/link")
     except HTTPException as error:
@@ -507,7 +498,7 @@ async def create_telegram_connection(identity: Identity = Depends(require_identi
 @app.post("/account/telegram/bot")
 async def configure_telegram_bot(body: TelegramBotInput, identity: Identity = Depends(require_identity)) -> dict:
     account = await account_for(identity)
-    binding = await verified_binding(account["account_id"])
+    binding = await verified_binding(account["account_id"], telegram=True)
     await provision_telegram(binding, body.bot_token)
     try:
         connection = await ez_call(binding, "POST", "/v1/telegram/link")
@@ -677,6 +668,23 @@ async def chat_job(job_id: str, user_id: str, identity: Identity = Depends(requi
     return public_turn_from_snapshot(job_id, request_id, current)
 
 
+@app.post("/chat/jobs/{job_id}/speech")
+async def chat_speech(job_id: str, user_id: str, identity: Identity = Depends(require_identity),
+                      language: str = Query(default="en", pattern="^(en|es)$"),
+                      act_as_link_id: str | None = Query(default=None, max_length=200)) -> Response:
+    account = await chat_account(identity, user_id, act_as_link_id)
+    if not re.fullmatch(r"r_app_[a-f0-9]{64}", job_id):
+        raise HTTPException(404, "Chat reply not found.")
+    binding = await verified_binding(account["account_id"])
+    current = await ez_call(binding, "GET", f"/v1/runs/{job_id}")
+    if current.get("scope") != chat_run_scope(MINI_CHAT_SCOPE, act_as_link_id):
+        raise HTTPException(404, "Chat reply not found.")
+    audio = await ez_speech(binding, job_id, language)
+    # Re-check a coach link in case access changed during synthesis.
+    await chat_account(identity, user_id, act_as_link_id)
+    return Response(audio, media_type="audio/wav", headers={"Cache-Control": "no-store"})
+
+
 @app.post("/chat/jobs/{job_id}/cancel")
 async def cancel_chat(job_id: str, user_id: str, identity: Identity = Depends(require_identity),
                       act_as_link_id: str | None = Query(default=None, max_length=200)) -> dict:
@@ -756,6 +764,19 @@ async def update_coach_link_v1(link_id: str, body: CoachLinkUpdateInput,
 async def create_exercise_v1(body: ExerciseMutationInput, account: dict = Depends(require_edit_account)) -> dict:
     return await workouts().create_exercise(account["account_id"], body.definition, body.request_id,
                                             {"kind": "browser", "account_id": account["account_id"]}, body.expected_revision)
+
+
+@app.get("/v1/workouts/{workout_id}/progression")
+async def workout_progression_v1(workout_id: str, account: dict = Depends(require_view_account)) -> dict:
+    return await workouts().progression(account["account_id"], workout_id)
+
+
+@app.get("/v1/agent/workouts/{workout_id}/progression")
+async def agent_workout_progression_v1(
+    workout_id: str, capability: AgentCapability = Depends(require_agent_capability),
+) -> dict:
+    require_agent_permission(capability, AGENT_READ)
+    return await workouts().progression(capability.account_id, workout_id)
 
 
 @app.get("/v1/exercises/{exercise_id}/history")
@@ -883,6 +904,17 @@ async def remove_workout_segment_v1(workout_id: str, segment_id: str, body: Plan
     return await workouts().remove_segment(account["account_id"], workout_id, segment_id, body)
 
 
+@app.get("/v1/workouts/{workout_id}/exercise-repertoire")
+async def workout_exercise_repertoire_v1(workout_id: str, account: dict = Depends(require_view_account)) -> dict:
+    return await workouts().exercise_repertoire(account["account_id"], workout_id)
+
+
+@app.post("/v1/workouts/{workout_id}/exercises")
+async def add_workout_exercise_v1(workout_id: str, body: ExerciseAddInput,
+                                  account: dict = Depends(require_edit_account)) -> dict:
+    return await workouts().add_exercise(account["account_id"], workout_id, body)
+
+
 @app.post("/v1/workouts/{workout_id}/segments/reorder")
 async def reorder_workout_segments_v1(workout_id: str, body: PlanReorderInput,
                                       account: dict = Depends(require_edit_account)) -> dict:
@@ -963,6 +995,16 @@ async def agent_create_exercise_v1(
     return await workouts().create_exercise(
         capability.account_id, body.definition, body.request_id, agent_actor(capability), body.expected_revision,
     )
+
+
+@app.get("/v1/agent/exercises")
+async def agent_list_exercises_v1(
+    after: str | None = Query(default=None, pattern=r"^ex_[a-z0-9_]{3,120}$"),
+    limit: int = Query(default=50, ge=1, le=100),
+    capability: AgentCapability = Depends(require_agent_capability),
+) -> dict:
+    require_agent_permission(capability, AGENT_READ)
+    return await workouts().list_exercises(capability.account_id, after, limit)
 
 
 @app.get("/v1/agent/exercises/{exercise_id}")

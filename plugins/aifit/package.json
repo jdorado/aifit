@@ -1,6 +1,6 @@
 {
   "name": "@aifit/ez-plugin",
-  "version": "0.1.0-beta.1",
+  "version": "0.1.0-beta.2",
   "description": "The deterministic Ez boundary for AIFit canonical reads and domain writes.",
   "license": "MIT",
   "type": "module",

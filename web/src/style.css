@@ -2075,6 +2075,81 @@ p {
   scrollbar-width: none;
 }
 
+.view[data-view="workout"] .coaching-audio .detail-audio-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  min-width: 36px;
+  height: 36px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--aifit-ink);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.view[data-view="workout"] .coaching-audio .detail-audio-btn.active {
+  background: var(--aifit-purple);
+  color: #ffffff;
+}
+
+.coaching-audio .detail-audio-btn svg {
+  width: 18px;
+  height: 18px;
+}
+
+.coaching-audio .detail-audio-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.view[data-view="workout"] .coaching-audio .detail-audio-btn.loading:disabled {
+  opacity: 1;
+  background: var(--aifit-purple);
+  color: #ffffff;
+}
+
+.coaching-audio-spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: coaching-audio-spin 0.8s linear infinite;
+}
+
+@keyframes coaching-audio-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .coaching-audio-spinner { animation-duration: 2s; }
+}
+
+.coaching-audio-panel {
+  margin: 2px 0 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(99, 102, 241, 0.35);
+  border-radius: 14px;
+  background: rgba(99, 102, 241, 0.1);
+}
+
+.coaching-audio-panel audio {
+  display: block;
+  width: 100%;
+  height: 40px;
+  border-radius: 8px;
+}
+
+.coaching-audio-panel p {
+  margin: 0;
+  font-size: 13px;
+}
+
 .coach-chat-prompts {
   display: flex;
   gap: 7px;
@@ -4297,6 +4372,17 @@ body {
   color: var(--ink-primary);
 }
 
+/* Keep the iPhone status area solid while the app scrolls beneath it. */
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0 0 auto;
+  height: env(safe-area-inset-top, 0px);
+  background: #f8fbff;
+  pointer-events: none;
+  z-index: 1000;
+}
+
 ::selection {
   background: var(--selection-bg);
   color: var(--selection-fg);
@@ -5623,6 +5709,10 @@ body:has(.view[data-view="home"].active) {
   background: #fbfdff;
 }
 
+body:has(.view[data-view="home"].active)::after {
+  background: #fbfdff;
+}
+
 body:has(.view[data-view="home"].active)::before {
   opacity: 0;
 }
@@ -6518,6 +6608,7 @@ body:has(.view:is([data-view="workout"], [data-view="diet"], [data-view="health"
   gap: 18px;
   overflow-x: hidden;
   overflow-y: auto;
+  padding-bottom: max(24px, var(--safe-bottom));
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
   scrollbar-width: none;
@@ -10908,4 +10999,161 @@ body:has(.landing) {
   font-weight: 700;
   padding: 7px 12px;
   cursor: pointer;
+}
+
+.workout-add-exercise {
+  justify-self: end;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 8px 14px;
+  border: 1px solid rgba(7, 26, 53, 0.12);
+  border-radius: 14px;
+  background: #fff;
+  color: var(--aifit-ink);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.view[data-view="workout"] .workout-day-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: -8px 0 -8px;
+  padding: 0;
+}
+
+.view[data-view="workout"] .workout-day-actions .workout-add-exercise,
+.view[data-view="workout"] .workout-day-actions .plan-notes-toggle {
+  width: auto;
+  min-height: 34px;
+  padding: 5px 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid rgba(7, 26, 53, 0.12);
+  border-radius: 10px;
+  background: #fff;
+  color: var(--aifit-ink);
+  font: inherit;
+  font-size: calc(12px * var(--font-scale));
+  font-weight: 600;
+}
+
+.view[data-view="workout"] .workout-day-actions + .workout-list .workout-stage-row:first-child {
+  margin-top: 4px;
+}
+
+.view[data-view="workout"] .workout-day-actions .plan-notes {
+  margin: 0;
+  border: 0;
+  background: transparent;
+  overflow: visible;
+}
+
+.view[data-view="workout"] .workout-day-actions .plan-notes.is-open {
+  display: contents;
+}
+
+.view[data-view="workout"] .workout-day-actions .plan-notes.is-open .plan-notes-toggle {
+  background: var(--aifit-panel-blue);
+}
+
+.view[data-view="workout"] .workout-day-actions .plan-notes-panel {
+  flex: 0 0 100%;
+  order: 2;
+  padding: 0 14px 14px;
+  border: 1px solid rgba(7, 26, 53, 0.12);
+  border-radius: 12px;
+  background: var(--aifit-panel-blue);
+}
+
+.view[data-view="workout"] .workout-day-action-icon {
+  flex: none;
+  font-size: 20px;
+  line-height: 1;
+}
+
+.add-exercise-sheet {
+  padding: 0;
+  border: 0;
+  max-height: calc(100dvh - max(var(--safe-top), 10px));
+  color: var(--aifit-ink);
+}
+
+.add-exercise-sheet::backdrop {
+  background: rgba(7, 26, 53, 0.36);
+}
+
+.add-exercise-search {
+  padding: 12px 16px;
+  background: #fff;
+}
+
+.add-exercise-search input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid rgba(7, 26, 53, 0.15);
+  border-radius: 12px;
+  background: #f8fbff;
+  color: inherit;
+  font: inherit;
+  font-size: 16px;
+}
+
+.add-exercise-source {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.add-exercise-sheet .exercise-history-row:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+/* Coaching feedback stays beside the existing set controls. */
+.progression-feedback {
+  margin: 16px 0;
+  padding: 14px 16px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+  border: 1px solid var(--glass-border);
+  color: var(--ink-primary);
+  font-size: 0.85rem;
+}
+.progression-heading { display: flex; flex-wrap: wrap; gap: 6px 16px; justify-content: space-between; }
+.progression-heading span, .progression-muted { color: var(--ink-secondary); }
+.progression-feedback p, .muscle-progress p { margin: 8px 0; }
+.progression-feedback summary, .muscle-progress summary { cursor: pointer; padding: 8px 0; }
+.progression-preview { color: var(--brand-primary); font-size: 0.85rem; line-height: 1.5; margin: 12px 0 0; }
+.progression-review { margin-top: 10px; padding: 10px 14px; min-height: 44px; border: 1px solid var(--glass-border); border-radius: 10px; color: var(--ink-primary); background: var(--glass-surface); }
+.set-effort { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding-top: 12px; color: var(--ink-secondary); font-size: 0.8rem; }
+.set-effort select { max-width: 100%; min-height: 44px; padding: 8px; border: 1px solid var(--glass-border); border-radius: 10px; color: var(--ink-primary); background: var(--bg-subtle); font: inherit; font-size: 16px; }
+.set-row.edit .set-effort { width: 100%; }
+.muscle-progress { font-size: 0.85rem; }
+.muscle-progress-row { padding: 12px 0; border-bottom: 1px solid var(--glass-border); }
+.muscle-progress-row h3 { margin: 0 0 8px; text-transform: capitalize; font-size: 1rem; }
+.exercise-history-tabs { flex-wrap: wrap; }
+.workout-save-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 12px;
+  font-size: 12px;
+  color: var(--ink-secondary);
+}
+.workout-save-status.has-error { color: var(--error); }
+.workout-save-status button {
+  flex-shrink: 0;
+  border: 0;
+  padding: 6px;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  text-decoration: underline;
 }

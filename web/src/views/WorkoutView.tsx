@@ -2,14 +2,20 @@ import type { FC } from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useI18n } from '../i18n'
 import CoachChat from '../components/workout/CoachChat'
+import CoachingAudio from '../components/workout/CoachingAudio'
 import ExerciseFeedback from '../components/workout/ExerciseFeedback'
 import ExerciseHistorySheet from '../components/workout/ExerciseHistorySheet'
 import SwapCandidateSheet from '../components/workout/SwapCandidateSheet'
+import AddExerciseSheet from '../components/workout/AddExerciseSheet'
+import type { ExerciseRepertoire, RepertoireCandidate } from '../utils/exerciseRepertoire'
 import ExerciseSetList from '../components/workout/ExerciseSetList'
+import { ProgressionFeedback } from '../components/workout/ProgressionFeedback'
+import { previewLoad, type WorkoutProgression } from '../utils/progression'
 import VideoGallery from '../components/workout/VideoGallery'
 import WeekStrip from '../components/workout/WeekStrip'
 import WorkoutMiniBar from '../components/workout/WorkoutMiniBar'
 import WorkoutPlanList from '../components/workout/WorkoutPlanList'
+import PlanNotes from '../components/workout/PlanNotes'
 import type { WorkoutExercise, WorkoutExtra, WorkoutFeedbackPreset } from '../data/testWorkout'
 import { circuitGroupKey } from '../data/testWorkout'
 import { getNextCircuitSet } from '../utils/circuitProgress'
@@ -56,9 +62,14 @@ const SECTION_TONE_COLOR_SLOTS: Partial<Record<SectionTone, number>> = {
 
 type WorkoutViewProps = {
   active: boolean
+  savePending: boolean
+  saveError: boolean
+  onDismissSaveError: () => void
   canLogDay: boolean
   canEditPlan: boolean
   coachChatEnabled: boolean
+  workoutId?: string
+  workoutRevision?: string
   apiBaseUrl: string
   getAuthHeaders: () => Promise<Record<string, string>>
   actAsLinkId?: string | null
@@ -89,14 +100,16 @@ type WorkoutViewProps = {
   onSelectDay: (index: number, date: string) => void
   onBack: () => void
   onLogSet: (exerciseId?: string) => void
-  onCompleteTimedExercise: (exerciseId: string) => void
-  completingTimedExerciseId: string | null
+  onCompleteExercise: (exerciseId: string) => void
   onUnlogSet: (exerciseId: string, index: number) => void
   onStartEditingSet: (exerciseId: string, index: number) => void
   onSaveEditingSet: () => void
   onCancelEditingSet: () => void
+  onUpdateSetEffort: (exerciseId: string, index: number, rpe: number | undefined) => void
   onUpdateSetField: (exerciseId: string, index: number, field: 'weight' | 'metric', value: string, propagate?: boolean) => void
   onCommitSetTarget: (exerciseId: string, index: number, field: 'weight' | 'metric') => void
+  onLoadExerciseRepertoire: () => Promise<ExerciseRepertoire>
+  onAddExercise: (candidate: RepertoireCandidate, repertoire: ExerciseRepertoire) => Promise<boolean>
   onAddSet: (exerciseId: string) => void
   onRemoveSet: (exerciseId: string, index: number) => void
   onStartHoldTimer: (
@@ -110,6 +123,7 @@ type WorkoutViewProps = {
   onSaveDayNote: (notes: string) => Promise<boolean>
   onSaveExerciseFeedback: (exerciseId: string, note: string, preset: WorkoutFeedbackPreset | null) => Promise<boolean>
   onCoachSend: (exerciseId: string, message: string) => void
+  onCoachListen: (exerciseId: string) => Promise<Blob>
   swapOpen: boolean
   swapLoading: boolean
   swappingCandidateId: string | null
@@ -141,9 +155,14 @@ const getSectionToneFromText = (rawHaystack: string): SectionTone => {
 
 const WorkoutView: FC<WorkoutViewProps> = ({
   active,
+  savePending,
+  saveError,
+  onDismissSaveError,
   canLogDay,
   canEditPlan,
   coachChatEnabled,
+  workoutId,
+  workoutRevision,
   apiBaseUrl,
   getAuthHeaders,
   actAsLinkId = null,
@@ -174,14 +193,16 @@ const WorkoutView: FC<WorkoutViewProps> = ({
   onSelectDay,
   onBack,
   onLogSet,
-  onCompleteTimedExercise,
-  completingTimedExerciseId,
+  onCompleteExercise,
   onUnlogSet,
   onStartEditingSet,
   onSaveEditingSet,
   onCancelEditingSet,
+  onUpdateSetEffort,
   onUpdateSetField,
   onCommitSetTarget,
+  onLoadExerciseRepertoire,
+  onAddExercise,
   onAddSet,
   onRemoveSet,
   onStartHoldTimer,
@@ -189,6 +210,7 @@ const WorkoutView: FC<WorkoutViewProps> = ({
   onSaveDayNote,
   onSaveExerciseFeedback,
   onCoachSend,
+  onCoachListen,
   swapOpen,
   swapLoading,
   swappingCandidateId,
@@ -205,6 +227,33 @@ const WorkoutView: FC<WorkoutViewProps> = ({
   onExtractItem,
 }) => {
   const { t, language } = useI18n()
+  const [audioPanelTarget, setAudioPanelTarget] = useState<HTMLDivElement | null>(null)
+  const [addExerciseOpen, setAddExerciseOpen] = useState(false)
+  const [planNotesOpen, setPlanNotesOpen] = useState(false)
+  useEffect(() => { setAddExerciseOpen(false) }, [selectedDateId, actAsLinkId, active])
+  const progressionKey = `${actAsLinkId ?? 'self'}:${workoutId ?? ''}:${workoutRevision ?? ''}`
+  const [progressionState, setProgressionState] = useState<{ key: string; data: WorkoutProgression | null; error: boolean } | null>(null)
+  const [progressionRetry, setProgressionRetry] = useState(0)
+  const progression = progressionState?.key === progressionKey ? progressionState.data : null
+  useEffect(() => {
+    if (!active || !workoutId) return
+    const controller = new AbortController()
+    setProgressionState(null)
+    void (async () => {
+      try {
+        const headers = await getAuthHeaders()
+        if (controller.signal.aborted) return
+        const query = actAsLinkId ? `?${new URLSearchParams({ act_as_link_id: actAsLinkId })}` : ''
+        const response = await fetch(`${apiBaseUrl}/v1/workouts/${encodeURIComponent(workoutId)}/progression${query}`, { headers, signal: controller.signal })
+        if (!response.ok) throw new Error('Progression unavailable')
+        const data = await response.json() as WorkoutProgression
+        if (!controller.signal.aborted && data.workout_id === workoutId) setProgressionState({ key: progressionKey, data, error: false })
+      } catch {
+        if (!controller.signal.aborted) setProgressionState({ key: progressionKey, data: null, error: true })
+      }
+    })()
+    return () => controller.abort()
+  }, [active, workoutId, progressionKey, actAsLinkId, apiBaseUrl, getAuthHeaders, progressionRetry])
   const [coachChatOpen, setCoachChatOpen] = useState(false)
   const [coachDraft, setCoachDraft] = useState('')
   const [historyOpen, setHistoryOpen] = useState(false)
@@ -354,7 +403,6 @@ const WorkoutView: FC<WorkoutViewProps> = ({
     })
     : hasNext
   const holdTimerEnabled = Boolean(activeExercise && activeExercise.metric === 'time' && activeExercise.timer?.enabled)
-  const completingTimedExercise = completingTimedExerciseId !== null
   const isAllDone = Boolean(activeExercise && !circuitHasPending && !hasLogTarget)
   const footerTitle = isAllDone ? detailTitle : (logTargetExercise?.name ?? detailTitle)
 
@@ -448,6 +496,8 @@ const WorkoutView: FC<WorkoutViewProps> = ({
       return null
     }
 
+    const progress = progression?.exercises.find(item => item.exercise_instance_id === activeExercise.id)
+    const selectedWeight = stateList[nextIndex]?.weight || activeExercise.sets[nextIndex]?.targetWeight || ''
     const hasNoSets = activeExercise.sets.length === 0
     const isCircuitMove = Boolean(activeCircuit)
     const setLabel = isCircuitMove ? t('workout.roundLabel') : t('workout.setLabel')
@@ -492,8 +542,17 @@ const WorkoutView: FC<WorkoutViewProps> = ({
             </div>
           </div>
         ) : null}
+        {progress ? <ProgressionFeedback summary={progress}
+          onReview={coachChatEnabled ? () => {
+            setCoachDraft(t('progression.reviewPrompt'))
+            setCoachChatOpen(true)
+          } : undefined} /> : workoutId && activeExercise.metric === 'reps' && !progression ?
+          <p className="progression-muted">{t(progressionState?.key === progressionKey && progressionState.error ? 'progression.loadError' : 'progression.loading')}
+            {progressionState?.key === progressionKey && progressionState.error ? <button type="button" onClick={() => setProgressionRetry(value => value + 1)}>{t('common.retry')}</button> : null}
+          </p> : null}
         <ExerciseSetList
           exercise={activeExercise}
+          selectedLoadFeedback={progress && previewLoad(String(selectedWeight), progress) ? t(`progression.${previewLoad(String(selectedWeight), progress)}`) : undefined}
           setLabel={setLabel}
           stateList={stateList}
           nextIndex={nextIndex}
@@ -502,12 +561,13 @@ const WorkoutView: FC<WorkoutViewProps> = ({
           holdTimerEnabled={holdTimerEnabled}
           holdTargetSec={holdTargetSec}
           holdPrepSec={holdPrepSec}
-          canLogDay={canLogDay && !completingTimedExercise}
+          canLogDay={canLogDay}
           canEditPlan={canEditPlan}
           onUnlogSet={onUnlogSet}
           onStartEditingSet={onStartEditingSet}
           onSaveEditingSet={onSaveEditingSet}
           onCancelEditingSet={onCancelEditingSet}
+          onUpdateSetEffort={onUpdateSetEffort}
           onUpdateSetField={onUpdateSetField}
           onCommitSetTarget={onCommitSetTarget}
           onAddSet={() => onAddSet(activeExercise.id)}
@@ -574,6 +634,13 @@ const WorkoutView: FC<WorkoutViewProps> = ({
     )
   }
 
+  const saveStatus = savePending || saveError ? (
+    <div className={`workout-save-status${saveError ? ' has-error' : ''}`} role={saveError ? 'alert' : 'status'}>
+      <span>{saveError ? t('workout.saveFailed') : t('common.saving')}</span>
+      {saveError ? <button type="button" onClick={onDismissSaveError}>{t('common.close')}</button> : null}
+    </div>
+  ) : null
+
   return (
     <section className={`view ${active ? 'active' : ''}`} data-view="workout">
       {!activeEntryId ? (
@@ -586,9 +653,28 @@ const WorkoutView: FC<WorkoutViewProps> = ({
       ) : null}
 
       <WeekStrip
-        days={completingTimedExercise ? weekDays.map((day) => ({ ...day, isSelectable: false })) : weekDays}
+        days={weekDays}
         onSelectDay={onSelectDay}
       />
+
+      {!activeEntryId ? (
+        <div className="workout-day-actions">
+          {canEditPlan && canLogDay && !loading ? (
+            <button type="button" className="workout-add-exercise" onClick={() => setAddExerciseOpen(true)}>
+              <span className="workout-day-action-icon" aria-hidden="true">＋</span>
+              <span>{t('workout.addExercise')}</span>
+            </button>
+          ) : null}
+          <PlanNotes
+            notes={planNotes}
+            open={planNotesOpen}
+            canEdit={canLogDay}
+            saving={savingDayNote}
+            onToggle={() => setPlanNotesOpen((open) => !open)}
+            onSave={onSaveDayNote}
+          />
+        </div>
+      ) : null}
 
       {isViewingOtherDay && viewingDateLabel ? (
         <div className="workout-viewing-banner" role="status">
@@ -596,13 +682,14 @@ const WorkoutView: FC<WorkoutViewProps> = ({
             {t('workout.viewingDate', { date: viewingDateLabel })}
           </span>
           {onBackToToday ? (
-            <button type="button" className="workout-viewing-action" onClick={onBackToToday} disabled={completingTimedExercise}>
+            <button type="button" className="workout-viewing-action" onClick={onBackToToday}>
               {t('workout.backToToday')}
             </button>
           ) : null}
         </div>
       ) : null}
 
+      {!activeEntryId ? saveStatus : null}
       <WorkoutPlanList
         activeEntryId={activeEntryId}
         hasWeekWorkouts={hasWeekWorkouts}
@@ -611,10 +698,6 @@ const WorkoutView: FC<WorkoutViewProps> = ({
         exercises={exercises}
         extras={extras}
         setLogs={setLogs}
-        planNotes={planNotes}
-        canEditPlanNotes={canLogDay}
-        savingPlanNotes={savingDayNote}
-        onSavePlanNotes={onSaveDayNote}
         circuitGroups={circuitGroups}
         getNextCircuitExercise={getNextCircuitExercise}
         onSelectEntry={onSelectEntry}
@@ -627,9 +710,18 @@ const WorkoutView: FC<WorkoutViewProps> = ({
         onExtractItem={onExtractItem}
       />
 
+      {addExerciseOpen ? (
+        <AddExerciseSheet
+          key={`${selectedDateId}:${actAsLinkId}`}
+          onLoad={onLoadExerciseRepertoire}
+          onAdd={onAddExercise}
+          onClose={() => setAddExerciseOpen(false)}
+        />
+      ) : null}
+
       <section className={`workout-detail ${activeEntryId ? 'active' : ''}`} data-section-color={detailSectionColorSlot}>
         <div className="detail-header-bar">
-          <button className="back-btn" type="button" onClick={onBack} disabled={completingTimedExercise}>
+          <button className="back-btn" type="button" onClick={onBack}>
             <span className="icon-back">‹</span> {t('common.back')}
           </button>
           <div className="detail-title-block">
@@ -637,14 +729,14 @@ const WorkoutView: FC<WorkoutViewProps> = ({
           </div>
           {activeExercise ? (
             <div className="detail-header-actions">
-              {activeExercise.metric === 'time' && activeExercise.status !== 'skip' && hasNext ? (
+              {activeExercise.status !== 'skip' && hasNext ? (
                 <button
                   type="button"
                   className="detail-complete-btn"
-                  aria-label={t('workout.completeTimedExercise')}
-                  title={t('workout.completeTimedExercise')}
-                  disabled={!canLogDay || completingTimedExerciseId !== null}
-                  onClick={() => onCompleteTimedExercise(activeExercise.id)}
+                  aria-label={t('workout.completeExercise')}
+                  title={t('workout.completeExercise')}
+                  disabled={!canLogDay}
+                  onClick={() => onCompleteExercise(activeExercise.id)}
                 >
                   <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
                     <path d="M5 12.5l4.5 4.5L19 7" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
@@ -657,7 +749,6 @@ const WorkoutView: FC<WorkoutViewProps> = ({
                   className={`detail-history-btn${historyOpen ? ' active' : ''}`}
                   aria-label={t('workout.historyTitle')}
                   aria-expanded={historyOpen}
-                  disabled={completingTimedExercise}
                   onClick={openExerciseHistory}
                 >
                   <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -666,12 +757,18 @@ const WorkoutView: FC<WorkoutViewProps> = ({
                   </svg>
                 </button>
               ) : null}
+              <CoachingAudio
+                key={activeExercise.id}
+                disabled={!coachChatEnabled || coachMessages.some((message) => message.thinking)}
+                onListen={() => onCoachListen(activeExercise.id)}
+                panelTarget={audioPanelTarget}
+              />
               <button
                 type="button"
                 className={`detail-coach-btn${coachChatOpen ? ' active' : ''}`}
                 aria-label={t('workout.askCoach')}
                 aria-expanded={coachChatOpen}
-                disabled={!coachChatEnabled || completingTimedExercise}
+                disabled={!coachChatEnabled}
                 onClick={() => {
                   setHistoryOpen(false)
                   setCoachChatOpen((current) => !current)
@@ -695,17 +792,19 @@ const WorkoutView: FC<WorkoutViewProps> = ({
         </div>
 
         <div className="detail-content">
+          <div ref={setAudioPanelTarget} className="coaching-audio-slot" />
           {renderDetailContent()}
         </div>
 
         <div className="detail-footer">
+          {saveStatus}
           <div className={`footer-actions ${activeExtra ? 'hidden' : ''}`}>
             <button
               className="primary large detail-log-button"
               type="button"
               aria-label={`${isAllDone ? t('common.done') : t('workout.now')} ${footerTitle}: ${nextActionLabel}`}
               onClick={isAllDone ? onBack : () => onLogSet(logTargetExercise?.id)}
-              disabled={!canLogDay || completingTimedExerciseId !== null || (!isAllDone && !hasLogTarget)}
+              disabled={!canLogDay || (!isAllDone && !hasLogTarget)}
             >
               <span className="detail-log-main">
                 <span>{isAllDone ? t('common.done') : t('workout.now')}</span>
@@ -724,6 +823,9 @@ const WorkoutView: FC<WorkoutViewProps> = ({
             exerciseName={activeExercise.name}
             sessions={historySessions}
             related={historyRelated}
+            muscles={progression?.muscles.filter(muscle => progression.exercises.find(item => item.exercise_instance_id === activeExercise.id)?.primary_muscles.includes(muscle.muscle)) ?? []}
+            progressionLoading={!progression && !progressionState?.error}
+            progressionError={Boolean(progressionState?.error)}
             onClose={() => setHistoryOpen(false)}
           />
         ) : null}

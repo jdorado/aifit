@@ -3,6 +3,7 @@ export type SetState = {
   metric: string
   done: boolean
   skipped?: boolean
+  rpe?: number
   value_source?: 'user_entered' | 'accepted_target' | 'legacy_unknown'
 }
 

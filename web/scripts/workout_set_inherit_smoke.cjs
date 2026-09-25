@@ -119,7 +119,7 @@ const workout = {
         load_basis: 'machine_stack',
       },
       sets: [
-        workoutSet('s1', { status: 'completed', reps: 6, load: { value: 74, unit: 'kg' }, completed_at: '2026-09-22T13:50:29Z' }),
+        workoutSet('s1', { status: 'completed', reps: 6, rpe: 8, load: { value: 74, unit: 'kg' }, completed_at: '2026-09-22T13:50:29Z' }),
         workoutSet('s2'),
         workoutSet('s3'),
         workoutSet('s4', { status: 'completed', reps: 8, load: { value: 60, unit: 'kg' }, completed_at: '2026-09-22T13:55:00Z' }),
@@ -138,11 +138,12 @@ const session = backendWorkoutToSession(workout, 'user_1')
 const states = session.workout.set_logs.wex_1
 assert.deepEqual(
   states[0],
-  { weight: '74kg', metric: '6', done: true, value_source: 'user_entered' },
+  { weight: '74kg', metric: '6', rpe: 8, done: true, value_source: 'user_entered' },
   'a logged set keeps its canonical actual',
 )
 assert.equal(states[1].weight, '74kg', 'the next unlogged set inherits the logged weight')
 assert.equal(states[1].metric, '6', 'the next unlogged set inherits the logged reps')
+assert.equal(states[1].rpe, undefined, 'effort must never be copied into the next set')
 assert.equal(states[1].done, false, 'an inherited set is still unlogged')
 assert.equal(states[1].value_source, 'accepted_target', 'an inherited value is a carried draft, not fresh input')
 assert.equal(states[2].weight, '74kg', 'the carry continues through consecutive unlogged sets')
@@ -152,6 +153,8 @@ assert.equal(states[5].done, true, 'a skipped set stays logged')
 assert.equal(states[6].weight, '60kg', 'a skipped set does not clear the carried value')
 
 const roundWorkout = structuredClone(workout)
+roundWorkout.segments[0].items[0].sets[0].actual.rpe = null
+assert.equal(backendWorkoutToSession(roundWorkout, 'user_1').workout.set_logs.wex_1[0].rpe, undefined, 'canonical null effort remains unknown')
 roundWorkout.segments[0].kind = 'circuit'
 roundWorkout.segments[0].items[0].sets = [
   { ...workoutSet('warmup'), kind: 'warmup' },
