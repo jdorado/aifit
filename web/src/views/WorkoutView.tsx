@@ -227,6 +227,7 @@ const WorkoutView: FC<WorkoutViewProps> = ({
   onExtractItem,
 }) => {
   const { t, language } = useI18n()
+  const [audioPanelTarget, setAudioPanelTarget] = useState<HTMLDivElement | null>(null)
   const [addExerciseOpen, setAddExerciseOpen] = useState(false)
   const [planNotesOpen, setPlanNotesOpen] = useState(false)
   useEffect(() => { setAddExerciseOpen(false) }, [selectedDateId, actAsLinkId, active])
@@ -760,6 +761,7 @@ const WorkoutView: FC<WorkoutViewProps> = ({
                 key={activeExercise.id}
                 disabled={!coachChatEnabled || coachMessages.some((message) => message.thinking)}
                 onListen={() => onCoachListen(activeExercise.id)}
+                panelTarget={audioPanelTarget}
               />
               <button
                 type="button"
@@ -790,6 +792,7 @@ const WorkoutView: FC<WorkoutViewProps> = ({
         </div>
 
         <div className="detail-content">
+          <div ref={setAudioPanelTarget} className="coaching-audio-slot" />
           {renderDetailContent()}
         </div>
 

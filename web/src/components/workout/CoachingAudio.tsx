@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useI18n } from '../../i18n'
 
-export default function CoachingAudio({ disabled, onListen }: {
+export default function CoachingAudio({ disabled, onListen, panelTarget }: {
   disabled: boolean
   onListen: () => Promise<Blob>
+  panelTarget: HTMLElement | null
 }) {
   const { t } = useI18n()
   const [loading, setLoading] = useState(false)
@@ -26,8 +28,8 @@ export default function CoachingAudio({ disabled, onListen }: {
   useEffect(() => {
     // Some mobile browsers require another tap after an asynchronous request.
     // Native controls stay available if autoplay is blocked.
-    if (url) void audio.current?.play().catch(() => {})
-  }, [url])
+    if (url && open) void audio.current?.play().catch(() => {})
+  }, [url, open])
 
   const listen = async () => {
     if (loading || disabled) return
@@ -50,18 +52,20 @@ export default function CoachingAudio({ disabled, onListen }: {
 
   return (
     <div className="coaching-audio">
-      <button type="button" className={`detail-audio-btn${open ? ' active' : ''}`} disabled={disabled || loading}
+      <button type="button" className={`detail-audio-btn${open && url ? ' active' : ''}${loading ? ' loading' : ''}`} disabled={disabled || loading}
         onClick={() => void listen()} aria-label={loading ? t('workout.preparingCoachingAudio') : t('workout.listenToCoaching')}
-        title={loading ? t('workout.preparingCoachingAudio') : t('workout.listenToCoaching')} aria-expanded={open}>
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M11 5 6 9H3v6h3l5 4V5Zm4 3a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
+        title={loading ? t('workout.preparingCoachingAudio') : t('workout.listenToCoaching')}
+        aria-busy={loading} aria-expanded={open && Boolean(url || error)}>
+        {loading ? <span className="coaching-audio-spinner" aria-hidden="true" /> : (
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M11 5 6 9H3v6h3l5 4V5Zm4 3a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        )}
       </button>
-      {open ? <div className="coaching-audio-panel">
-        {loading ? <span role="status">{t('workout.preparingCoachingAudio')}</span> : null}
+      {open && panelTarget && (url || error) ? createPortal(<div className="coaching-audio-panel">
         {url ? <audio ref={audio} src={url} controls aria-label={t('workout.listenToCoaching')} /> : null}
         {error ? <p role="alert">{error}</p> : null}
-      </div> : null}
+      </div>, panelTarget) : null}
     </div>
   )
 }
