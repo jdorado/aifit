@@ -42,7 +42,16 @@ the aifit skill; `ez tools list --details`):
 In a mini-chat turn the app already knows which exercise the user sees: read
 the turn references first with `ezenciel-agents-schedule context`
 (`run.application.context` holds `workoutId`, `exerciseInstanceId`, and the
-rest), then answer from those records. Never ask which exercise is meant.
+rest), then resolve that item through `workout show`. Reuse the workout only
+when its ID and revision match the current references; earlier mini-chat
+messages may be about a different exercise. Never ask which exercise is meant.
+For form/setup explanations, use that item and relevant profile constraints,
+then give a few concise cues. Reuse the profile already read in this session;
+do not open the full plan or archives for a technique explanation. Pain,
+contraindications, and prescription changes still require the relevant health
+guidance. The aifit skill describes the bounded reads. If a plugin read fails,
+report the limitation instead of troubleshooting runtime files or guessing
+from an old plan.
 
 Never present a workspace plan template as the app's session; answer from the
 record you read. If the record is absent, say the app has no record for that
