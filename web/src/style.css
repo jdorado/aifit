@@ -10941,6 +10941,61 @@ body:has(.landing) {
   cursor: pointer;
 }
 
+.view[data-view="workout"] .workout-day-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 16px 12px;
+}
+
+.view[data-view="workout"] .workout-day-actions .workout-add-exercise,
+.view[data-view="workout"] .workout-day-actions .plan-notes-toggle {
+  width: auto;
+  min-height: 40px;
+  padding: 8px 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid rgba(7, 26, 53, 0.12);
+  border-radius: 12px;
+  background: #fff;
+  color: var(--aifit-ink);
+  font: inherit;
+  font-size: calc(13px * var(--font-scale));
+  font-weight: 650;
+}
+
+.view[data-view="workout"] .workout-day-actions .plan-notes {
+  margin: 0;
+  border: 0;
+  background: transparent;
+  overflow: visible;
+}
+
+.view[data-view="workout"] .workout-day-actions .plan-notes.is-open {
+  display: contents;
+}
+
+.view[data-view="workout"] .workout-day-actions .plan-notes.is-open .plan-notes-toggle {
+  background: var(--aifit-panel-blue);
+}
+
+.view[data-view="workout"] .workout-day-actions .plan-notes-panel {
+  flex: 0 0 100%;
+  order: 2;
+  padding: 0 14px 14px;
+  border: 1px solid rgba(7, 26, 53, 0.12);
+  border-radius: 12px;
+  background: var(--aifit-panel-blue);
+}
+
+.view[data-view="workout"] .workout-day-action-icon {
+  flex: none;
+  font-size: 20px;
+  line-height: 1;
+}
+
 .add-exercise-sheet {
   padding: 0;
   border: 0;

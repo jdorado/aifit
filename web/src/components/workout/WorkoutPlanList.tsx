@@ -3,7 +3,6 @@ import { useI18n } from '../../i18n'
 import type { WorkoutExercise, WorkoutExtra } from '../../data/testWorkout'
 import { circuitGroupKey } from '../../data/testWorkout'
 import type { ActiveEntryType, SetState } from '../../types/app'
-import PlanNotes from './PlanNotes'
 
 type PlanSwipeState = {
   startX: number
@@ -78,16 +77,10 @@ type WorkoutPlanListProps = {
   exercises: WorkoutExercise[]
   extras: WorkoutExtra[]
   setLogs: Record<string, SetState[]>
-  planNotes: string
-  canEditPlanNotes: boolean
-  savingPlanNotes: boolean
-  onSavePlanNotes: (notes: string) => Promise<boolean>
   circuitGroups: Map<string, CircuitGroup>
   getNextCircuitExercise: (items: WorkoutExercise[]) => WorkoutExercise | null
   onSelectEntry: (id: string, type: ActiveEntryType) => void
   canEditPlan: boolean
-  canAddExercise: boolean
-  onAddExercise: () => void
   onRemoveExercise: (exerciseId: string) => void
   onRemoveCircuit: (segmentId: string) => void
   onRemoveSection: (segmentIds: string[]) => void
@@ -154,16 +147,10 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
   exercises,
   extras,
   setLogs,
-  planNotes,
-  canEditPlanNotes,
-  savingPlanNotes,
-  onSavePlanNotes,
   circuitGroups,
   getNextCircuitExercise,
   onSelectEntry,
   canEditPlan,
-  canAddExercise,
-  onAddExercise,
   onRemoveExercise,
   onRemoveCircuit,
   onRemoveSection,
@@ -172,7 +159,6 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
   onExtractItem,
 }) => {
   const { t } = useI18n()
-  const [planNotesOpen, setPlanNotesOpen] = useState(false)
   const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>(() => ({ ...DEFAULT_COLLAPSED_SECTIONS }))
   const [planSwipeActiveId, setPlanSwipeActiveId] = useState<string | null>(null)
   const planSwipeRef = useRef<PlanSwipeState | null>(null)
@@ -993,19 +979,6 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
   return (
     <section className={`workout-list ${activeEntryId ? 'hidden' : ''} ${drag ? 'is-reordering' : ''}`}>
       <div className="list-section">
-        {canAddExercise ? (
-          <button type="button" className="workout-add-exercise" onClick={onAddExercise}>
-            <span aria-hidden="true">＋</span> {t('workout.addExercise')}
-          </button>
-        ) : null}
-        <PlanNotes
-          notes={planNotes}
-          open={planNotesOpen}
-          canEdit={canEditPlanNotes}
-          saving={savingPlanNotes}
-          onToggle={() => setPlanNotesOpen((open) => !open)}
-          onSave={onSavePlanNotes}
-        />
         {showEmptyState ? (
           <div className="workout-card rest-day" role="status">
             <div>
