@@ -42,7 +42,7 @@ function harness() {
     applyStructuralReceipt: receipt => { h.applied.push(receipt) },
     getExercise: () => exercise, bumpData: () => { h.paints++ },
     updateExerciseSummary: value => { value.summary = `${value.sets.length} sets` },
-    setEditingSet() {}, setEditingSetSnapshot() {}, resetHoldTimer() {},
+    setEditingSet() {}, setEditingSetSnapshot() {}, resetHoldTimer() {}, stopRest() {},
     t: value => value, window: { alert: value => h.alerts.push(value) },
     console: { warn() {} }, crypto: require('node:crypto').webcrypto,
   }
@@ -119,7 +119,7 @@ async function main() {
   const setList = fs.readFileSync(path.join(__dirname, '../src/components/workout/ExerciseSetList.tsx'), 'utf8')
   assert.equal(setList.includes('onSkipSet'), false)
   assert.equal((setList.match(/data-set-action="remove-set"/g) || []).length, 2, 'hero and swipe both remove')
-  assert.ok(source.includes('canLogDay={canLogSelectedDay && !structuralEditPending}'), 'cannot log an unsaved preview')
+  assert.ok(source.includes('canLogDay={canLogSelectedDay && !structuralEditPending && !logPending}'), 'cannot log an unsaved preview')
   const view = fs.readFileSync(path.join(__dirname, '../src/views/WorkoutView.tsx'), 'utf8')
   assert.equal(view.includes("t('workout.skipped')"), false, 'removing the final set must not label the exercise skipped')
   console.log('workout set edits smoke passed: immediate add/remove, failures, conflict readback, identity, UI wiring')

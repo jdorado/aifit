@@ -12,6 +12,7 @@ import WorkoutMiniBar from '../components/workout/WorkoutMiniBar'
 import WorkoutPlanList from '../components/workout/WorkoutPlanList'
 import type { WorkoutExercise, WorkoutExtra, WorkoutFeedbackPreset } from '../data/testWorkout'
 import { circuitGroupKey } from '../data/testWorkout'
+import { getNextCircuitSet } from '../utils/circuitProgress'
 import type { ActiveEntryType, ChatMessage, HoldTimerState, SetState } from '../types/app'
 import {
   fetchExerciseHistoryWindow,
@@ -317,34 +318,7 @@ const WorkoutView: FC<WorkoutViewProps> = ({
   }, [activeExercise, circuitGroups])
 
   const getNextCircuitExercise = useCallback((items: WorkoutExercise[]): WorkoutExercise | null => {
-    let nextExercise: WorkoutExercise | null = null
-    let nextRoundIndex = Number.POSITIVE_INFINITY
-    let nextOrder = Number.POSITIVE_INFINITY
-
-    items.forEach((exercise, order) => {
-      const stateList = setLogs[exercise.id] || []
-      const nextSetIndex = exercise.sets.findIndex((_, index) => !stateList[index]?.done)
-      if (nextSetIndex === -1) return
-
-      const nextSet = exercise.sets[nextSetIndex]
-      const roundIndex = nextSet?.isWarmup
-        ? -1
-        : exercise.sets.slice(0, nextSetIndex + 1).reduce((count, setItem) => (
-          setItem?.isWarmup ? count : count + 1
-        ), 0) - 1
-
-      if (
-        !nextExercise
-        || roundIndex < nextRoundIndex
-        || (roundIndex === nextRoundIndex && order < nextOrder)
-      ) {
-        nextExercise = exercise
-        nextRoundIndex = roundIndex
-        nextOrder = order
-      }
-    })
-
-    return nextExercise
+    return getNextCircuitSet(items, setLogs)?.exercise ?? null
   }, [setLogs])
 
   const stateList = activeExercise

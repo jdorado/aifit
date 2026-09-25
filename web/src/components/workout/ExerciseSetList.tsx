@@ -254,6 +254,7 @@ const ExerciseSetList: FC<ExerciseSetListProps> = ({
                         <button
                           className="hold-btn primary"
                           type="button"
+                          disabled={!canLogDay}
                           onClick={() => onStartHoldTimer(exercise.id, index, holdTargetSec, holdPrepSec, {
                             sideIndex: activeSideIndex,
                             sideCount: activeSideCount,
@@ -265,7 +266,7 @@ const ExerciseSetList: FC<ExerciseSetListProps> = ({
                           className="hold-btn"
                           type="button"
                           onClick={onLogHoldTimerSet}
-                          disabled={timerPhase === 'idle'}
+                          disabled={!canLogDay || timerPhase === 'idle'}
                         >
                           {t('common.stop')}
                         </button>

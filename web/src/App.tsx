@@ -4,6 +4,7 @@ import { marked } from 'marked'
 import { formatDurationForDisplay, normalizeWorkoutTargetText } from './utils/workoutDisplay'
 import type { WorkoutExercise, WorkoutExtra, WorkoutFeedbackPreset } from './data/testWorkout'
 import { circuitGroupKey } from './data/testWorkout'
+import { getNextCircuitSet } from './utils/circuitProgress'
 import { backendWorkoutToSession, type BackendWorkout, type BackendWorkoutReceipt } from './utils/backendWorkoutAdapter'
 import { fetchSwapCandidates, needsCoachSwap, readApiError, swapErrorKey, SwapCandidatesError, type SwapCandidate, type SwapCandidates } from './utils/swapCandidates'
 import { fetchWorkoutHistory } from './utils/workoutHistory'
@@ -961,6 +962,8 @@ const App = () => {
   const workoutExtrasRef = useRef<WorkoutExtra[]>(initialDay?.extras ?? [])
   const setLogsRef = useRef<Record<string, SetState[]>>(initialSetLogs)
   const [dataVersion, setDataVersion] = useState(0)
+  const [logPending, setLogPending] = useState(false)
+  const logPendingRef = useRef(false)
   const [activeView, setActiveView] = useState<'home' | 'workout' | 'profile'>('workout')
   const [activeEntryId, setActiveEntryId] = useState<string | null>(null)
   const [activeEntryType, setActiveEntryType] = useState<ActiveEntryType>(null)
@@ -1090,7 +1093,7 @@ const App = () => {
   // awaits its own pending target edit so the two writes cannot race into a
   // stale_revision.
   const pendingTargetEditsRef = useRef(new Map<string, Promise<boolean>>())
-  const syncLoggedSetRef = useRef<((exerciseId: string, index: number, previous?: SetSyncRevert | null) => void) | null>(null)
+  const syncLoggedSetRef = useRef<((exerciseId: string, index: number, previous?: SetSyncRevert | null) => Promise<boolean>) | null>(null)
   const pendingWorkoutDatesRef = useRef(new Set<string>())
   const [structuralEditPending, setStructuralEditPending] = useState(false)
   // Delete tombstones: date -> server timestamp of a clear that removed the
@@ -1113,6 +1116,7 @@ const App = () => {
   const backendHealthPingRef = useRef<Promise<boolean> | null>(null)
   const currentWorkoutSessionIdRef = useRef('')
   const restTimerIdRef = useRef<number | null>(null)
+  const restEntryRef = useRef<typeof activeEntryRef.current | null>(null)
   const lastVisibilityStateRef = useRef<DocumentVisibilityState>(document.visibilityState)
   const savedWorkoutHydrationInFlightKeyRef = useRef<string | null>(null)
   const savedWorkoutHydrationAttemptedKeysRef = useRef(new Set<string>())
@@ -1432,34 +1436,9 @@ const App = () => {
   }, [])
 
   const getNextPendingCircuitExercise = useCallback((circuitKey: string): WorkoutExercise | null => {
-    let nextExercise: WorkoutExercise | null = null
-    let nextRoundIndex = Number.POSITIVE_INFINITY
-    let nextOrder = Number.POSITIVE_INFINITY
-
-    getCircuitItems(circuitKey).forEach(({ exercise }, order) => {
-      const stateList = setLogsRef.current[exercise.id] ?? []
-      const nextSetIndex = exercise.sets.findIndex((_, index) => !stateList[index]?.done)
-      if (nextSetIndex === -1) return
-
-      const nextSet = exercise.sets[nextSetIndex]
-      const roundIndex = nextSet?.isWarmup
-        ? -1
-        : exercise.sets.slice(0, nextSetIndex + 1).reduce((count, setItem) => (
-          setItem?.isWarmup ? count : count + 1
-        ), 0) - 1
-
-      if (
-        !nextExercise
-        || roundIndex < nextRoundIndex
-        || (roundIndex === nextRoundIndex && order < nextOrder)
-      ) {
-        nextExercise = exercise
-        nextRoundIndex = roundIndex
-        nextOrder = order
-      }
-    })
-
-    return nextExercise
+    return getNextCircuitSet(
+      getCircuitItems(circuitKey).map(({ exercise }) => exercise), setLogsRef.current,
+    )?.exercise ?? null
   }, [getCircuitItems])
 
   const releaseWakeLock = useCallback(async () => {
@@ -1519,6 +1498,7 @@ const App = () => {
   }, [triggerRestVibration])
 
   const stopRest = useCallback(() => {
+    restEntryRef.current = null
     setRestState({
       active: false,
       remainingSec: 0,
@@ -1548,6 +1528,7 @@ const App = () => {
   }, [stopRest, triggerRestAlert])
 
   const startRest = useCallback((duration: number) => {
+    restEntryRef.current = activeEntryRef.current
     const total = duration > 0 ? duration : 60
     const startTs = Date.now()
     const endTs = startTs + (total * 1000)
@@ -2004,8 +1985,8 @@ const App = () => {
     })
   }, [])
 
-  const logNextSet = useCallback((targetExerciseId?: string) => {
-    if (!canLogSelectedDay) return
+  const logNextSet = useCallback(async (targetExerciseId?: string) => {
+    if (!canLogSelectedDay || logPendingRef.current) return
     const exerciseId = targetExerciseId ?? activeEntryId
     if (!exerciseId) return
     if (!targetExerciseId && activeEntryType !== 'exercise') return
@@ -2030,6 +2011,12 @@ const App = () => {
     }
     if (nextIndex === -1) return
 
+    const entryAtLog = activeEntryRef.current
+    const dateAtLog = currentWorkoutSessionIdRef.current
+    const circuitExercises = exercise.circuit
+      ? getCircuitItems(circuitGroupKey(exercise.circuit)!).map(({ exercise }) => exercise)
+      : []
+    const roundBefore = getNextCircuitSet(circuitExercises, setLogsRef.current)?.round
     const itemState = stateList[nextIndex]
     const targetSet = exercise.sets[nextIndex]
     itemState.weight = normalizeWorkoutTargetText(itemState.weight) ?? ''
@@ -2055,86 +2042,45 @@ const App = () => {
     if (exercise.metric === 'reps') {
       itemState.metric = normalizeRepValue(itemState.metric)
     }
+    logPendingRef.current = true
+    setLogPending(true)
+    stopRest()
     itemState.done = true
     bumpData()
-    void syncLoggedSetRef.current?.(exercise.id, nextIndex)
+    let saved = false
+    try {
+      saved = await syncLoggedSetRef.current?.(exercise.id, nextIndex) ?? false
+    } finally {
+      logPendingRef.current = false
+      setLogPending(false)
+    }
+    // Saving may finish after the user browsed elsewhere. Navigation belongs
+    // to the current interaction, even when they opened the same move again.
+    if (!saved || activeEntryRef.current !== entryAtLog
+      || currentWorkoutSessionIdRef.current !== dateAtLog) return
 
     const circuitName = exercise.circuit?.name
     const isWarmupSet = targetSet?.isWarmup === true
-    if (circuitName && isWarmupSet) {
-      const isLastSet = nextIndex === stateList.length - 1
-      if (isLastSet) {
-        hideWorkoutDetail()
-      }
+    if (circuitName && isWarmupSet && stateList.some((set) => !set.done)) {
       return
     }
 
     if (circuitName) {
-      const circuitItems = getCircuitItems(circuitGroupKey(exercise.circuit) ?? circuitName)
-      const circuitExercises = circuitItems.map((item) => item.exercise)
-      if (circuitExercises.length) {
-        const getWorkSetIndex = (sets: Array<{ isWarmup?: boolean }>, workIndex: number) => {
-          let count = 0
-          for (let i = 0; i < sets.length; i++) {
-            if (sets[i]?.isWarmup) continue
-            if (count === workIndex) return i
-            count += 1
-          }
-          return -1
-        }
-
-        const getWorkSetCount = (sets: Array<{ isWarmup?: boolean }>) => (
-          sets.reduce((count, setItem) => (setItem?.isWarmup ? count : count + 1), 0)
-        )
-
-        const roundIndex = exercise.sets.slice(0, nextIndex + 1).reduce((count, setItem) => (
-          setItem?.isWarmup ? count : count + 1
-        ), 0) - 1
-        const currentIndex = Math.max(0, circuitExercises.findIndex((item) => item.id === exercise.id))
-        const totalRounds = exercise.circuit?.rounds ?? getWorkSetCount(exercise.sets)
-        const restAfterSec = exercise.circuit?.restAfterSec
-
-        const findUndoneInRound = (startIndex: number) => {
-          for (let i = startIndex; i < circuitExercises.length; i++) {
-            const candidate = circuitExercises[i]
-            const workSetIndex = getWorkSetIndex(candidate.sets, roundIndex)
-            if (workSetIndex === -1) continue
-            const candidateStates = setLogsRef.current[candidate.id]
-            if (!candidateStates?.[workSetIndex]?.done) return candidate
-          }
-          return null
-        }
-
-        let nextExercise = findUndoneInRound(currentIndex + 1)
-        if (!nextExercise) {
-          nextExercise = findUndoneInRound(0)
-        }
-
-        if (nextExercise) {
-          showWorkoutDetail(nextExercise.id, 'exercise')
-          return
-        }
-
-        const nextRoundIndex = roundIndex + 1
-        if (totalRounds && nextRoundIndex < totalRounds) {
-          const firstExercise = circuitExercises[0]
-          if (firstExercise) {
-            showWorkoutDetail(firstExercise.id, 'exercise')
-          }
-          const restDuration = typeof restAfterSec === 'number'
-            ? restAfterSec
-            : typeof exercise.restSec === 'number'
-              ? exercise.restSec
-              : restDefaultSec
-          if (restDuration > 0) {
-            startRest(restDuration)
-          }
-          return
-        }
-
+      const next = getNextCircuitSet(circuitExercises, setLogsRef.current, exercise.id)
+      if (!next) {
         hideWorkoutDetail()
         return
       }
+      const roundCompleted = roundBefore !== undefined && roundBefore >= 0 && next.round > roundBefore
+      // At a new round use circuit order; within it continue after the move
+      // just logged, catching up any earlier unfinished round first.
+      const target = roundCompleted ? getNextCircuitSet(circuitExercises, setLogsRef.current)! : next
+      showWorkoutDetail(target.exercise.id, 'exercise')
+      if (roundCompleted) {
+        const restDuration = exercise.circuit?.restAfterSec ?? exercise.restSec ?? restDefaultSec
+        if (restDuration > 0) startRest(restDuration)
+      }
+      return
     }
 
     const isLastSet = nextIndex === stateList.length - 1
@@ -2154,18 +2100,20 @@ const App = () => {
     hideWorkoutDetail,
     resetHoldTimer,
     startRest,
+    stopRest,
+    showWorkoutDetail,
     canLogSelectedDay,
   ])
 
   const logHoldTimerSet = useCallback(() => {
     if (!holdTimer.exerciseId || holdTimer.setIndex === null) return
-    if (activeEntryType !== 'exercise' || activeEntryId !== holdTimer.exerciseId) return
+    if (activeEntryRef.current.type !== 'exercise' || activeEntryRef.current.id !== holdTimer.exerciseId) return
 
     const exercise = getExercise(holdTimer.exerciseId)
     if (!exercise) return
     const stateList = setLogsRef.current[holdTimer.exerciseId]
     const setItem = stateList?.[holdTimer.setIndex]
-    if (!setItem) return
+    if (!setItem || setItem.done || logPendingRef.current) return
 
     const elapsedSec = Math.max(0, holdTimer.totalSec - holdTimer.remainingSec)
     if (elapsedSec > 0) {
@@ -2184,8 +2132,8 @@ const App = () => {
     }
 
     stopHoldTimer()
-    logNextSet()
-  }, [activeEntryId, activeEntryType, getExercise, holdTimer, logNextSet, startHoldTimer, stopHoldTimer])
+    void logNextSet(holdTimer.exerciseId)
+  }, [getExercise, holdTimer, logNextSet, startHoldTimer, stopHoldTimer])
 
   const updateSetField = useCallback(
     (exerciseId: string, index: number, field: 'weight' | 'metric', value: string, propagate = false) => {
@@ -2726,13 +2674,11 @@ const App = () => {
     })
 
     if (appliedDates.length === 0) return false
-    // An explicit selectedDate wins: callers that just navigated (e.g. the
-    // history timeline) pin the date the user tapped. preserveSelectedDate
-    // reads selectedDay from the closure, which is stale inside a fetch
-    // continuation and would yank the view back to the pre-click day.
+    // An explicit selectedDate wins. Otherwise preserve live navigation:
+    // the async caller's selectedDay may precede a more recent day selection.
     const selectedDate = options.selectedDate
       ?? (options.preserveSelectedDate
-        ? (selectedDay?.date ?? todayId)
+        ? (weekPlanRef.current.days[selectedDayIndexRef.current]?.date ?? todayId)
         : appliedDates[appliedDates.length - 1])
     const previousHydrationState = sessionHydrationInProgressRef.current
     sessionHydrationInProgressRef.current = true
@@ -2946,10 +2892,16 @@ const App = () => {
   }, [bumpData])
 
   const syncLoggedSet = useCallback(async (exerciseId: string, index: number, previous?: SetSyncRevert | null) => {
-    // A set is only rendered as logged when its canonical actual lands. Any
-    // local failure clears the optimistic done flag instead of diverging.
-    const revertLocal = () => restoreSetState(exerciseId, index, previous)
-    if (!canQuerySavedWorkoutSessions) { revertLocal(); return }
+    // Navigation waits for the canonical actual. Any local failure clears
+    // the optimistic done flag on the originating day.
+    const originalItem = setLogsRef.current[exerciseId]?.[index]
+    const revertLocal = () => {
+      if (!originalItem) return
+      if (previous) Object.assign(originalItem, previous)
+      else { originalItem.done = false; originalItem.skipped = undefined }
+      bumpData()
+    }
+    if (!canQuerySavedWorkoutSessions) { revertLocal(); return false }
     const ownerId = coachActAsOwnerId ?? currentUserId
     const targetDate = selectedDay?.date ?? todayId
     const ownerKey = `${ownerId}:${targetDate}`
@@ -2959,16 +2911,16 @@ const App = () => {
     const stateList = setLogsRef.current[exerciseId]
     const setItem = stateList?.[index]
     const setTarget = exercise?.sets[index]
-    if (!workoutId || !revision || !exercise || !setItem || !setTarget?.setId || !setItem.done) { revertLocal(); return }
+    if (!workoutId || !revision || !exercise || !setItem || !setTarget?.setId || !setItem.done) { revertLocal(); return false }
 
     const skipped = setItem.skipped === true
     const load = skipped ? null : parseActualLoad(setItem.weight)
     const metric = skipped ? null : parseActualMetric(exercise, setItem.metric)
-    if (!skipped && !metric) { revertLocal(); return }
+    if (!skipped && !metric) { revertLocal(); return false }
 
     const setKey = `${workoutId}:${setTarget.setId}`
     const fingerprint = JSON.stringify([skipped ? 'skipped' : metric, skipped ? null : load])
-    if (syncedSetKeysRef.current.get(setKey) === fingerprint) return
+    if (syncedSetKeysRef.current.get(setKey) === fingerprint) return true
 
     // A target edit on this set may still be in flight. Wait for it so the
     // log write uses the post-edit revision instead of racing it into a
@@ -2976,7 +2928,7 @@ const App = () => {
     const pendingTarget = pendingTargetEditsRef.current.get(setKey)
     if (pendingTarget) await pendingTarget
     const expectedRevision = workoutRevisionByOwnerDateRef.current[ownerKey]
-    if (!expectedRevision) { revertLocal(); return }
+    if (!expectedRevision) { revertLocal(); return false }
 
     const pending = pendingSetSyncsByDateRef.current
     pending[targetDate] = (pending[targetDate] ?? 0) + 1
@@ -3001,17 +2953,20 @@ const App = () => {
         // instead of retrying this write; if the pull fails, drop the
         // optimistic state so the UI never shows an unconfirmed actual.
         delete workoutRevisionByOwnerDateRef.current[ownerKey]
+        revertLocal()
         refetchAfterSync = true
-        return
+        return false
       }
       if (!response.ok) throw new Error(`Set log failed (${response.status})`)
       const receipt = await response.json() as BackendWorkoutReceipt
       const nextRevision = receipt.revision ?? receipt.workout?.revision
       if (nextRevision) workoutRevisionByOwnerDateRef.current[ownerKey] = nextRevision
       syncedSetKeysRef.current.set(setKey, fingerprint)
+      return true
     } catch (error) {
       console.warn('Canonical set log failed:', error)
       revertLocal()
+      return false
     } finally {
       const remaining = (pending[targetDate] ?? 1) - 1
       if (remaining <= 0) {
@@ -3032,7 +2987,7 @@ const App = () => {
     getExercise,
     getPrivyAuthHeaders,
     refreshVisibleWorkoutSessions,
-    restoreSetState,
+    bumpData,
     selectedDay?.date,
     todayId,
   ])
@@ -3109,8 +3064,9 @@ const App = () => {
     syncLoggedSetRef.current = syncLoggedSet
   }, [syncLoggedSet])
 
+
   const unlogSet = useCallback((exerciseId: string, index: number) => {
-    if (!canLogSelectedDay) return
+    if (!canLogSelectedDay || logPendingRef.current) return
     const exercise = getExercise(exerciseId)
     const stateList = setLogsRef.current[exerciseId]
     const setItem = stateList?.[index]
@@ -4040,7 +3996,7 @@ const App = () => {
         const previousSets = [...exercise.sets]
         const previousStates = [...stateList]
         const lastActual = [...stateList].reverse().find((set) => set.done && !set.skipped)
-        exercise.sets.push({ ...source, setId: undefined })
+        exercise.sets.push({ ...source, setId: undefined, round: source.round == null ? undefined : source.round + 1 })
         stateList.push({
           weight: lastActual?.weight ?? '', metric: lastActual?.metric ?? '', done: false,
           ...(lastActual ? { value_source: 'accepted_target' as const } : {}),
@@ -4078,6 +4034,7 @@ const App = () => {
         stateList.splice(index, 1)
         setEditingSet(null)
         setEditingSetSnapshot(null)
+        stopRest()
         resetHoldTimer()
         updateExerciseSummary(exercise)
         bumpData()
@@ -4089,7 +4046,7 @@ const App = () => {
         }
       },
     )
-  }, [bumpData, getExercise, requireEditContext, resetHoldTimer, runStructuralMutation])
+  }, [bumpData, getExercise, requireEditContext, resetHoldTimer, runStructuralMutation, stopRest])
 
   const handleRemoveExercise = useCallback(async (exerciseId: string) => {
     const context = requireEditContext()
@@ -4510,7 +4467,7 @@ const App = () => {
   useEffect(() => {
     if (restState.active && restState.endTs) {
       if (restState.remainingSec <= 0) {
-        const shouldAutoStart = restState.autoStartNextSet
+        const shouldAutoStart = restState.autoStartNextSet && restEntryRef.current === activeEntryRef.current
         completeRest()
         if (shouldAutoStart && document.visibilityState === 'visible') {
           autoStartNextHoldSet()
@@ -4827,8 +4784,9 @@ const App = () => {
   }, [isProd])
 
   const handleSelectEntry = useCallback((id: string, type: ActiveEntryType) => {
+    resetHoldTimer()
     showWorkoutDetail(id, type)
-  }, [showWorkoutDetail])
+  }, [resetHoldTimer, showWorkoutDetail])
 
   const resetVisibleWeek = useCallback(() => {
     // The owner changed: drop the previous account's in-memory week and let the
@@ -4915,8 +4873,9 @@ const App = () => {
           />
           <WorkoutView
             active={activeView === 'workout'}
-            canLogDay={canLogSelectedDay && !structuralEditPending}
-            canEditPlan={canEditPlanSelectedDay && !structuralEditPending}
+            canLogDay={canLogSelectedDay && !structuralEditPending && !logPending}
+            canEditPlan={canEditPlanSelectedDay && !structuralEditPending && !logPending}
+
             coachChatEnabled={coachChatEnabled}
             apiBaseUrl={API_BASE_URL}
             getAuthHeaders={getPrivyAuthHeaders}

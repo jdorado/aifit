@@ -180,6 +180,7 @@ const exerciseCategory = (kind: BackendSegment['kind']): WorkoutExercise['catego
 
 const targetToSet = (row: BackendWorkoutSet) => ({
   setId: row.set_id,
+  round: row.round,
   isWarmup: row.kind === 'warmup',
   targetReps: formatRange(row.target.reps),
   targetTime: row.target.duration_seconds ? formatRange(row.target.duration_seconds) : undefined,
