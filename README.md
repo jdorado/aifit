@@ -51,7 +51,11 @@ generation. Exercise history and YouTube demo videos have typed public
 contracts (`GET /v1/exercises/{exercise_id}/history`, `GET /v1/videos`). Coach
 sharing has a typed public contract too: `POST/GET/PATCH /v1/coach-links` plus
 the `act_as_link_id` parameter on the canonical `/v1` routes, re-checked on
-every request. Arbitrary plan rewrites stay disabled until their own typed
+every request. Coach chat and `GET/POST /chat/models` also carry this link:
+the trainee binding runs a separate native scope per coach link and chat
+surface, leaving the trainee's own conversation and model unchanged. Every
+trainee needs its own verified binding in the API deployment serving the app,
+including local development. Arbitrary plan rewrites stay disabled until their own typed
 public contract exists.
 
 ## Testing

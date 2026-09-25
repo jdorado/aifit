@@ -53,7 +53,7 @@ const ChatHeader: FC<ChatHeaderProps> = ({
         </h1>
       </div>
       <div className="chat-header-actions">
-        {modelOptions.length > 1 ? (
+        {modelOptions.length > 0 ? (
           <div className="chat-model-control" ref={modelMenuRef}>
             <button
               type="button"
@@ -86,14 +86,6 @@ const ChatHeader: FC<ChatHeaderProps> = ({
               </div>
             )}
           </div>
-        ) : singleModelOption && activeModelOption ? (
-          <span
-            className="chat-model-single"
-            title={activeModelOption.label}
-            aria-label="AI model"
-          >
-            {activeModelOption.label}
-          </span>
         ) : null}
         <button
           className="chat-new-session"
