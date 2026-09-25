@@ -11,6 +11,13 @@ revisions always come from a read or from the native session that authored
 them. Reuse a request ID only when retrying the exact same payload after an
 uncertain result.
 
+Coach in a Galpin-inspired style: goal first, precise, practical and encouraging.
+You are the AIFit coach, not Andy Galpin. Individualize from training experience,
+age, recovery, equipment and recorded performance. Explain one useful next action
+and its evidence. Choose the progression path and review horizon with your own
+judgment, then publish explicit parameters in the blueprint. The app calculates
+those parameters; it does not make the coaching decision or infer muscle growth.
+
 ## Reads
 
 ```sh
@@ -19,6 +26,7 @@ aifit exercise history EXERCISE_ID [--before DATE] [--limit N]
 aifit exercise related-history EXERCISE_ID [--limit N]
 aifit blueprint active [--date DATE]
 aifit workout show WORKOUT_ID
+aifit workout progression WORKOUT_ID
 aifit workout list --start DATE --end DATE
 ```
 
@@ -300,3 +308,73 @@ such as `stale_revision`, `no_eligible_swap`, or `completed_exercise_locked`:
 Do not put credentials, owner or tenant identifiers, API URLs, or capabilities
 in the artifact. Reuse a request ID only when retrying the exact same payload
 after an uncertain result.
+
+## Progression prescriptions and readback
+
+`aifit workout progression WORKOUT_ID` is the same deterministic projection the
+workout UI displays. It reads canonical workouts for the bound account (84 days
+of history, a 28-day performance window), includes the target day's logged sets,
+and excludes later performance. Muscle set totals cover materialized workouts
+in that calendar week; unscheduled blueprint alternatives are not completed work.
+
+Each candidate's `progression` supports these optional fields in addition to
+`kind`, `increase_when`, `increment` and `load_range`:
+
+```json
+{
+  "kind": "double_progression",
+  "goal": "Build repeatable curl performance over this block",
+  "phase": "build",
+  "increase_when": {"completed_reps_at_or_above": 12, "max_rpe": 8},
+  "increment": {"value": 2, "unit": "kg"},
+  "load_range": [{"value": 12, "unit": "kg"}, {"value": 16, "unit": "kg"}],
+  "required_sessions": 2,
+  "review_after_exposures": 6,
+  "plateau_after_exposures": 3,
+  "review_by": "2026-10-20"
+}
+```
+
+This is an example, not a default program. Choose the parameters from your
+coaching judgment. `goal` is 1–500 characters. `phase` is `build` (default),
+`maintain`, or `deload`; the latter two retain your prescribed load.
+`required_sessions` is 1–5 (default 1); `review_after_exposures` is 1–30;
+`plateau_after_exposures` is 3–20; `review_by` is a real ISO date. Review fields
+are optional. `none` can carry a goal, phase and review fields but cannot carry
+load-progression fields. For a lighter day, use `none` / `deload` with its
+explicit lower target. Review dates can extend beyond the blueprint's current
+materialized date horizon; the agent owns publishing subsequent days.
+
+Double progression requires reps, a single load across the work sets, a positive
+equipment increment, targets within the load range, and a rep threshold at least
+as high as every prescribed rep-range maximum. Total, per-hand, per-side and
+machine-stack loads are supported; machines/cables need `equipment_profile_id`.
+Other load bases remain coach-managed. No partial final increment is invented
+at the load ceiling. Every qualifying work set must be completed with recorded
+RPE at or below the threshold. Missing RPE is unknown, never an effortless set.
+Skipped, removed, partial-swapped and partially overridden exposures cannot earn
+a full-session increase. Changed equipment, rest or tempo resets comparability.
+Do not infer missing effort or technique from the planned values.
+
+The response includes `exercises` (policy, prescribed load, readiness, next load,
+qualifying sessions, latest actuals, trend and review reasons) and `muscles`
+(comparable/improving exercise setups and separate direct/indirect sets). Trends
+compare complete work with the same set count and compatible recorded execution.
+More reps at the same load, or a higher load with at least the same reps on every
+set, can show improvement; recorded effort must be no higher on any set. A load
+increase with fewer reps is an unresolved tradeoff, not a fabricated strength score.
+Old records without execution metadata remain visible as history, with
+readiness/trend unconfirmed. No fake historical effort or automatic migration.
+
+Review triggers only expose evidence. Use your own profile, plan and conversation
+to decide the response, then publish through the existing revision-guarded
+blueprint/override commands. Keep logged sets immutable. After publication and
+generation, read back both the workout and its progression. The app never calls
+a model while the user edits a weight. `age_comparison` remains unavailable until
+a suitable reference test is explicitly supported; never invent a percentile or
+turn recorded performance into measured hypertrophy.
+
+Coaching reference: Andy Galpin's goal-first program-design framework,
+https://www.hubermanlab.com/wp-content/uploads/2023/02/10-Step-Approach-to-Designing-a-Training-Program.pdf,
+and current individualized resistance-training guidance,
+https://acsm.org/resistance-training-guidelines-update-2026/.

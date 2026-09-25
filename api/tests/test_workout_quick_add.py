@@ -70,6 +70,8 @@ async def test_add_preserves_logs_round_targets_and_blueprint_with_idempotent_re
     assert segment['kind'] == 'straight_sets'
     assert segment['segment_id'] != workout['segments'][0]['segment_id']
     item = segment['items'][0]
+    assert item['progression_context']['expected_sets'] == 3
+    assert item['progression_context']['policy']['kind'] == 'none'
     targets = original_blueprint[0]['days'][1]['segments'][0]['slots'][0]['candidates'][0]['prescription']['round_targets']
     assert [row['target'] for row in item['sets']] == targets
     assert all(row['actual'] is None for row in item['sets'])

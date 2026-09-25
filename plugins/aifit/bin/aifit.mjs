@@ -30,6 +30,7 @@ Read:
   aifit exercise history EXERCISE_ID [--before DATE] [--limit N]
   aifit exercise related-history EXERCISE_ID [--limit N]
   aifit blueprint active [--date DATE]
+  aifit workout progression WORKOUT_ID
   aifit workout show WORKOUT_ID
   aifit workout list --start DATE --end DATE
 
@@ -234,6 +235,10 @@ async function main() {
       expected_revision: optional(values, '--expected-revision') || null,
       request_id: required(values, '--request-id'),
     });
+  } else if (area === 'workout' && action === 'progression') {
+    const { positional } = parseArgs(rest, new Set());
+    const [workoutId] = exactly(positional, 1, 'workout progression WORKOUT_ID');
+    result = await call(context, 'GET', `/workouts/${encodeURIComponent(workoutId)}/progression`);
   } else if (area === 'workout' && action === 'show') {
     const { positional } = parseArgs(rest, new Set());
     const [workoutId] = exactly(positional, 1, 'workout show WORKOUT_ID');

@@ -171,6 +171,8 @@ set -m
 (
   cd "$API_DIR"
   export EZ_BINDINGS_FILE="$AIFIT_EZ_STATE_DIR/ez-bindings.json"
+  # The shared virtualenv is installed from main; import this dev worktree.
+  export PYTHONPATH="$API_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
   exec .venv/bin/uvicorn --env-file "$API_ENV_FILE" aifit_api.main:app --host 0.0.0.0 --port 8100 --reload
 ) &
 api_pid=$!

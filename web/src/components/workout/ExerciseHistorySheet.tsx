@@ -1,9 +1,11 @@
 import type { FC } from 'react'
 import { useEffect, useMemo, useState } from 'react'
 import { useI18n } from '../../i18n'
+import { MuscleProgress } from './ProgressionFeedback'
+import type { MuscleProgression } from '../../utils/progression'
 import type { ExerciseHistoryRelated, ExerciseHistorySession, ExerciseHistorySet } from '../../utils/exerciseHistory'
 
-type HistoryTab = 'exercise' | 'related'
+type HistoryTab = 'exercise' | 'related' | 'muscle'
 
 type ExerciseHistorySheetProps = {
   open: boolean
@@ -12,6 +14,9 @@ type ExerciseHistorySheetProps = {
   exerciseName: string
   sessions: ExerciseHistorySession[]
   related: ExerciseHistoryRelated | null
+  muscles: MuscleProgression[]
+  progressionLoading: boolean
+  progressionError: boolean
   onClose: () => void
 }
 
@@ -40,6 +45,9 @@ const ExerciseHistorySheet: FC<ExerciseHistorySheetProps> = ({
   exerciseName,
   sessions,
   related,
+  muscles,
+  progressionLoading,
+  progressionError,
   onClose,
 }) => {
   const { t } = useI18n()
@@ -108,8 +116,13 @@ const ExerciseHistorySheet: FC<ExerciseHistorySheetProps> = ({
           >
             {t('workout.relatedMoves')}
           </button>
+          <button type="button" role="tab" aria-selected={tab === 'muscle'} className={tab === 'muscle' ? 'active' : ''} onClick={() => setTab('muscle')}>
+            {t('progression.muscleTitle')}
+          </button>
         </div>
         <div className="exercise-history-content">
+          {tab === 'muscle' ? progressionLoading ? <p>{t('progression.loading')}</p> : progressionError ? <p>{t('progression.loadError')}</p> : muscles.length ? <MuscleProgress muscles={muscles} /> : <p>{t('progression.noTrend')}</p> : <>
+
           {visibleLoading ? <p className="exercise-history-empty">{t('workout.historyLoading')}</p> : null}
           {!visibleLoading && error ? <p className="exercise-history-empty error">{error}</p> : null}
           {!visibleLoading && !error && visibleSessions.length === 0 ? (
@@ -149,6 +162,7 @@ const ExerciseHistorySheet: FC<ExerciseHistorySheetProps> = ({
               })}
             </div>
           ) : null}
+          </>}
         </div>
       </aside>
     </>

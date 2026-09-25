@@ -20,6 +20,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pymongo import ASCENDING, DESCENDING, ReturnDocument
 from pymongo.errors import DuplicateKeyError, OperationFailure
 
+from .progression import analyze_exercise, progression_context, summarize_muscles
+
 
 SCHEMA_VERSION = 1
 SEGMENT_KINDS = {"warmup", "straight_sets", "superset", "circuit", "interval", "mobility", "cooldown"}
@@ -115,9 +117,17 @@ class Progression(StrictModel):
     increase_when: ProgressionWhen | None = None
     increment: Quantity | None = None
     load_range: list[Quantity] | None = Field(default=None, min_length=2, max_length=2)
+    required_sessions: int = Field(default=1, ge=1, le=5)
+    goal: str | None = Field(default=None, min_length=1, max_length=500)
+    phase: Literal["build", "maintain", "deload"] = "build"
+    review_after_exposures: int | None = Field(default=None, ge=1, le=30)
+    plateau_after_exposures: int | None = Field(default=None, ge=3, le=20)
+    review_by: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
 
     @model_validator(mode="after")
     def valid_policy(self) -> "Progression":
+        if self.review_by is not None:
+            datetime.strptime(self.review_by, "%Y-%m-%d")
         if self.kind == "none":
             if any(value is not None for value in (self.increase_when, self.increment, self.load_range)):
                 raise ValueError("progression kind none cannot define load progression fields")
@@ -127,6 +137,8 @@ class Progression(StrictModel):
         lower, upper = self.load_range
         if lower.unit != upper.unit or lower.unit != self.increment.unit or lower.value > upper.value:
             raise ValueError("progression quantities must use one ordered unit")
+        if self.increment.value <= 0:
+            raise ValueError("progression increment must be positive")
         return self
 
 
@@ -174,6 +186,22 @@ class Candidate(StrictModel):
     equipment_profile_id: str | None = Field(default=None, pattern=r"^eqp_[a-z0-9_]{3,120}$")
     prescription: CandidatePrescription
     progression: Progression = Field(default_factory=Progression)
+
+    @model_validator(mode="after")
+    def progression_matches_prescription(self) -> "Candidate":
+        if self.progression.kind == "double_progression":
+            targets = self.prescription.round_targets or [self.prescription.target]
+            lower, upper = self.progression.load_range
+            if self.prescription.metric != "reps":
+                raise ValueError("double progression requires a reps prescription")
+            for target in targets:
+                if target.load is None or target.load.unit != lower.unit or not lower.value <= target.load.value <= upper.value:
+                    raise ValueError("progression target must be within its load range and unit")
+                if self.progression.increase_when.completed_reps_at_or_above < target.reps.max:
+                    raise ValueError("progression threshold must cover the top of the rep range")
+            if len({target.load.value for target in targets}) != 1:
+                raise ValueError("double progression requires the same load for all work sets")
+        return self
 
 
 class Slot(StrictModel):
@@ -844,6 +872,7 @@ class WorkoutService:
         segments: list[dict[str, Any]] = []
         selected_exercises: set[str] = set()
         decisions: list[dict[str, Any]] = []
+        progression_history: list[dict] | None = None
         for segment in sorted(day.get("segments", []), key=lambda item: item["order"]):
             items: list[dict[str, Any]] = []
             for slot in sorted(segment["slots"], key=lambda item: item["order"]):
@@ -864,7 +893,10 @@ class WorkoutService:
                     snapshot["exercise_revision"] = snapshot.pop("revision")
                     snapshot["equipment_profile_id"] = candidate.get("equipment_profile_id")
                     targets = candidate["prescription"].get("round_targets") or [candidate["prescription"]["target"]] * segment["rounds"]
-                    load, load_decision = await self._progression_target(account_id, snapshot, candidate, targets[-1])
+                    policy = candidate.get("progression", {"kind": "none"})
+                    if progression_history is None and policy["kind"] == "double_progression" and policy.get("phase", "build") == "build":
+                        progression_history = await self._progression_history(account_id, day["date"])
+                    load, load_decision = await self._progression_target(account_id, snapshot, candidate, targets, day["date"], blueprint["start_date"], history=progression_history)
                     sets = []
                     for round_index, target in enumerate(targets):
                         target = dict(target)
@@ -873,7 +905,8 @@ class WorkoutService:
                         sets.append({"set_id": new_id("set"), "kind": "work", "target": target, "actual": None, "round": round_index + 1})
                     instance_id = new_id("wex")
                     items.append({"exercise_instance_id": instance_id, "slot_id": slot["slot_id"], "candidate_id": candidate["candidate_id"], "order": len(items) + 1,
-                                  "exercise_snapshot": snapshot, "sets": sets, "cues_md": self._cues(candidate, exercise)})
+                                  "exercise_snapshot": snapshot, "sets": sets, "cues_md": self._cues(candidate, exercise),
+                                  "progression_context": progression_context(candidate, len(targets), blueprint["start_date"], load)})
                     decisions.append({"slot_id": slot["slot_id"], "candidate_id": candidate["candidate_id"], "source": input.source,
                                       "probabilities": probabilities, "load": load_decision})
             segments.append({"segment_id": segment["segment_id"], "order": segment["order"], "kind": segment["kind"], "rounds": segment["rounds"],
@@ -921,34 +954,49 @@ class WorkoutService:
             tempo_text = f" Tempo: {tempo['eccentric_seconds']} sec eccentric, {tempo['pause_seconds']} sec pause, {tempo['concentric_seconds']} sec concentric."
         return f"{exercise['instructions_md']}{tempo_text}"
 
-    async def _progression_target(self, account_id: str, snapshot: dict[str, Any], candidate: dict[str, Any], target: dict[str, Any]) -> tuple[dict[str, Any] | None, dict[str, Any]]:
-        policy = candidate["progression"]
-        target_load = target.get("load")
-        if policy["kind"] == "none":
-            return target_load, {"decision": "blueprint_target", "reason": "Candidate has no automatic progression."}
-        load_key = exercise_load_key(snapshot)
-        history = await self.db.performance_index.find({"account_id": account_id, "load_key": load_key}).sort("completed_at", DESCENDING).limit(20).to_list()
-        lower, upper = policy["load_range"]
-        if not history:
-            initial = target_load or lower
-            return initial, {"decision": "initialize", "reason": "No exact compatible completed history.", "load_key": load_key}
-        latest_workout = history[0]["workout_id"]
-        latest_sets = [row for row in history if row["workout_id"] == latest_workout]
-        recent_load = latest_sets[0].get("load")
-        if not recent_load or recent_load["unit"] != lower["unit"]:
-            return target_load or lower, {"decision": "initialize", "reason": "Prior compatible history has no usable load.", "load_key": load_key}
-        when = policy["increase_when"]
-        complete = bool(latest_sets) and all(
-            row.get("reps", -1) >= when["completed_reps_at_or_above"] and (row.get("rpe") is None or row["rpe"] <= when["max_rpe"])
-            for row in latest_sets
-        )
-        if not complete:
-            return recent_load, {"decision": "hold", "reason": "Latest exact exposure did not meet the progression rule.", "load_key": load_key,
-                                 "source_workout_id": latest_workout}
-        increased = min(upper["value"], recent_load["value"] + policy["increment"]["value"])
-        decision = "increase" if increased > recent_load["value"] else "hold"
-        return {"value": increased, "unit": lower["unit"]}, {"decision": decision, "reason": "Latest exact exposure met the progression rule.",
-                                                                 "load_key": load_key, "source_workout_id": latest_workout}
+    async def _progression_history(self, account_id: str, as_of: str) -> list[dict]:
+        anchor = datetime.strptime(as_of, "%Y-%m-%d").date()
+        start = (anchor - timedelta(days=83)).isoformat()
+        end = (anchor + timedelta(days=6-anchor.weekday())).isoformat()
+        return await self.db.workouts.find({
+            "account_id": account_id, "deleted_at": {"$exists": False},
+            "date": {"$gte": start, "$lte": end},
+        }).sort("date", ASCENDING).limit(90).to_list()
+
+    async def _progression_target(self, account_id: str, snapshot: dict[str, Any], candidate: dict[str, Any],
+                                  targets: list[dict], as_of: str, start_date: str, *, history: list[dict] | None = None) -> tuple[dict | None, dict]:
+        target_load = targets[-1].get("load")
+        policy = candidate.get("progression", {"kind": "none"})
+        if policy["kind"] == "none" or policy.get("phase", "build") != "build":
+            return target_load, {"decision": "blueprint_target", "reason": "planned_phase" if policy.get("phase", "build") != "build" else "no_automatic_rule"}
+        context = progression_context(candidate, len(targets), start_date, target_load)
+        # Generation and swaps cannot learn from their own partially logged day
+        # or from a future workout. The same analyzer serves browser and plugin.
+        if history is None:
+            history = await self._progression_history(account_id, as_of)
+        history = [row for row in history if row["date"] < as_of]
+        summary = analyze_exercise(snapshot, context, history, as_of)
+        load = summary["next_load"]
+        return load, {"decision": "increase" if summary["status"] == "ready" else "hold",
+                      "reason": summary["reason"], "status": summary["status"],
+                      "qualifying_sessions": summary["qualifying_sessions"],
+                      "source_workout_id": (summary["latest"] or {}).get("workout_id")}
+
+    async def progression(self, account_id: str, workout_id: str) -> dict:
+        workout = await self.workout(account_id, workout_id)
+        history = await self._progression_history(account_id, workout["date"])
+        workout = next((row for row in history if row["workout_id"] == workout_id), workout)
+        exercises = []
+        for segment in workout["segments"]:
+            if segment["kind"] in ("warmup", "cooldown", "mobility"):
+                continue
+            for item in segment["items"]:
+                summary = analyze_exercise(item["exercise_snapshot"], item.get("progression_context"), history, workout["date"])
+                summary["exercise_instance_id"] = item["exercise_instance_id"]
+                exercises.append(summary)
+        return {"workout_id": workout_id, "revision": workout["revision"], "as_of": workout["date"],
+                "history_days": 84, "trend_days": 28, "exercises": exercises,
+                "muscles": summarize_muscles(history, workout["date"])}
 
     async def workout(self, account_id: str, workout_id: str) -> dict[str, Any]:
         document = await self.db.workouts.find_one({"account_id": account_id, "workout_id": workout_id, "deleted_at": {"$exists": False}})
@@ -1498,11 +1546,19 @@ class WorkoutService:
         snapshot.update(exercise_revision=candidate["exercise_revision"], equipment_profile_id=candidate.get("equipment_profile_id"))
         # Copy the published prescription exactly, including distinct targets per round.
         targets = candidate["prescription"].get("round_targets") or [candidate["prescription"]["target"]] * segment["rounds"]
+        load, _ = await self._progression_target(account_id, snapshot, candidate, targets, workout["date"], blueprint["start_date"])
+        apply_progression_load = candidate["progression"]["kind"] == "double_progression" and candidate["progression"].get("phase", "build") == "build"
+        sets = []
+        for index, target in enumerate(targets, start=1):
+            set_target = deepcopy(target)
+            if apply_progression_load and load is not None:
+                set_target["load"] = load
+            sets.append({"set_id": new_id("set"), "kind": "work", "target": set_target, "actual": None, "round": index})
         item = {"exercise_instance_id": new_id("wex"), "slot_id": slot["slot_id"], "candidate_id": candidate["candidate_id"],
                 "order": 1, "exercise_snapshot": snapshot, "cues_md": self._cues(candidate, exercise),
                 "source_blueprint": {"blueprint_id": blueprint["blueprint_id"], "blueprint_revision": blueprint["revision"], "day_id": day["day_id"]},
-                "sets": [{"set_id": new_id("set"), "kind": "work", "target": deepcopy(target), "actual": None, "round": index}
-                         for index, target in enumerate(targets, start=1)]}
+                "progression_context": progression_context(candidate, len(targets), blueprint["start_date"], load),
+                "sets": sets}
         workout["segments"].append({
             "segment_id": new_id("seg"), "order": len(workout["segments"]) + 1, "kind": "straight_sets",
             "title": exercise["name"], "rounds": len(targets),
@@ -1650,7 +1706,7 @@ class WorkoutService:
         snapshot["exercise_revision"] = snapshot.pop("revision")
         snapshot["equipment_profile_id"] = candidate.get("equipment_profile_id")
         targets = candidate["prescription"].get("round_targets") or [candidate["prescription"]["target"]] * target_segment["rounds"]
-        load, load_decision = await self._progression_target(account_id, snapshot, candidate, targets[-1])
+        load, load_decision = await self._progression_target(account_id, snapshot, candidate, targets, workout["date"], active_blueprint["start_date"])
         new_sets = []
         for set_row in open_sets:
             round_number = set_row.get("round", 1)
@@ -1663,7 +1719,8 @@ class WorkoutService:
             # exercise instance for the sets that are still open.
             target_item["sets"] = logged_sets
             replacement = {"exercise_instance_id": new_id("wex"), "slot_id": target_item["slot_id"], "candidate_id": candidate["candidate_id"],
-                           "order": target_item["order"] + 1, "exercise_snapshot": snapshot, "sets": new_sets, "cues_md": self._cues(candidate, exercise)}
+                           "order": target_item["order"] + 1, "exercise_snapshot": snapshot, "sets": new_sets, "cues_md": self._cues(candidate, exercise),
+                           "progression_context": {**progression_context(candidate, len(targets), active_blueprint["start_date"], load), "partial": True}}
             if target_item.get("source_blueprint"):
                 replacement["source_blueprint"] = deepcopy(target_item["source_blueprint"])
             position = target_segment["items"].index(target_item) + 1
@@ -1675,7 +1732,7 @@ class WorkoutService:
             # exercise must not inherit it.
             target_item.pop("notes", None)
             target_item.update({"candidate_id": candidate["candidate_id"], "exercise_snapshot": snapshot, "cues_md": self._cues(candidate, exercise),
-                                "sets": new_sets})
+                                "sets": new_sets, "progression_context": progression_context(candidate, len(targets), active_blueprint["start_date"], load)})
         workout["status"] = self._workout_status(workout)
         workout["revision"], workout["updated_at"] = new_revision(), utc_now()
         workout["lineage"].setdefault("swaps", []).append({
@@ -1769,6 +1826,9 @@ class WorkoutService:
                             and not any(item is not new_item and item.get("slot_id") == old_slot_id for item in new_items)):
                         new_item["slot_id"] = old_slot_id
         if preserved_segments:
+            for segment in materialized["segments"]:
+                for item in segment["items"]:
+                    item["progression_context"]["partial"] = True
             used_segment_ids = {segment["segment_id"] for segment in preserved_segments}
             for segment in materialized["segments"]:
                 original_id = segment["segment_id"]
@@ -1860,6 +1920,7 @@ class WorkoutService:
                     "slot_id": item["slot_id"],
                     "candidate_id": item["candidate_id"],
                     "order": item["order"],
+                    **({"progression_context": deepcopy(item["progression_context"])} if item.get("progression_context") else {}),
                     "exercise_snapshot": deepcopy(item["exercise_snapshot"]),
                     "sets": sets,
                     "cues_md": item.get("cues_md", ""),

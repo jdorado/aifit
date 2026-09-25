@@ -304,3 +304,14 @@ test('unknown commands, options, and missing required values fail closed', async
   const shape = await runCli(['workout', 'show'], { context: scopedContext, fetchOutput: '/dev/null' });
   assert.match(errorPayload(shape).error.message, /Use workout show WORKOUT_ID/);
 });
+
+
+test('progression reads use the bound canonical workout endpoint', async () => {
+  await withFetchOutput(async (fetchOutput) => {
+    const result = await runCli(['workout', 'progression', 'wrk_0123456789abcdef0123456789abcdef'], { context: scopedContext, fetchOutput });
+    assert.equal(result.code, 0, result.stderr);
+    const request = await fetchRequest(fetchOutput);
+    assert.equal(request.url, 'https://aifit.test/v1/agent/workouts/wrk_0123456789abcdef0123456789abcdef/progression');
+    assert.equal(request.method, 'GET');
+  });
+});

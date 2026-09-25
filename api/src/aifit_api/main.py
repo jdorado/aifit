@@ -759,6 +759,19 @@ async def create_exercise_v1(body: ExerciseMutationInput, account: dict = Depend
                                             {"kind": "browser", "account_id": account["account_id"]}, body.expected_revision)
 
 
+@app.get("/v1/workouts/{workout_id}/progression")
+async def workout_progression_v1(workout_id: str, account: dict = Depends(require_view_account)) -> dict:
+    return await workouts().progression(account["account_id"], workout_id)
+
+
+@app.get("/v1/agent/workouts/{workout_id}/progression")
+async def agent_workout_progression_v1(
+    workout_id: str, capability: AgentCapability = Depends(require_agent_capability),
+) -> dict:
+    require_agent_permission(capability, AGENT_READ)
+    return await workouts().progression(capability.account_id, workout_id)
+
+
 @app.get("/v1/exercises/{exercise_id}/history")
 async def exercise_history_v1(exercise_id: str, before: str | None = None, limit: int = 10,
                               account: dict = Depends(require_view_account)) -> list[dict]:
