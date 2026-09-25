@@ -1,8 +1,9 @@
 {
   "schemaVersion": 1,
   "id": "aifit",
-  "version": "0.1.0-beta.1",
+  "version": "0.1.0-beta.2",
   "description": "Read the canonical AIFit records and apply deterministic profile, plan, blueprint, and workout operations.",
+  "agentHint": "For AIFit session questions in main chat, use the bound aifit workout list --start DATE --end DATE, then aifit workout show for its ID. A workout ID is not required upfront; read the AIFit skill for details.",
   "commands": {
     "aifit": {
       "executable": "bin/aifit.mjs",

@@ -35,10 +35,22 @@ user asks about what the app shows, today's session, a past workout, a load, or
 a current revision. Answer from the record, never from a workspace plan
 template.
 
+## Main chat scope
+
+Main chat does not require a workout or exercise ID in its context. For a
+question about today's or another dated session, read the run's `referenceDate`
+with `ezenciel-agents-schedule context` when present; otherwise use the date the
+user named or today's date. Run `aifit workout list --start DATE --end DATE`,
+then `aifit workout show WORKOUT_ID` for the matching record before assessing
+the session. If the list is empty, say the app has no workout for that date.
+Do not ask the user to open the session or treat a missing `workoutId` as a
+missing reference in main chat.
+
 ## Mini-chat scope
 
-A mini-chat turn is always about one workout exercise instance. The references
-are not in the prompt; read the current run first:
+A mini-chat turn has an `exerciseInstanceId` and is about that one workout
+exercise instance. The references are not in the prompt; read the current run
+first:
 
 ```sh
 ezenciel-agents-schedule context
