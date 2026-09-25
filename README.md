@@ -69,6 +69,13 @@ The API tests cover identity, tenant isolation, agent capabilities, and the
 typed workout contract. The frontend build runs the critical timeline and PWA
 contract checks before compiling the production bundle.
 
+The workout list's **Add exercise** picker reads the active blueprint across all
+days through `GET /v1/workouts/{workout_id}/exercise-repertoire`. Selecting an
+exercise calls `POST /v1/workouts/{workout_id}/exercises` and appends a standalone
+exercise with the published sets and targets. It requires an existing workout,
+preserves logged sets, and uses revision checks and idempotent receipts. This
+browser flow does not run the coach or modify the blueprint.
+
 ## License
 
 This project is licensed under the MIT License; see [`LICENSE`](LICENSE).

@@ -10909,3 +10909,58 @@ body:has(.landing) {
   padding: 7px 12px;
   cursor: pointer;
 }
+
+.workout-add-exercise {
+  justify-self: end;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 8px 14px;
+  border: 1px solid rgba(7, 26, 53, 0.12);
+  border-radius: 14px;
+  background: #fff;
+  color: var(--aifit-ink);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.add-exercise-sheet {
+  padding: 0;
+  border: 0;
+  max-height: calc(100dvh - max(var(--safe-top), 10px));
+  color: var(--aifit-ink);
+}
+
+.add-exercise-sheet::backdrop {
+  background: rgba(7, 26, 53, 0.36);
+}
+
+.add-exercise-search {
+  padding: 12px 16px;
+  background: #fff;
+}
+
+.add-exercise-search input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid rgba(7, 26, 53, 0.15);
+  border-radius: 12px;
+  background: #f8fbff;
+  color: inherit;
+  font: inherit;
+  font-size: 16px;
+}
+
+.add-exercise-source {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.add-exercise-sheet .exercise-history-row:disabled {
+  opacity: 0.55;
+  cursor: default;
+}

@@ -7,6 +7,7 @@ import { circuitGroupKey } from './data/testWorkout'
 import { getNextCircuitSet } from './utils/circuitProgress'
 import { backendWorkoutToSession, type BackendWorkout, type BackendWorkoutReceipt } from './utils/backendWorkoutAdapter'
 import { fetchSwapCandidates, needsCoachSwap, readApiError, swapErrorKey, SwapCandidatesError, type SwapCandidate, type SwapCandidates } from './utils/swapCandidates'
+import type { ExerciseRepertoire, RepertoireCandidate } from './utils/exerciseRepertoire'
 import { fetchWorkoutHistory } from './utils/workoutHistory'
 import { I18nProvider, createI18n } from './i18n'
 import { normalizeLanguage, type Language } from './i18n/strings'
@@ -4064,6 +4065,34 @@ const App = () => {
     todayId,
   ])
 
+  const loadExerciseRepertoire = useCallback(async (): Promise<ExerciseRepertoire> => {
+    const context = requireEditContext()
+    if (!context) throw new Error(t('workout.addExerciseUnavailable'))
+    const response = await apiFetch(
+      withCoachActAs(`${API_BASE_URL}/v1/workouts/${encodeURIComponent(context.workoutId)}/exercise-repertoire`),
+      { headers: await getPrivyAuthHeaders() },
+    )
+    if (!response.ok) {
+      const error = readApiError(await response.json().catch(() => null), response.status, t('workout.addExerciseFailed'))
+      throw new Error(error.code === 'active_blueprint_missing' ? t('workout.addExerciseNoPlan') : t('workout.addExerciseFailed'))
+    }
+    return await response.json() as ExerciseRepertoire
+  }, [getPrivyAuthHeaders, requireEditContext, t, withCoachActAs])
+
+  const handleAddExercise = useCallback(async (candidate: RepertoireCandidate, repertoire: ExerciseRepertoire): Promise<boolean> => {
+    const context = requireEditContext()
+    if (!context || context.workoutId !== repertoire.workout_id) return false
+    return runStructuralMutation(
+      context.workoutId, '/exercises', 'POST',
+      {
+        day_id: candidate.day_id, slot_id: candidate.slot_id, candidate_id: candidate.candidate_id,
+        blueprint_id: repertoire.blueprint_id, expected_blueprint_revision: repertoire.blueprint_revision,
+        expected_revision: repertoire.workout_revision, request_id: crypto.randomUUID(),
+      },
+      context.targetDate, context.ownerKey,
+    )
+  }, [requireEditContext, runStructuralMutation])
+
   const handleAddSet = useCallback(async (exerciseId: string) => {
     const context = requireEditContext()
     if (!context) return
@@ -5049,6 +5078,8 @@ const App = () => {
             }}
             onUpdateSetField={updateSetField}
             onCommitSetTarget={handleCommitSetTarget}
+            onLoadExerciseRepertoire={loadExerciseRepertoire}
+            onAddExercise={handleAddExercise}
             onAddSet={handleAddSet}
             onRemoveSet={handleRemoveSet}
             onStartHoldTimer={startHoldTimer}

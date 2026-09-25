@@ -86,6 +86,8 @@ type WorkoutPlanListProps = {
   getNextCircuitExercise: (items: WorkoutExercise[]) => WorkoutExercise | null
   onSelectEntry: (id: string, type: ActiveEntryType) => void
   canEditPlan: boolean
+  canAddExercise: boolean
+  onAddExercise: () => void
   onRemoveExercise: (exerciseId: string) => void
   onRemoveCircuit: (segmentId: string) => void
   onRemoveSection: (segmentIds: string[]) => void
@@ -160,6 +162,8 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
   getNextCircuitExercise,
   onSelectEntry,
   canEditPlan,
+  canAddExercise,
+  onAddExercise,
   onRemoveExercise,
   onRemoveCircuit,
   onRemoveSection,
@@ -989,6 +993,11 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
   return (
     <section className={`workout-list ${activeEntryId ? 'hidden' : ''} ${drag ? 'is-reordering' : ''}`}>
       <div className="list-section">
+        {canAddExercise ? (
+          <button type="button" className="workout-add-exercise" onClick={onAddExercise}>
+            <span aria-hidden="true">＋</span> {t('workout.addExercise')}
+          </button>
+        ) : null}
         <PlanNotes
           notes={planNotes}
           open={planNotesOpen}
