@@ -2083,6 +2083,20 @@ p {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  min-height: 40px;
+  padding: 8px 14px;
+  border: 1px solid var(--aifit-border, #e2e8f0);
+  border-radius: 12px;
+  background: var(--aifit-soft, #f1f5f9);
+  color: var(--aifit-ink, #17283b);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.coaching-audio button:disabled {
+  opacity: 0.6;
+  cursor: default;
 }
 
 .coaching-audio audio {
