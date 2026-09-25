@@ -26,7 +26,9 @@ services:
       # dev can share one database without a hardcoded name in this repo.
       EZ_BINDINGS_FILE: /run/secrets/aifit-api-bindings.json
       AIFIT_MODEL_POLICY_FILE: /run/config/aifit-model-policy.json
-      AIFIT_AGENT_API_BASE_URL: ${AIFIT_AGENT_API_BASE_URL:-http://127.0.0.1:18182}
+      # Plugin calls run in their own Docker network and cannot reach this
+      # host-network container through their own 127.0.0.1.
+      AIFIT_AGENT_API_BASE_URL: ${AIFIT_AGENT_API_BASE_URL:-https://api.aifit.living}
       PORT: "18182"
     volumes:
       - /etc/aifit/aifit-api-bindings.json:/run/secrets/aifit-api-bindings.json:ro
