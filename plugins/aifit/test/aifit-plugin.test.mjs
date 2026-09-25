@@ -63,6 +63,7 @@ test('help exposes the canonical reads and the full write surface', async () => 
 
   assert.equal(result.code, 0, result.stderr);
   for (const command of [
+    'aifit exercise list',
     'aifit exercise show',
     'aifit exercise history',
     'aifit exercise create',
@@ -131,6 +132,21 @@ test('reads transport only the capability, path, and query', async () => {
     assert.equal(list.code, 0, list.stderr);
     assert.deepEqual(await fetchRequest(fetchOutput), {
       url: 'https://aifit.test/v1/agent/workouts?start=2026-09-21&end=2026-09-27',
+      method: 'GET',
+      headers: { authorization: 'Bearer capability-test' },
+      body: null,
+    });
+  });
+});
+
+test('exercise catalog pages use only the scoped canonical read', async () => {
+  await withFetchOutput(async (fetchOutput) => {
+    const result = await runCli(['exercise', 'list', '--after', 'ex_press', '--limit', '50'], {
+      context: scopedContext, fetchOutput,
+    });
+    assert.equal(result.code, 0, result.stderr);
+    assert.deepEqual(await fetchRequest(fetchOutput), {
+      url: 'https://aifit.test/v1/agent/exercises?after=ex_press&limit=50',
       method: 'GET',
       headers: { authorization: 'Bearer capability-test' },
       body: null,

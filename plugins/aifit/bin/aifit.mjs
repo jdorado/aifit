@@ -26,6 +26,7 @@ function usage() {
   return `AIFit native agent tool
 
 Read:
+  aifit exercise list [--after EXERCISE_ID] [--limit N]
   aifit exercise show EXERCISE_ID [--revision REV]
   aifit exercise history EXERCISE_ID [--before DATE] [--limit N]
   aifit exercise related-history EXERCISE_ID [--limit N]
@@ -63,6 +64,9 @@ Artifacts (full typed schema and rules are in the installed aifit skill):
 
 Reads print canonical JSON records. Writes print one receipt. Use stdin
 (--input -) because Ez runs the plugin in an isolated container.
+Before authoring blueprint candidates or overrides, reuse matching catalog
+exercise IDs from exercise list. Use common exercise names; keep setup cues
+in instructions and prescriptions. Naming variations alone do not need new IDs.
 Do not include owner, tenant, API URL, capability, request_id, or conversation
 content in an artifact.`;
 }
@@ -190,7 +194,14 @@ async function main() {
   const context = await runContext();
   const [area, action, ...rest] = args;
   let result;
-  if (area === 'exercise' && action === 'show') {
+  if (area === 'exercise' && action === 'list') {
+    const { values, positional } = parseArgs(rest, new Set(['--after', '--limit']));
+    exactly(positional, 0, 'exercise list [--after EXERCISE_ID] [--limit N]');
+    result = await call(context, 'GET', '/exercises', undefined, {
+      after: optional(values, '--after'),
+      limit: optional(values, '--limit') ? positiveInteger(values['--limit'], '--limit') : undefined,
+    });
+  } else if (area === 'exercise' && action === 'show') {
     const { values, positional } = parseArgs(rest, new Set(['--revision']));
     const [exerciseId] = exactly(positional, 1, 'exercise show EXERCISE_ID');
     result = await call(context, 'GET', `/exercises/${exerciseId}`, undefined, { revision: optional(values, '--revision') });

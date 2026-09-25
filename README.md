@@ -65,6 +65,12 @@ trainee needs its own verified binding in the API deployment serving the app,
 including local development. Arbitrary plan rewrites stay disabled until their own typed
 public contract exists.
 
+Before authoring a blueprint or override, the coach can page the existing exercise
+catalog with `aifit exercise list` and reuse its IDs and revisions. Common names
+belong on exercise definitions; setup and tempo cues belong in instructions and
+prescriptions. Reusing an ID keeps history and progression together even when
+the plan uses another wording for the same exercise.
+
 ## Testing
 
 ```sh

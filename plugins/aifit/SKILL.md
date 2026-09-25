@@ -21,6 +21,7 @@ those parameters; it does not make the coaching decision or infer muscle growth.
 ## Reads
 
 ```sh
+aifit exercise list [--after EXERCISE_ID] [--limit N]
 aifit exercise show EXERCISE_ID [--revision REV]
 aifit exercise history EXERCISE_ID [--before DATE] [--limit N]
 aifit exercise related-history EXERCISE_ID [--limit N]
@@ -117,6 +118,24 @@ previous day is resolved by you into that complete artifact; the plugin never
 reads or copies workout records for you.
 
 ## Exercise definition artifact
+
+Before creating definitions for a blueprint or workout override, reuse matching
+exercise IDs from the active blueprint or `exercise list`. The list returns
+current IDs, revisions, names and movement/equipment fields; follow `next_after`
+with `--after` until you find the match or exhaust the catalog. Use `exercise show`
+when technique details are needed to decide. History and progression group by
+exercise ID: a new ID for another wording splits the same exercise's records.
+
+Prefer common, recognizable exercise names with only the equipment and variant
+needed to identify the movement. Put tempo, reach cues, setup, symptoms and
+session-specific modifications in instructions or prescriptions. Keep the same
+ID across days, blueprints and overrides when the underlying exercise is the same.
+For example, an added word such as "press" in "single-arm cable serratus press
+reach" does not by itself make it different from "single-arm cable serratus reach";
+compare the existing movement and setup before creating anything. Preserve real
+equipment, laterality, load-basis and movement distinctions. If only the display
+name needs standardizing, revise the existing ID. Create a new definition only
+when the catalog has no equivalent; do not infer equivalence solely from the name.
 
 `exercise create` takes one exercise definition:
 

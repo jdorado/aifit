@@ -683,6 +683,26 @@ class WorkoutService:
                                                  {"account_id": account_id, "exercise_id": definition.exercise_id, "revision": revision}, upsert=True)
         return await self._save_receipt(account_id, request_id, fingerprint, self.receipt("exercise", definition.exercise_id, revision, request_id))
 
+    async def list_exercises(self, account_id: str, after: str | None = None, limit: int = 50) -> dict[str, Any]:
+        """Page current catalog identities so the coach can reuse them in new plans."""
+        bounded = min(max(limit, 1), 100)
+        query: dict[str, Any] = {"account_id": account_id}
+        if after:
+            query["exercise_id"] = {"$gt": after}
+        heads = await self.db.exercise_heads.find(query).sort("exercise_id", 1).limit(bounded + 1).to_list()
+        page = heads[:bounded]
+        documents = await self.db.exercises.find({
+            "account_id": account_id,
+            "$or": [{"exercise_id": head["exercise_id"], "revision": head["revision"]} for head in page],
+        }).to_list() if page else []
+        by_id = {document["exercise_id"]: document for document in documents}
+        fields = ("exercise_id", "revision", "name", "movement_pattern", "primary_muscles",
+                  "equipment_kind", "laterality", "load_basis", "metrics")
+        return {
+            "exercises": [{field: by_id[head["exercise_id"]][field] for field in fields} for head in page],
+            "next_after": page[-1]["exercise_id"] if len(heads) > bounded else None,
+        }
+
     async def exercise(self, account_id: str, exercise_id: str, revision: str | None = None) -> dict[str, Any]:
         query: dict[str, Any] = {"account_id": account_id, "exercise_id": exercise_id}
         if revision is not None:
