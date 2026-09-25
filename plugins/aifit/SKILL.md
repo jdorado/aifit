@@ -29,8 +29,9 @@ template.
 
 ## Mini-chat scope
 
-A mini-chat turn is always about one workout exercise instance. The references
-are not in the prompt; read the current run first:
+A mini-chat turn is about the exercise identified by the current run, even
+when earlier messages discussed another exercise. The references are not in
+the prompt; read the current run first:
 
 ```sh
 ezenciel-agents-schedule context
@@ -44,13 +45,27 @@ Its `run.application.context` carries only these references:
 - `referenceDate`: the `YYYY-MM-DD` training day
 - `expectedRevision`: the current workout revision for revision-guarded writes
 
-Read `workout show WORKOUT_ID`, find the item whose `exercise_instance_id`
-equals `exerciseInstanceId`, and answer from that item (prescription, cues,
-history via `exercise history` with the item's catalog exercise ID). For a
-blueprint question about that exercise, follow the item's `slot_id` into
-`blueprint active --date referenceDate` and use that slot's candidates. Never
-ask which exercise the user means; the references name it. If a reference is
-absent, stop with structured feedback instead of inventing one.
+Read `workout show WORKOUT_ID` and find `exerciseInstanceId`. Reuse a record
+already read in this native session only when its workout ID and revision
+match this run's `workoutId` and `expectedRevision`; still select the current
+instance. Refresh when either differs or the revision is absent. A `wex_...`
+ID identifies the workout instance, not the catalog exercise: only pass the
+item's catalog exercise ID and exercise revision to `exercise show`.
+
+For form, setup, or a simple follow-up, answer directly from that item and the
+relevant constraints in `profile.md` (reuse the profile when already read in
+this session). Use `exercise show` only if the item lacks the needed technique
+details. Give a short answer, usually 2–4 cues under 100 words. Explaining an
+existing prescription does not require reopening the full fitness plan,
+medical history, or training archives. Read a specific relevant health section
+when pain, a contraindication, or a prescription change makes it necessary.
+
+Fetch `exercise history` only for logged performance/progression questions;
+fetch `blueprint active --date referenceDate` only for slot candidates or
+blueprint questions. Broader planning and writes retain their normal profile,
+health-gate, and revision checks. Never ask which exercise the user means.
+If a required reference or plugin read fails, report the missing information
+briefly; do not browse packages, permissions, source, or old plans to guess it.
 
 ## Writes
 
