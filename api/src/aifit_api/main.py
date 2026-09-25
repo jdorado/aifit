@@ -31,7 +31,7 @@ from .coach_links import (
     CoachLinkService,
     CoachLinkUpdateInput,
 )
-from .ez import call as ez_call, provision_telegram, telegram_provisioning_configured, verified_binding
+from .ez import call as ez_call, provision_telegram, verified_binding
 from .model_policy import filter_control, require_allowed
 from .workouts import (
     BlueprintInput,
@@ -271,8 +271,9 @@ def public_telegram_connection(value: Any, needs_link: bool = False) -> dict:
     if not isinstance(value, dict) or not isinstance(value.get("connected"), bool):
         raise HTTPException(502, "Ez returned an invalid Telegram connection receipt.")
     if value["connected"]:
-        if set(value) not in ({"connected"}, {"connected", "ready"}) or ("ready" in value and value["ready"] is not True):
+        if set(value) not in ({"connected"}, {"connected", "ready"}) or ("ready" in value and not isinstance(value["ready"], bool)):
             raise HTTPException(502, "Ez returned an invalid Telegram connection receipt.")
+        # The saved pairing survives paused polling and transport outages.
         return {"state": "connected"}
     if not needs_link:
         if set(value) == {"connected"}:
@@ -475,27 +476,15 @@ async def get_account(identity: Identity = Depends(require_identity)) -> dict:
 @app.get("/account/telegram")
 async def get_telegram_connection(identity: Identity = Depends(require_identity)) -> dict:
     account = await account_for(identity)
-    binding = await verified_binding(account["account_id"])
-    try:
-        receipt = await ez_call(binding, "GET", "/v1/telegram")
-    except HTTPException as error:
-        if error.status_code in {400, 404, 503} and telegram_provisioning_configured(binding):
-            return {"state": "needs_bot"}
-        raise
-    try:
-        return public_telegram_connection(receipt)
-    except HTTPException as error:
-        if (error.status_code == 502 and telegram_provisioning_configured(binding)
-                and isinstance(receipt, dict) and receipt.get("connected") is True
-                and receipt.get("ready") is not True):
-            return {"state": "needs_bot"}
-        raise
+    binding = await verified_binding(account["account_id"], telegram=True)
+    receipt = await ez_call(binding, "GET", "/v1/telegram")
+    return public_telegram_connection(receipt)
 
 
 @app.post("/account/telegram/link")
 async def create_telegram_connection(identity: Identity = Depends(require_identity)) -> dict:
     account = await account_for(identity)
-    binding = await verified_binding(account["account_id"])
+    binding = await verified_binding(account["account_id"], telegram=True)
     try:
         connection = await ez_call(binding, "POST", "/v1/telegram/link")
     except HTTPException as error:
@@ -508,7 +497,7 @@ async def create_telegram_connection(identity: Identity = Depends(require_identi
 @app.post("/account/telegram/bot")
 async def configure_telegram_bot(body: TelegramBotInput, identity: Identity = Depends(require_identity)) -> dict:
     account = await account_for(identity)
-    binding = await verified_binding(account["account_id"])
+    binding = await verified_binding(account["account_id"], telegram=True)
     await provision_telegram(binding, body.bot_token)
     try:
         connection = await ez_call(binding, "POST", "/v1/telegram/link")

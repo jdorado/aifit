@@ -24,8 +24,10 @@ def _absolute_regular_file(path_value: str) -> Path:
     return path
 
 
-def binding_for(principal_id: str) -> dict:
+def binding_for(principal_id: str, *, telegram: bool = False) -> dict:
     registry_path = os.getenv("EZ_BINDINGS_FILE", "")
+    if telegram:
+        registry_path = os.getenv("EZ_TELEGRAM_BINDINGS_FILE", "").strip() or registry_path
     try:
         registry = json.loads(_private_text(registry_path))
         if registry.get("version") != 1 or not isinstance(registry.get("bindings"), list):
@@ -69,9 +71,9 @@ async def call(binding: dict, method: str, path: str, body: dict | None = None) 
         raise HTTPException(503, "Ez is unavailable.") from error
 
 
-async def verified_binding(principal_id: str) -> dict:
+async def verified_binding(principal_id: str, *, telegram: bool = False) -> dict:
     """Resolve the private binding and prove it still belongs to this owner."""
-    binding = binding_for(principal_id)
+    binding = binding_for(principal_id, telegram=telegram)
     if binding.get("ownerId") != principal_id:
         raise HTTPException(503, "Chat binding does not match this account.")
     registration = await call(binding, "GET", "/v1/registration")

@@ -411,7 +411,7 @@ def test_validation_failures_keep_the_documented_error_contract(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_binding_verification_requires_owner_and_receipt(monkeypatch):
-    monkeypatch.setattr(ez, "binding_for", lambda _owner: {"ownerId": "acc_1"})
+    monkeypatch.setattr(ez, "binding_for", lambda _owner, **_kwargs: {"ownerId": "acc_1"})
     monkeypatch.setattr(ez, "call", lambda *_args: async_value({"ownerId": "another", "bindingId": "binding_1"}))
     with pytest.raises(HTTPException) as error:
         await ez.verified_binding("acc_1")
