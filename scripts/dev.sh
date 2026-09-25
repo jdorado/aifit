@@ -153,12 +153,9 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 if [ "$AIFIT_WITH_RELAY" = "1" ]; then
-  # Once the profile has provisioned a Telegram bot, its compose override stays in
-  # the state directory and must be included, or a restart would drop the bot.
+  # Local web/agent QA uses the application channel. Production owns Telegram;
+  # loading the local bot override would make both relays poll the same bot.
   compose_args=(-f "$COMPOSE_FILE")
-  if [ -f "$AIFIT_EZ_STATE_DIR/telegram.compose.yml" ]; then
-    compose_args+=(-f "$AIFIT_EZ_STATE_DIR/telegram.compose.yml")
-  fi
   relay_started=1
   (
     cd "$ROOT_DIR"
