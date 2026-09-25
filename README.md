@@ -34,6 +34,13 @@ Use your own Privy application credentials and your own Ez deployment
 configuration. Never create `api/.env` or `web/.env` in the checkout, and never
 commit a binding registry, token file, workspace, native session, or bot token.
 
+Telegram pairing is persisted by Ez. When local web chat uses a separate Ez
+deployment, set `EZ_TELEGRAM_BINDINGS_FILE` to a private binding registry for
+the existing Telegram deployment (through a loopback tunnel if remote).
+Telegram status, linking, and bot setup then use that same deployment in both
+environments. Without the override they use `EZ_BINDINGS_FILE`. A stopped
+poller or unavailable relay does not mean the saved pairing was removed.
+
 Run the API and frontend with the external environment files:
 
 ```sh
