@@ -3,7 +3,7 @@ import hashlib
 import logging
 import os
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from urllib.parse import parse_qsl, quote, urlparse
 from uuid import UUID
 
@@ -180,6 +180,7 @@ class ModelSelectionInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     expected_session: str | None = None
     scope: ChatScope = OWNER_CHAT_SCOPE
+    act_as_link_id: str | None = Field(default=None, max_length=200)
     cli: str = Field(min_length=1, max_length=80)
     provider: str | None = Field(default=None, min_length=1, max_length=80)
     model: str | None = Field(default=None, min_length=1, max_length=160)
@@ -327,6 +328,10 @@ async def chat_account(identity: Identity, requested_user_id: str, act_as_link_i
     if not trainee:
         raise HTTPException(404, "Coach link trainee was not found.")
     return trainee
+
+
+def chat_run_scope(scope: ChatScope, act_as_link_id: str | None) -> str:
+    return stable_id("coach", f"{act_as_link_id}:{scope}") if act_as_link_id else scope
 
 
 def validated_messages(value: Any) -> list[dict]:
@@ -515,25 +520,27 @@ async def configure_telegram_bot(body: TelegramBotInput, identity: Identity = De
 
 @app.get("/chat/models")
 async def chat_models(identity: Identity = Depends(require_identity),
-                      scope: ChatScope = OWNER_CHAT_SCOPE) -> dict:
+                      scope: ChatScope = OWNER_CHAT_SCOPE,
+                      act_as_link_id: Annotated[str | None, Query(max_length=200)] = None) -> dict:
     """Shared owner control, or one private scope's control for mini-chat.
 
     The owner scope uses the shared Ez control; any other admitted chat scope
     uses its own scope-control, so mini-chat can run a faster model while the
     main chat keeps a planning model. Neither operation changes the other.
     """
-    account = await account_for(identity)
+    account = await chat_account(identity, identity.subject, act_as_link_id)
     binding = await verified_binding(account["account_id"])
-    if scope != OWNER_CHAT_SCOPE:
+    run_scope = chat_run_scope(scope, act_as_link_id)
+    if run_scope != OWNER_CHAT_SCOPE:
         control = public_model_control(await ez_call(
-            binding, "GET", f"/v1/scope-control?scope={quote(scope, safe='')}"))
+            binding, "GET", f"/v1/scope-control?scope={quote(run_scope, safe='')}"))
         return await lock_control(binding, identity, control)
     return await lock_control(binding, identity)
 
 
 @app.post("/chat/models")
 async def select_chat_model(body: ModelSelectionInput, identity: Identity = Depends(require_identity)) -> dict:
-    account = await account_for(identity)
+    account = await chat_account(identity, identity.subject, body.act_as_link_id)
     binding = await verified_binding(account["account_id"])
     require_allowed(identity.subject, body.cli, body.model, body.effort)
     selection: dict[str, Any] = {"action": "model", "expectedSession": body.expected_session, "cli": body.cli}
@@ -543,9 +550,10 @@ async def select_chat_model(body: ModelSelectionInput, identity: Identity = Depe
         selection["model"] = body.model
     if body.effort is not None:
         selection["effort"] = body.effort
-    if body.scope != OWNER_CHAT_SCOPE:
+    run_scope = chat_run_scope(body.scope, body.act_as_link_id)
+    if run_scope != OWNER_CHAT_SCOPE:
         control = public_model_control(await ez_call(
-            binding, "POST", f"/v1/scope-control?scope={quote(body.scope, safe='')}", selection))
+            binding, "POST", f"/v1/scope-control?scope={quote(run_scope, safe='')}", selection))
         return await lock_control(binding, identity, control)
     control = public_model_control(await ez_call(binding, "POST", "/v1/control", selection))
     return await lock_control(binding, identity, control)
@@ -635,7 +643,7 @@ async def enqueue_chat(body: ChatInput, identity: Identity = Depends(require_ide
                                                  "expectedRevision": body.expected_revision}.items() if value is not None}
     # A coach's general conversation belongs to the trainee agent, but must
     # never resume the trainee's own chat or another coach's conversation.
-    run_scope = stable_id("coach", f"{body.act_as_link_id}:{body.scope}") if body.act_as_link_id else body.scope
+    run_scope = chat_run_scope(body.scope, body.act_as_link_id)
     admission: dict[str, Any] = {"requestId": request_id, "scope": run_scope, "text": body.message}
     if body.scope == OWNER_CHAT_SCOPE and not body.act_as_link_id:
         admission["followOwner"] = True
