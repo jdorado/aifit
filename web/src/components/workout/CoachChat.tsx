@@ -207,6 +207,7 @@ const CoachChat: FC<CoachChatProps> = ({
                 aria-label="AI model"
                 disabled={disabled || modelSelectionDisabled}
               >
+                <option value="" disabled>Select model</option>
                 {modelOptions.map((option) => (
                   <option key={option.value} value={option.value}>{option.label}</option>
                 ))}

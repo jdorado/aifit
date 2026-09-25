@@ -18,9 +18,7 @@ const ChatHeader: FC<ChatHeaderProps> = ({
   onStartNewChat,
 }) => {
   const { t } = useI18n()
-  const singleModelOption = modelOptions.length === 1 ? modelOptions[0] : undefined
   const activeModelOption = modelOptions.find((option) => option.value === selectedModel)
-    ?? singleModelOption
   const [modelMenuOpen, setModelMenuOpen] = useState(false)
   const modelMenuRef = useRef<HTMLDivElement>(null)
 
