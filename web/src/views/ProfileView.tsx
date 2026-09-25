@@ -581,14 +581,14 @@ const ProfileView: FC<ProfileViewProps> = ({
             {linksLoading ? <p className="coach-links-hint">{t('coach.linksLoading')}</p> : null}
 
             <div className="coach-link-group">
-              <h3>{t('coach.coachesTitle')}</h3>
+              <h3>{t('coach.traineesTitle')}</h3>
               {coachLinks.length === 0
                 ? <p className="coach-links-empty">{t('coach.linksEmpty')}</p>
                 : coachLinks.map((link) => renderLinkCard(link, 'coach'))}
             </div>
 
             <div className="coach-link-group">
-              <h3>{t('coach.traineesTitle')}</h3>
+              <h3>{t('coach.coachesTitle')}</h3>
               {traineeLinks.length === 0
                 ? <p className="coach-links-empty">{t('coach.linksEmpty')}</p>
                 : traineeLinks.map((link) => renderLinkCard(link, 'trainee'))}

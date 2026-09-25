@@ -27,7 +27,9 @@ has(appSource, 'const ownerWorkoutKey = `${coachActAsOwnerId ?? currentUserId}:$
 // 5. The mini model picker stays off in coach mode (the trainee default applies).
 has(appSource, 'miniModelSelectionDisabled={miniModelSelectionPending || Boolean(coachActAsLinkId)}', 'the mini model picker must stay off in coach mode')
 
-// 6. Generate-with-coach stays owner-only (the home chat is the coach's own).
-has(appSource, 'if (!canGenerateWorkoutSelectedDay || !coachChatEnabled || coachActAsLinkId) return', 'generate-with-coach must stay owner-only')
+// 6. General chat is available in an authorized trainee view and sends the link.
+has(appSource, 'coachActAsLinkId && !coachChatEnabled', 'read-only trainee views must keep chat disabled')
+has(appSource, 'act_as_link_id: coachActAsLinkId,', 'general coach chat must send the act-as link')
+has(appSource, 'coachMessagesByScope[`coach-link:${coachActAsLinkId}`]', 'coach messages must be separate from owner chat')
 
 console.log('coach chat act-as contract passed')

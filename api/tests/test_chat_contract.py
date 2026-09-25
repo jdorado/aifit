@@ -106,6 +106,41 @@ async def test_enqueue_forwards_canonical_workout_and_instance_refs(monkeypatch,
 
 
 @pytest.mark.asyncio
+async def test_coach_chat_uses_trainee_binding_and_separate_native_scope(monkeypatch, identity):
+    from aifit_api.coach_links import CoachLinkService
+    from test_coach_links import FakeDatabase, COACH, TRAINEE, active_link
+
+    database = FakeDatabase()
+    service = CoachLinkService(database)
+    link = await active_link(service)
+    monkeypatch.setattr(main, "coach_links", lambda: service)
+    monkeypatch.setattr(main, "account_for", lambda _identity: async_value(COACH))
+    monkeypatch.setattr(main.db, "accounts", type("Accounts", (), {
+        "find_one": staticmethod(lambda _query: async_value(TRAINEE)),
+    })())
+    bound = []
+    monkeypatch.setattr(main, "verified_binding", lambda account_id: bound.append(account_id) or async_value({"bindingId": "trainee-binding"}))
+    calls = []
+
+    async def ez_call(_binding, method, path, body=None):
+        calls.append((method, path, body))
+        if method == "POST":
+            return {"id": "run_1"}
+        return {"id": "run_1", "status": "completed", "messages": [{"id": "msg_1", "text": "ok"}]}
+
+    monkeypatch.setattr(main, "ez_call", ez_call)
+    await main.enqueue_chat(main.ChatInput(
+        user_id=identity.subject, request_id=uuid4(), message="show the plan",
+        act_as_link_id=link["link_id"],
+    ), identity)
+    assert bound == [TRAINEE["account_id"]]
+    admission = calls[0][2]
+    assert admission["scope"] == main.stable_id("coach", f"{link['link_id']}:owner-chat")
+    assert admission["scope"] != main.OWNER_CHAT_SCOPE
+    assert "followOwner" not in admission
+
+
+@pytest.mark.asyncio
 async def test_enqueue_propagates_ez_request_key_conflict(monkeypatch, identity):
     monkeypatch.setattr(main, "chat_account", lambda *_args: async_value({
         "account_id": "acc_1", "tenant_id": "ten_1",

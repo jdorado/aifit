@@ -1278,13 +1278,13 @@ const App = () => {
   }, [])
 
   const handleActiveViewChange = useCallback((view: 'home' | 'workout' | 'profile') => {
-    if (view === 'home' && coachActAsLinkId) return
+    if (view === 'home' && coachActAsLinkId && !coachChatEnabled) return
     dismissKeyboard()
     setActiveView(view)
     resetAppViewportScroll()
     requestAnimationFrame(resetAppViewportScroll)
     window.setTimeout(resetAppViewportScroll, 250)
-  }, [coachActAsLinkId, dismissKeyboard, resetAppViewportScroll])
+  }, [coachActAsLinkId, coachChatEnabled, dismissKeyboard, resetAppViewportScroll])
 
   const isPlanEditableDate = useCallback((dateId?: string | null) => {
     if (!dateId) return false
@@ -3369,6 +3369,28 @@ const App = () => {
     const value = (messageOverride ?? chatInput).trim()
     if (!value || !coachChatEnabled) return
     setChatInput('')
+    if (coachActAsLinkId) {
+      const scopeId = `coach-link:${coachActAsLinkId}`
+      await addCoachMessage(scopeId, value, 'user')
+      const statusId = addCoachThinkingMessage(scopeId)
+      const targetDate = selectedDay?.date ?? todayId
+      const expectedRevision = workoutRevisionByOwnerDateRef.current[`${coachActAsOwnerId}:${targetDate}`]
+      try {
+        const result = await fetchChatJobResult({
+          user_id: currentUserId,
+          request_id: crypto.randomUUID(),
+          message: value,
+          reference_date: targetDate,
+          ...(expectedRevision ? { expected_revision: expectedRevision } : {}),
+          act_as_link_id: coachActAsLinkId,
+        })
+        await updateCoachMessage(scopeId, statusId, typeof result.reply === 'string' ? result.reply : String(result.reply ?? ''))
+        await refreshVisibleWorkoutSessions()
+      } catch (error) {
+        await updateCoachMessage(scopeId, statusId, error instanceof Error ? error.message : t('messages.networkError'))
+      }
+      return
+    }
     await addMessage(value, 'user')
     const statusId = addThinkingMessage(selectedModelLabel)
 
@@ -3396,16 +3418,23 @@ const App = () => {
     }
   }, [
     addMessage,
+    addCoachMessage,
+    addCoachThinkingMessage,
     addThinkingMessage,
     chatInput,
+    coachActAsLinkId,
+    coachActAsOwnerId,
     coachChatEnabled,
     currentUserId,
+    fetchChatJobResult,
     fetchChatReply,
+    refreshVisibleWorkoutSessions,
     removeMessage,
     selectedDay?.date,
     selectedModelLabel,
     t,
     todayId,
+    updateCoachMessage,
   ])
 
   const handleFastGenerateDayWorkout = useCallback(async () => {
@@ -3624,15 +3653,13 @@ const App = () => {
   ])
 
   const handleGenerateDayWorkoutWithCoach = useCallback(() => {
-    // The home chat is the coach's own; never route a trainee generate prompt there.
-    if (!canGenerateWorkoutSelectedDay || !coachChatEnabled || coachActAsLinkId) return
+    if (!canGenerateWorkoutSelectedDay || !coachChatEnabled) return
     const targetDate = selectedDay?.date ?? todayId
     const prompt = t('workout.generateChatPrompt', { date: targetDate, label: selectedDayLabel })
     handleActiveViewChange('home')
     void handleSend(prompt)
   }, [
     canGenerateWorkoutSelectedDay,
-    coachActAsLinkId,
     coachChatEnabled,
     handleActiveViewChange,
     handleSend,
@@ -4749,6 +4776,7 @@ const App = () => {
     setCoachActAsLinkId(target.linkId)
     setCoachActAsLabel(target.label)
     setCoachActAsPermissions(target.permissions)
+    setChatInput('')
     resetVisibleWeek()
     handleActiveViewChange('workout')
   }, [handleActiveViewChange, resetVisibleWeek])
@@ -4757,6 +4785,7 @@ const App = () => {
     setCoachActAsLinkId(null)
     setCoachActAsLabel('')
     setCoachActAsPermissions(null)
+    setChatInput('')
     resetVisibleWeek()
     handleActiveViewChange('workout')
   }, [handleActiveViewChange, resetVisibleWeek])
@@ -4791,17 +4820,18 @@ const App = () => {
         <div className="content">
           <ChatView
             active={activeView === 'home'}
-            messages={messages}
+            messages={coachActAsLinkId ? (coachMessagesByScope[`coach-link:${coachActAsLinkId}`] ?? []) : messages}
             inputValue={chatInput}
             inputDisabled={!coachChatEnabled}
-            modelOptions={modelOptions}
+            canStartNewChat={!coachActAsLinkId}
+            modelOptions={coachActAsLinkId ? [] : modelOptions}
             showModelLabels
             selectedModel={selectedModelValue}
-            modelSelectionDisabled={modelSelectionPending || messages.some((message) => message.thinking)}
+            modelSelectionDisabled={modelSelectionPending || Boolean(coachActAsLinkId) || messages.some((message) => message.thinking)}
             onModelChange={handleModelSelection}
             onInputChange={setChatInput}
             onSend={handleSend}
-            onClearChat={handleClearChat}
+            onClearChat={coachActAsLinkId ? () => {} : handleClearChat}
             onRefresh={handleRefreshSession}
             onAuthClick={handleAuthClick}
             showAuthButton={showHeaderAuthButton}
@@ -4948,14 +4978,14 @@ const App = () => {
           coachModeActive={Boolean(coachActAsLinkId)}
           coachContextLabel={coachActAsLabel}
           onExitCoachMode={coachActAsLinkId ? handleStopCoachView : undefined}
-          disabledTab={coachActAsLinkId ? 'home' : null}
-          disabledNotice={coachActAsLinkId ? t('coach.chatDisabledNotice') : ''}
-          leadingControl={activeView === 'home' ? (
+          disabledTab={coachActAsLinkId && !coachChatEnabled ? 'home' : null}
+          disabledNotice={coachActAsLinkId && !coachChatEnabled ? t('coach.chatDisabledNotice') : ''}
+          leadingControl={coachActAsLinkId && activeView === 'home' ? null : activeView === 'home' ? (
             <ChatOverflowMenu onRefresh={handleRefreshSession} />
           ) : (
             <WorkoutOverflowMenu
               canGeneratePlan={canGenerateWorkoutSelectedDay && canQuerySavedWorkoutSessions && isBackendHealthy}
-              canGenerateWithCoach={canGenerateWorkoutSelectedDay && canQuerySavedWorkoutSessions && isBackendHealthy && coachChatEnabled && !coachActAsLinkId}
+              canGenerateWithCoach={canGenerateWorkoutSelectedDay && canQuerySavedWorkoutSessions && isBackendHealthy && coachChatEnabled}
               canCopyLastWeek={canGenerateWorkoutSelectedDay && canQuerySavedWorkoutSessions && isBackendHealthy}
               canClearWorkout={canClearSelectedDay && isBackendHealthy}
               onShowHistory={handleOpenWorkoutHistory}

@@ -633,8 +633,11 @@ async def enqueue_chat(body: ChatInput, identity: Identity = Depends(require_ide
                                                  "exerciseId": body.exercise_id, "workoutId": body.workout_id,
                                                  "exerciseInstanceId": body.exercise_instance_id,
                                                  "expectedRevision": body.expected_revision}.items() if value is not None}
-    admission: dict[str, Any] = {"requestId": request_id, "scope": body.scope, "text": body.message}
-    if body.scope == OWNER_CHAT_SCOPE:
+    # A coach's general conversation belongs to the trainee agent, but must
+    # never resume the trainee's own chat or another coach's conversation.
+    run_scope = stable_id("coach", f"{body.act_as_link_id}:{body.scope}") if body.act_as_link_id else body.scope
+    admission: dict[str, Any] = {"requestId": request_id, "scope": run_scope, "text": body.message}
+    if body.scope == OWNER_CHAT_SCOPE and not body.act_as_link_id:
         admission["followOwner"] = True
     context = dict(references)
     plugin_context = agent_run_context(account, request_id)

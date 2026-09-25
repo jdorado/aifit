@@ -10,6 +10,7 @@ type ChatViewProps = {
   messages: ChatMessage[]
   inputValue: string
   inputDisabled?: boolean
+  canStartNewChat?: boolean
   modelOptions: Array<{ value: string, label: string }>
   showModelLabels?: boolean
   selectedModel: string
@@ -35,6 +36,7 @@ const ChatView: FC<ChatViewProps> = ({
   messages,
   inputValue,
   inputDisabled = false,
+  canStartNewChat = true,
   modelOptions,
   showModelLabels = false,
   selectedModel,
@@ -59,7 +61,7 @@ const ChatView: FC<ChatViewProps> = ({
     <section className={`view ${active ? 'active' : ''}`} data-view="home">
       <section className="chat-window">
         <ChatHeader
-          canStartNewChat={messages.length > 0 && !messages.some((message) => message.thinking)}
+          canStartNewChat={canStartNewChat && messages.length > 0 && !messages.some((message) => message.thinking)}
           modelOptions={modelOptions}
           selectedModel={selectedModel}
           modelSelectionDisabled={modelSelectionDisabled}
