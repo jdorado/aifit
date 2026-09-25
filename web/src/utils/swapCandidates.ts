@@ -39,6 +39,11 @@ const NO_BLUEPRINT_CODES = new Set([
 
 export type SwapErrorKey = 'swapNoBlueprint' | 'swapStaleBlueprint' | 'swapOutsideBlueprint' | 'swapEmpty' | 'swapLocked' | 'swapFailed'
 
+/** These states have no usable instant pick; the native coach can resolve the request. */
+export const needsCoachSwap = (code: string | null): boolean => (
+  code === 'no_eligible_swap' || code === 'stale_blueprint' || (code !== null && NO_BLUEPRINT_CODES.has(code))
+)
+
 /** Map a backend failure to the picker copy key with recovery guidance. */
 export const swapErrorKey = (code: string | null): SwapErrorKey => {
   if (code === 'completed_exercise_locked') return 'swapLocked'

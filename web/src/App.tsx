@@ -5,7 +5,7 @@ import { formatDurationForDisplay, normalizeWorkoutTargetText } from './utils/wo
 import type { WorkoutExercise, WorkoutExtra, WorkoutFeedbackPreset } from './data/testWorkout'
 import { circuitGroupKey } from './data/testWorkout'
 import { backendWorkoutToSession, type BackendWorkout, type BackendWorkoutReceipt } from './utils/backendWorkoutAdapter'
-import { fetchSwapCandidates, readApiError, swapErrorKey, SwapCandidatesError, type SwapCandidate, type SwapCandidates } from './utils/swapCandidates'
+import { fetchSwapCandidates, needsCoachSwap, readApiError, swapErrorKey, SwapCandidatesError, type SwapCandidate, type SwapCandidates } from './utils/swapCandidates'
 import { fetchWorkoutHistory } from './utils/workoutHistory'
 import { I18nProvider, createI18n } from './i18n'
 import { normalizeLanguage, type Language } from './i18n/strings'
@@ -3743,11 +3743,11 @@ const App = () => {
     setSwappingCandidateId(null)
   }, [])
 
-  const handleOpenSwap = useCallback(async (exerciseId: string) => {
-    if (!canQuerySavedWorkoutSessions || !coachCanEditPrograms || !isBackendHealthy) return
+  const handleOpenSwap = useCallback(async (exerciseId: string): Promise<boolean> => {
+    if (!canQuerySavedWorkoutSessions || !coachCanEditPrograms || !isBackendHealthy) return false
     const targetDate = selectedDay?.date ?? todayId
     const workoutId = workoutIdByOwnerDateRef.current[`${coachActAsOwnerId ?? currentUserId}:${targetDate}`]
-    if (!workoutId) return
+    if (!workoutId) return false
     swapExerciseIdRef.current = exerciseId
     swapResponseRef.current = null
     setSwapOpen(true)
@@ -3764,23 +3764,37 @@ const App = () => {
         exerciseInstanceId: exerciseId,
         actAsLinkId: coachActAsLinkId,
       })
-      if (swapExerciseIdRef.current !== exerciseId) return
+      if (swapExerciseIdRef.current !== exerciseId) return false
       swapResponseRef.current = result
       setSwapCandidates(result.candidates)
+      if (result.candidates.length === 0 && coachChatEnabled) {
+        handleCloseSwap()
+        void handleCoachSend(exerciseId, t('workout.swapCoachPrompt'))
+        return true
+      }
     } catch (error) {
-      if (swapExerciseIdRef.current !== exerciseId) return
+      if (swapExerciseIdRef.current !== exerciseId) return false
       const code = error instanceof SwapCandidatesError ? error.code : null
+      if (needsCoachSwap(code) && coachChatEnabled) {
+        handleCloseSwap()
+        void handleCoachSend(exerciseId, t('workout.swapCoachPrompt'))
+        return true
+      }
       setSwapError(t(`workout.${swapErrorKey(code)}`))
     } finally {
       if (swapExerciseIdRef.current === exerciseId) setSwapLoading(false)
     }
+    return false
   }, [
     canQuerySavedWorkoutSessions,
     coachActAsLinkId,
     coachActAsOwnerId,
     coachCanEditPrograms,
+    coachChatEnabled,
     currentUserId,
     getPrivyAuthHeaders,
+    handleCloseSwap,
+    handleCoachSend,
     isBackendHealthy,
     selectedDay?.date,
     t,

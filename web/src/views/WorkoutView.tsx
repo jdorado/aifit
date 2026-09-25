@@ -113,7 +113,7 @@ type WorkoutViewProps = {
   swappingCandidateId: string | null
   swapError: string | null
   swapCandidates: SwapCandidate[]
-  onOpenSwap: (exerciseId: string) => void
+  onOpenSwap: (exerciseId: string) => Promise<boolean>
   onSelectSwapCandidate: (candidate: SwapCandidate) => void
   onCloseSwap: () => void
   onRemoveExercise: (exerciseId: string) => void
@@ -760,7 +760,9 @@ const WorkoutView: FC<WorkoutViewProps> = ({
             onSwap={() => {
               if (activeExercise) {
                 setCoachChatOpen(false)
-                onOpenSwap(activeExercise.id)
+                void onOpenSwap(activeExercise.id).then((sentToCoach) => {
+                  if (sentToCoach) setCoachChatOpen(true)
+                })
               }
             }}
           />
