@@ -1267,7 +1267,7 @@ const App = () => {
     const viewportHeight = visualViewport?.height ?? window.innerHeight
     const viewportTop = visualViewport?.offsetTop ?? 0
     const root = document.documentElement
-    root.dataset.keyboardOpen = String(keyboardVisible && measuredViewportInset > 120)
+    root.dataset.keyboardOpen = String(keyboardVisible)
     root.style.setProperty('--chat-viewport-height', `${viewportHeight}px`)
     root.style.setProperty('--visual-viewport-offset-top', `${viewportTop}px`)
   }, [])
