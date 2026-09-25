@@ -89,8 +89,11 @@ exercise with the published sets and targets. It requires an existing workout,
 preserves logged sets, and uses revision checks and idempotent receipts. This
 browser flow does not run the coach or modify the blueprint.
 
-The speaker icon beside exercise history and chat requests a short explanation through its
-existing coach chat, then plays the completed reply as audio. Text remains in
+The speaker icon beside exercise history and chat requests a short form guide through its
+existing coach chat, using the exercise, profile, and plan context available to
+the agent. It asks for setup, useful cues, and mistakes to avoid, with adjustments
+only for documented limitations. The completed reply plays as audio in the
+exercise detail. Text remains in
 **Ask coach**. Ez owns synthesis and its Gemini credential; the API only relays
 authenticated audio. This needs Ez's `POST /v1/runs/{id}/speech` endpoint and a
 configured `GEMINI_API_KEY`. Playback can be paused and replayed without another
