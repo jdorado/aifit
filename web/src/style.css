@@ -4297,6 +4297,17 @@ body {
   color: var(--ink-primary);
 }
 
+/* Keep the iPhone status area solid while the app scrolls beneath it. */
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0 0 auto;
+  height: env(safe-area-inset-top, 0px);
+  background: #f8fbff;
+  pointer-events: none;
+  z-index: 1000;
+}
+
 ::selection {
   background: var(--selection-bg);
   color: var(--selection-fg);
@@ -5620,6 +5631,10 @@ body:has(.view[data-view="home"].active) {
 
 /* Chat designer concept: white canvas, editorial type, pastel panels */
 body:has(.view[data-view="home"].active) {
+  background: #fbfdff;
+}
+
+body:has(.view[data-view="home"].active)::after {
   background: #fbfdff;
 }
 
