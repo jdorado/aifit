@@ -8345,7 +8345,8 @@ body:has(.view[data-view="workout"] .workout-detail.active) {
   flex-shrink: 0;
 }
 
-.view[data-view="workout"] .detail-history-btn {
+.view[data-view="workout"] .detail-history-btn,
+.view[data-view="workout"] .detail-complete-btn {
   width: 36px;
   min-width: 36px;
   height: 36px;
@@ -8367,9 +8368,15 @@ body:has(.view[data-view="workout"] .workout-detail.active) {
   color: #ffffff;
 }
 
-.detail-history-btn svg {
+.detail-history-btn svg,
+.detail-complete-btn svg {
   width: 18px;
   height: 18px;
+}
+
+.view[data-view="workout"] .detail-complete-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 
 .exercise-history-backdrop {

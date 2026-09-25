@@ -961,6 +961,8 @@ const App = () => {
   const workoutExtrasRef = useRef<WorkoutExtra[]>(initialDay?.extras ?? [])
   const setLogsRef = useRef<Record<string, SetState[]>>(initialSetLogs)
   const [dataVersion, setDataVersion] = useState(0)
+  const [completingTimedExerciseId, setCompletingTimedExerciseId] = useState<string | null>(null)
+  const completingTimedExerciseRef = useRef(false)
   const [activeView, setActiveView] = useState<'home' | 'workout' | 'profile'>('workout')
   const [activeEntryId, setActiveEntryId] = useState<string | null>(null)
   const [activeEntryType, setActiveEntryType] = useState<ActiveEntryType>(null)
@@ -2948,7 +2950,7 @@ const App = () => {
     // A set is only rendered as logged when its canonical actual lands. Any
     // local failure clears the optimistic done flag instead of diverging.
     const revertLocal = () => restoreSetState(exerciseId, index, previous)
-    if (!canQuerySavedWorkoutSessions) { revertLocal(); return }
+    if (!canQuerySavedWorkoutSessions) { revertLocal(); return false }
     const ownerId = coachActAsOwnerId ?? currentUserId
     const targetDate = selectedDay?.date ?? todayId
     const ownerKey = `${ownerId}:${targetDate}`
@@ -2958,16 +2960,16 @@ const App = () => {
     const stateList = setLogsRef.current[exerciseId]
     const setItem = stateList?.[index]
     const setTarget = exercise?.sets[index]
-    if (!workoutId || !revision || !exercise || !setItem || !setTarget?.setId || !setItem.done) { revertLocal(); return }
+    if (!workoutId || !revision || !exercise || !setItem || !setTarget?.setId || !setItem.done) { revertLocal(); return false }
 
     const skipped = setItem.skipped === true
     const load = skipped ? null : parseActualLoad(setItem.weight)
     const metric = skipped ? null : parseActualMetric(exercise, setItem.metric)
-    if (!skipped && !metric) { revertLocal(); return }
+    if (!skipped && !metric) { revertLocal(); return false }
 
     const setKey = `${workoutId}:${setTarget.setId}`
     const fingerprint = JSON.stringify([skipped ? 'skipped' : metric, skipped ? null : load])
-    if (syncedSetKeysRef.current.get(setKey) === fingerprint) return
+    if (syncedSetKeysRef.current.get(setKey) === fingerprint) return true
 
     // A target edit on this set may still be in flight. Wait for it so the
     // log write uses the post-edit revision instead of racing it into a
@@ -2975,7 +2977,7 @@ const App = () => {
     const pendingTarget = pendingTargetEditsRef.current.get(setKey)
     if (pendingTarget) await pendingTarget
     const expectedRevision = workoutRevisionByOwnerDateRef.current[ownerKey]
-    if (!expectedRevision) { revertLocal(); return }
+    if (!expectedRevision) { revertLocal(); return false }
 
     const pending = pendingSetSyncsByDateRef.current
     pending[targetDate] = (pending[targetDate] ?? 0) + 1
@@ -3001,16 +3003,18 @@ const App = () => {
         // optimistic state so the UI never shows an unconfirmed actual.
         delete workoutRevisionByOwnerDateRef.current[ownerKey]
         refetchAfterSync = true
-        return
+        return false
       }
       if (!response.ok) throw new Error(`Set log failed (${response.status})`)
       const receipt = await response.json() as BackendWorkoutReceipt
       const nextRevision = receipt.revision ?? receipt.workout?.revision
       if (nextRevision) workoutRevisionByOwnerDateRef.current[ownerKey] = nextRevision
       syncedSetKeysRef.current.set(setKey, fingerprint)
+      return true
     } catch (error) {
       console.warn('Canonical set log failed:', error)
       revertLocal()
+      return false
     } finally {
       const remaining = (pending[targetDate] ?? 1) - 1
       if (remaining <= 0) {
@@ -3035,6 +3039,38 @@ const App = () => {
     selectedDay?.date,
     todayId,
   ])
+
+  const completeTimedExercise = useCallback(async (exerciseId: string) => {
+    if (!canLogSelectedDay || completingTimedExerciseRef.current) return
+    const exercise = getExercise(exerciseId)
+    if (!exercise || exercise.metric !== 'time' || exercise.status === 'skip') return
+    const stateList = ensureExerciseStateList(exercise)
+    const unfinished = exercise.sets.map((set, index) => ({ set, index }))
+      .filter(({ index }) => !stateList[index]?.done)
+    if (!unfinished.length) return
+
+    completingTimedExerciseRef.current = true
+    setCompletingTimedExerciseId(exerciseId)
+    resetHoldTimer()
+    try {
+      for (const { set, index } of unfinished) {
+        const state = stateList[index]
+        if (!state || state.done) continue
+        const previous: SetSyncRevert = { ...state }
+        const duration = parseDurationToSeconds(set.targetTime) ?? 60
+        state.metric = `${duration}s`
+        state.weight = normalizeWorkoutTargetText(state.weight || set.targetWeight) ?? ''
+        if (state.weight && !state.value_source) state.value_source = 'accepted_target'
+        state.skipped = false
+        state.done = true
+        bumpData()
+        if (!await syncLoggedSet(exerciseId, index, previous)) break
+      }
+    } finally {
+      completingTimedExerciseRef.current = false
+      setCompletingTimedExerciseId(null)
+    }
+  }, [bumpData, canLogSelectedDay, ensureExerciseStateList, getExercise, resetHoldTimer, syncLoggedSet])
 
   const unlogLoggedSet = useCallback(async (exerciseId: string, index: number, previous?: SetSyncRevert | null) => {
     // Undo removes the canonical actual, then the local state returns to
@@ -4914,6 +4950,8 @@ const App = () => {
             onSelectDay={handleSelectDay}
             onBack={hideWorkoutDetail}
             onLogSet={logNextSet}
+            onCompleteTimedExercise={(exerciseId) => { void completeTimedExercise(exerciseId) }}
+            completingTimedExerciseId={completingTimedExerciseId}
             onSkipSet={skipSet}
             onUnlogSet={unlogSet}
             onStartEditingSet={(exerciseId, index) => {

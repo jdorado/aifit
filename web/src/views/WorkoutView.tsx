@@ -88,6 +88,8 @@ type WorkoutViewProps = {
   onSelectDay: (index: number, date: string) => void
   onBack: () => void
   onLogSet: (exerciseId?: string) => void
+  onCompleteTimedExercise: (exerciseId: string) => void
+  completingTimedExerciseId: string | null
   onSkipSet: (exerciseId: string, index: number) => void
   onUnlogSet: (exerciseId: string, index: number) => void
   onStartEditingSet: (exerciseId: string, index: number) => void
@@ -172,6 +174,8 @@ const WorkoutView: FC<WorkoutViewProps> = ({
   onSelectDay,
   onBack,
   onLogSet,
+  onCompleteTimedExercise,
+  completingTimedExerciseId,
   onSkipSet,
   onUnlogSet,
   onStartEditingSet,
@@ -658,6 +662,20 @@ const WorkoutView: FC<WorkoutViewProps> = ({
           </div>
           {activeExercise ? (
             <div className="detail-header-actions">
+              {activeExercise.metric === 'time' && activeExercise.status !== 'skip' && hasNext ? (
+                <button
+                  type="button"
+                  className="detail-complete-btn"
+                  aria-label={t('workout.completeTimedExercise')}
+                  title={t('workout.completeTimedExercise')}
+                  disabled={!canLogDay || completingTimedExerciseId !== null}
+                  onClick={() => onCompleteTimedExercise(activeExercise.id)}
+                >
+                  <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                    <path d="M5 12.5l4.5 4.5L19 7" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </button>
+              ) : null}
               {activeExercise.exerciseKey ? (
                 <button
                   type="button"
@@ -711,7 +729,7 @@ const WorkoutView: FC<WorkoutViewProps> = ({
               type="button"
               aria-label={`${isAllDone ? t('common.done') : t('workout.now')} ${footerTitle}: ${nextActionLabel}`}
               onClick={isAllDone ? onBack : () => onLogSet(logTargetExercise?.id)}
-              disabled={!canLogDay || (!isAllDone && !hasLogTarget)}
+              disabled={!canLogDay || completingTimedExerciseId !== null || (!isAllDone && !hasLogTarget)}
             >
               <span className="detail-log-main">
                 <span>{isAllDone ? t('common.done') : t('workout.now')}</span>
