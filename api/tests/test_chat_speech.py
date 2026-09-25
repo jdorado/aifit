@@ -24,8 +24,8 @@ async def test_speech_is_scoped_to_the_authenticated_coach(monkeypatch, link, ru
     async def snapshot(*args):
         return {"scope": main.chat_run_scope(main.MINI_CHAT_SCOPE, run_link)}
 
-    async def speech(bound, job_id):
-        speech_calls.append((bound, job_id))
+    async def speech(bound, job_id, language):
+        speech_calls.append((bound, job_id, language))
         return b"audio"
 
     monkeypatch.setattr(main, "chat_account", account)
@@ -34,13 +34,14 @@ async def test_speech_is_scoped_to_the_authenticated_coach(monkeypatch, link, ru
     monkeypatch.setattr(main, "ez_speech", speech)
     job_id = "r_app_" + "a" * 64
     if allowed:
-        response = await main.chat_speech(job_id, "owner", Identity(subject="owner", email=None), link)
+        response = await main.chat_speech(job_id, "owner", Identity(subject="owner", email=None), "es", link)
         assert response.body == b"audio"
         assert response.headers["cache-control"] == "no-store"
         assert len(speech_calls) == 1
+        assert speech_calls[0][2] == "es"
         assert accounts == [link, link]
     else:
         with pytest.raises(HTTPException) as error:
-            await main.chat_speech(job_id, "owner", Identity(subject="owner", email=None), link)
+            await main.chat_speech(job_id, "owner", Identity(subject="owner", email=None), "es", link)
         assert error.value.status_code == 404
         assert not speech_calls

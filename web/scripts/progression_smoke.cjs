@@ -5,7 +5,7 @@ const ts = require('typescript')
 const transpile = source => ts.transpile(source, { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.CommonJS })
 const source = fs.readFileSync(path.join(__dirname, '../src/App.tsx'), 'utf8')
 const start = source.indexOf('  const syncLoggedSet = useCallback(')
-const end = source.indexOf('  const completeTimedExercise = useCallback(', start)
+const end = source.indexOf('  const completeExercise = useCallback(', start)
 assert.ok(start >= 0 && end > start)
 const set = { weight: '40kg', metric: '12', rpe: 8, done: true }
 const calls = []

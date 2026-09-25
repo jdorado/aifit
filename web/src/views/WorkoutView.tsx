@@ -100,7 +100,7 @@ type WorkoutViewProps = {
   onSelectDay: (index: number, date: string) => void
   onBack: () => void
   onLogSet: (exerciseId?: string) => void
-  onCompleteTimedExercise: (exerciseId: string) => void
+  onCompleteExercise: (exerciseId: string) => void
   onUnlogSet: (exerciseId: string, index: number) => void
   onStartEditingSet: (exerciseId: string, index: number) => void
   onSaveEditingSet: () => void
@@ -193,7 +193,7 @@ const WorkoutView: FC<WorkoutViewProps> = ({
   onSelectDay,
   onBack,
   onLogSet,
-  onCompleteTimedExercise,
+  onCompleteExercise,
   onUnlogSet,
   onStartEditingSet,
   onSaveEditingSet,
@@ -728,14 +728,14 @@ const WorkoutView: FC<WorkoutViewProps> = ({
           </div>
           {activeExercise ? (
             <div className="detail-header-actions">
-              {activeExercise.metric === 'time' && activeExercise.status !== 'skip' && hasNext ? (
+              {activeExercise.status !== 'skip' && hasNext ? (
                 <button
                   type="button"
                   className="detail-complete-btn"
-                  aria-label={t('workout.completeTimedExercise')}
-                  title={t('workout.completeTimedExercise')}
+                  aria-label={t('workout.completeExercise')}
+                  title={t('workout.completeExercise')}
                   disabled={!canLogDay}
-                  onClick={() => onCompleteTimedExercise(activeExercise.id)}
+                  onClick={() => onCompleteExercise(activeExercise.id)}
                 >
                   <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
                     <path d="M5 12.5l4.5 4.5L19 7" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
@@ -756,6 +756,11 @@ const WorkoutView: FC<WorkoutViewProps> = ({
                   </svg>
                 </button>
               ) : null}
+              <CoachingAudio
+                key={activeExercise.id}
+                disabled={!coachChatEnabled || coachMessages.some((message) => message.thinking)}
+                onListen={() => onCoachListen(activeExercise.id)}
+              />
               <button
                 type="button"
                 className={`detail-coach-btn${coachChatOpen ? ' active' : ''}`}
@@ -785,13 +790,6 @@ const WorkoutView: FC<WorkoutViewProps> = ({
         </div>
 
         <div className="detail-content">
-          {activeExercise ? (
-            <CoachingAudio
-              key={activeExercise.id}
-              disabled={!coachChatEnabled || coachMessages.some((message) => message.thinking)}
-              onListen={() => onCoachListen(activeExercise.id)}
-            />
-          ) : null}
           {renderDetailContent()}
         </div>
 

@@ -83,17 +83,24 @@ async def verified_binding(principal_id: str, *, telegram: bool = False) -> dict
     return {**binding, "bindingId": binding_id}
 
 
-async def speech(binding: dict, run_id: str) -> bytes:
+async def speech(binding: dict, run_id: str, language: str = "en") -> bytes:
     """Render an existing Ez reply; text and provider credentials stay with Ez."""
     try:
         async with httpx.AsyncClient(timeout=75) as client:
             response = await client.post(
                 binding["url"].rstrip("/") + f"/v1/runs/{run_id}/speech",
                 headers={"Authorization": f"Bearer {_private_text(binding['tokenFile'])}"},
+                json={"language": language},
             )
         if response.status_code == 404:
             raise HTTPException(503, "Audio coaching needs an Ez update.")
         if response.status_code == 503:
+            try:
+                speech_error = response.json()
+            except ValueError:
+                speech_error = {}
+            if speech_error.get("code") == "speech_credits_depleted":
+                raise HTTPException(503, {"code": "speech_credits_depleted", "message": "Gemini speech credits are depleted."})
             raise HTTPException(503, "Audio coaching is not configured yet.")
         response.raise_for_status()
         audio = response.content
