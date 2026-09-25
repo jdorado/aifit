@@ -5,6 +5,8 @@ import CoachChat from '../components/workout/CoachChat'
 import ExerciseFeedback from '../components/workout/ExerciseFeedback'
 import ExerciseHistorySheet from '../components/workout/ExerciseHistorySheet'
 import SwapCandidateSheet from '../components/workout/SwapCandidateSheet'
+import AddExerciseSheet from '../components/workout/AddExerciseSheet'
+import type { ExerciseRepertoire, RepertoireCandidate } from '../utils/exerciseRepertoire'
 import ExerciseSetList from '../components/workout/ExerciseSetList'
 import VideoGallery from '../components/workout/VideoGallery'
 import WeekStrip from '../components/workout/WeekStrip'
@@ -97,6 +99,8 @@ type WorkoutViewProps = {
   onCancelEditingSet: () => void
   onUpdateSetField: (exerciseId: string, index: number, field: 'weight' | 'metric', value: string, propagate?: boolean) => void
   onCommitSetTarget: (exerciseId: string, index: number, field: 'weight' | 'metric') => void
+  onLoadExerciseRepertoire: () => Promise<ExerciseRepertoire>
+  onAddExercise: (candidate: RepertoireCandidate, repertoire: ExerciseRepertoire) => Promise<boolean>
   onAddSet: (exerciseId: string) => void
   onRemoveSet: (exerciseId: string, index: number) => void
   onStartHoldTimer: (
@@ -182,6 +186,8 @@ const WorkoutView: FC<WorkoutViewProps> = ({
   onCancelEditingSet,
   onUpdateSetField,
   onCommitSetTarget,
+  onLoadExerciseRepertoire,
+  onAddExercise,
   onAddSet,
   onRemoveSet,
   onStartHoldTimer,
@@ -205,6 +211,8 @@ const WorkoutView: FC<WorkoutViewProps> = ({
   onExtractItem,
 }) => {
   const { t, language } = useI18n()
+  const [addExerciseOpen, setAddExerciseOpen] = useState(false)
+  useEffect(() => { setAddExerciseOpen(false) }, [selectedDateId, actAsLinkId, active])
   const [coachChatOpen, setCoachChatOpen] = useState(false)
   const [coachDraft, setCoachDraft] = useState('')
   const [historyOpen, setHistoryOpen] = useState(false)
@@ -619,6 +627,8 @@ const WorkoutView: FC<WorkoutViewProps> = ({
         getNextCircuitExercise={getNextCircuitExercise}
         onSelectEntry={onSelectEntry}
         canEditPlan={canEditPlan}
+        canAddExercise={canEditPlan && canLogDay && !loading}
+        onAddExercise={() => setAddExerciseOpen(true)}
         onRemoveExercise={onRemoveExercise}
         onRemoveCircuit={onRemoveCircuit}
         onRemoveSection={onRemoveSection}
@@ -626,6 +636,15 @@ const WorkoutView: FC<WorkoutViewProps> = ({
         onMoveItem={onMoveItem}
         onExtractItem={onExtractItem}
       />
+
+      {addExerciseOpen ? (
+        <AddExerciseSheet
+          key={`${selectedDateId}:${actAsLinkId}`}
+          onLoad={onLoadExerciseRepertoire}
+          onAdd={onAddExercise}
+          onClose={() => setAddExerciseOpen(false)}
+        />
+      ) : null}
 
       <section className={`workout-detail ${activeEntryId ? 'active' : ''}`} data-section-color={detailSectionColorSlot}>
         <div className="detail-header-bar">

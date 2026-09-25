@@ -44,6 +44,7 @@ from .workouts import (
     PlanInput,
     PlanItemMoveInput,
     PlanItemExtractInput,
+    ExerciseAddInput,
     PlanReorderInput,
     PublishInput,
     SetAddInput,
@@ -881,6 +882,17 @@ async def remove_workout_exercise_v1(workout_id: str, exercise_instance_id: str,
 async def remove_workout_segment_v1(workout_id: str, segment_id: str, body: PlanEntryRemoveInput,
                                     account: dict = Depends(require_edit_account)) -> dict:
     return await workouts().remove_segment(account["account_id"], workout_id, segment_id, body)
+
+
+@app.get("/v1/workouts/{workout_id}/exercise-repertoire")
+async def workout_exercise_repertoire_v1(workout_id: str, account: dict = Depends(require_view_account)) -> dict:
+    return await workouts().exercise_repertoire(account["account_id"], workout_id)
+
+
+@app.post("/v1/workouts/{workout_id}/exercises")
+async def add_workout_exercise_v1(workout_id: str, body: ExerciseAddInput,
+                                  account: dict = Depends(require_edit_account)) -> dict:
+    return await workouts().add_exercise(account["account_id"], workout_id, body)
 
 
 @app.post("/v1/workouts/{workout_id}/segments/reorder")

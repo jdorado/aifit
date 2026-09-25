@@ -418,6 +418,14 @@ class PlanItemExtractInput(StrictModel):
     request_id: str = Field(min_length=1, max_length=160, pattern=r"^[A-Za-z0-9_.:-]+$")
 
 
+class ExerciseAddInput(PlanEntryRemoveInput):
+    blueprint_id: str = Field(min_length=1, max_length=160)
+    expected_blueprint_revision: str = Field(pattern=r"^rev_[a-f0-9]{32}$")
+    day_id: str = Field(min_length=1, max_length=160)
+    slot_id: str = Field(min_length=1, max_length=160)
+    candidate_id: str = Field(min_length=1, max_length=160)
+
+
 class WorkoutNotesInput(StrictModel):
     notes: str = Field(max_length=4_000)
     expected_revision: str = Field(pattern=r"^rev_[a-f0-9]{32}$")
@@ -878,8 +886,9 @@ class WorkoutService:
                             "blueprint_revision": blueprint["revision"], "day_id": day["day_id"], "decision_receipt": {"engine": "bounded_ranker_v1", "selections": decisions}},
                 "created_at": timestamp, "updated_at": timestamp}
 
-    async def _candidate_exercise(self, account_id: str, candidate: dict[str, Any]) -> dict[str, Any]:
-        document = await self.db.exercises.find_one({
+    async def _candidate_exercise(self, account_id: str, candidate: dict[str, Any],
+                                  definitions: dict[tuple[str, str], dict[str, Any]] | None = None) -> dict[str, Any]:
+        document = definitions.get((candidate["exercise_id"], candidate["exercise_revision"])) if definitions is not None else await self.db.exercises.find_one({
             "account_id": account_id,
             "exercise_id": candidate["exercise_id"],
             "revision": candidate["exercise_revision"],
@@ -1421,6 +1430,88 @@ class WorkoutService:
             metric_text = f"{metric_text} · {load['value']:g}{load['unit']}"
         return metric_text
 
+    async def exercise_repertoire(self, account_id: str, workout_id: str) -> dict[str, Any]:
+        """Unique exercises from the active blueprint, preferring today's prescription."""
+        workout = await self.workout(account_id, workout_id)
+        blueprint = (await self.active_blueprint(account_id))["blueprint"]
+        used = {item["exercise_snapshot"]["exercise_id"] for segment in workout["segments"] for item in segment["items"]}
+        seen = set(blueprint.get("hard_constraints", {}).get("forbidden_exercise_ids", []))
+        exercise_ids = {candidate["exercise_id"] for day in blueprint["days"] for segment in day["segments"]
+                        for slot in segment["slots"] for candidate in slot["candidates"]}
+        exercise_revisions = {candidate["exercise_revision"] for day in blueprint["days"] for segment in day["segments"]
+                              for slot in segment["slots"] for candidate in slot["candidates"]}
+        # One catalog read keeps opening the picker fast even for a full monthly plan.
+        definitions = {(exercise["exercise_id"], exercise["revision"]): exercise for exercise in await self.db.exercises.find(
+            {"account_id": account_id, "exercise_id": {"$in": list(exercise_ids)}, "revision": {"$in": list(exercise_revisions)}},
+        ).to_list()}
+        options = []
+        for day in sorted(blueprint["days"], key=lambda day: (day["date"] != workout["date"], day["date"])):
+            for segment in sorted(day["segments"], key=lambda segment: segment["order"]):
+                for slot in sorted(segment["slots"], key=lambda slot: slot["order"]):
+                    for candidate in sorted(slot["candidates"], key=lambda candidate: (candidate["priority"], candidate["candidate_id"])):
+                        if candidate["exercise_id"] in seen:
+                            continue
+                        seen.add(candidate["exercise_id"])
+                        exercise = await self._candidate_exercise(account_id, candidate, definitions)
+                        targets = candidate["prescription"].get("round_targets") or [candidate["prescription"]["target"]]
+                        summaries = [self._candidate_target_summary({"prescription": {**candidate["prescription"], "target": target}})
+                                     for target in targets]
+                        options.append({
+                            "day_id": day["day_id"], "slot_id": slot["slot_id"], "candidate_id": candidate["candidate_id"],
+                            "exercise_id": candidate["exercise_id"], "name": exercise["name"],
+                            "equipment_kind": exercise.get("equipment_kind", ""),
+                            "primary_muscles": exercise.get("primary_muscles", []),
+                            "secondary_muscles": exercise.get("secondary_muscles", []),
+                            "role": slot["role"], "day_title": day["title"], "section_title": segment.get("title") or "",
+                            "sets": segment["rounds"], "target_summary": " / ".join(dict.fromkeys(summaries)),
+                            "already_added": candidate["exercise_id"] in used,
+                        })
+        return {"workout_id": workout_id, "workout_revision": workout["revision"],
+                "blueprint_id": blueprint["blueprint_id"], "blueprint_revision": blueprint["revision"],
+                "candidates": sorted(options, key=lambda option: option["name"].casefold())}
+
+    @transactional_mutation
+    async def add_exercise(self, account_id: str, workout_id: str, input: ExerciseAddInput) -> dict[str, Any]:
+        fingerprint = _fingerprint({"add_exercise": workout_id, **input.model_dump(mode="json")})
+        prior = await self._receipt(account_id, input.request_id, fingerprint)
+        if prior:
+            return prior
+        workout = await self._editable_workout(account_id, workout_id, input.expected_revision)
+        blueprint = (await self.active_blueprint(account_id))["blueprint"]
+        if blueprint["blueprint_id"] != input.blueprint_id or blueprint["revision"] != input.expected_blueprint_revision:
+            raise WorkoutDomainError("stale_blueprint", "Your plan changed. Reopen Add exercise to use the current plan.")
+        source = next(((day, segment, slot, candidate)
+                       for day in blueprint["days"] if day["day_id"] == input.day_id
+                       for segment in day["segments"]
+                       for slot in segment["slots"] if slot["slot_id"] == input.slot_id
+                       for candidate in slot["candidates"] if candidate["candidate_id"] == input.candidate_id), None)
+        if source is None:
+            raise WorkoutDomainError("add_candidate_not_found", "This exercise is no longer in your plan.", 422)
+        day, segment, slot, candidate = source
+        if candidate["exercise_id"] in blueprint.get("hard_constraints", {}).get("forbidden_exercise_ids", []):
+            raise WorkoutDomainError("exercise_forbidden", "This exercise is excluded from your plan.", 422)
+        if any(item["exercise_snapshot"]["exercise_id"] == candidate["exercise_id"]
+               for existing in workout["segments"] for item in existing["items"]):
+            raise WorkoutDomainError("exercise_already_added", "This exercise is already in this workout.")
+        exercise = await self._candidate_exercise(account_id, candidate)
+        snapshot = {key: exercise[key] for key in ("exercise_id", "name", "movement_pattern", "primary_muscles", "secondary_muscles", "equipment_kind", "laterality", "load_basis")}
+        snapshot.update(exercise_revision=candidate["exercise_revision"], equipment_profile_id=candidate.get("equipment_profile_id"))
+        # Copy the published prescription exactly, including distinct targets per round.
+        targets = candidate["prescription"].get("round_targets") or [candidate["prescription"]["target"]] * segment["rounds"]
+        item = {"exercise_instance_id": new_id("wex"), "slot_id": slot["slot_id"], "candidate_id": candidate["candidate_id"],
+                "order": 1, "exercise_snapshot": snapshot, "cues_md": self._cues(candidate, exercise),
+                "source_blueprint": {"blueprint_id": blueprint["blueprint_id"], "blueprint_revision": blueprint["revision"], "day_id": day["day_id"]},
+                "sets": [{"set_id": new_id("set"), "kind": "work", "target": deepcopy(target), "actual": None, "round": index}
+                         for index, target in enumerate(targets, start=1)]}
+        workout["segments"].append({
+            "segment_id": new_id("seg"), "order": len(workout["segments"]) + 1, "kind": "straight_sets",
+            "title": exercise["name"], "rounds": len(targets),
+            "rest_after_round_seconds": candidate["prescription"].get("rest_seconds", 0), "items": [item],
+        })
+        return await self._replace_or_delete_workout(
+            account_id, workout_id, input.expected_revision, input.request_id, fingerprint, "exercise_added", workout,
+        )
+
     async def _swap_context(
         self,
         account_id: str,
@@ -1449,11 +1540,11 @@ class WorkoutService:
         open_sets = [set_row for set_row in target_item["sets"] if set_row.get("actual") is None]
         if not open_sets:
             raise WorkoutDomainError("completed_exercise_locked", "Every set of this exercise is logged; there is nothing left to swap.")
-        active = await self.active_blueprint(account_id, workout["date"])
+        active = await self.active_blueprint(account_id, None if target_item.get("source_blueprint") else workout["date"])
         blueprint = active["blueprint"]
         if expected_blueprint_revision and expected_blueprint_revision != blueprint["revision"]:
             raise WorkoutDomainError("stale_blueprint", "Blueprint changed. Pull the current blueprint before swapping.")
-        lineage = workout.get("lineage", {})
+        lineage = target_item.get("source_blueprint") or workout.get("lineage", {})
         if (
             lineage.get("blueprint_id") != blueprint["blueprint_id"]
             or lineage.get("blueprint_revision") != blueprint["revision"]
@@ -1573,6 +1664,8 @@ class WorkoutService:
             target_item["sets"] = logged_sets
             replacement = {"exercise_instance_id": new_id("wex"), "slot_id": target_item["slot_id"], "candidate_id": candidate["candidate_id"],
                            "order": target_item["order"] + 1, "exercise_snapshot": snapshot, "sets": new_sets, "cues_md": self._cues(candidate, exercise)}
+            if target_item.get("source_blueprint"):
+                replacement["source_blueprint"] = deepcopy(target_item["source_blueprint"])
             position = target_segment["items"].index(target_item) + 1
             target_segment["items"].insert(position, replacement)
             for index, item in enumerate(target_segment["items"]):
@@ -1770,6 +1863,7 @@ class WorkoutService:
                     "exercise_snapshot": deepcopy(item["exercise_snapshot"]),
                     "sets": sets,
                     "cues_md": item.get("cues_md", ""),
+                    **({"source_blueprint": deepcopy(item["source_blueprint"])} if item.get("source_blueprint") else {}),
                 })
             segment_copy: dict[str, Any] = {
                 "segment_id": new_id("seg"),
