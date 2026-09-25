@@ -1784,6 +1784,12 @@ const App = () => {
   }) => {
     let activePlan = plan
     let nextLogs = options?.logsByDay ? { ...options.logsByDay } : { ...weekSetLogsRef.current }
+    const previousDay = weekPlanRef.current.days[selectedDayIndexRef.current]
+    const previousLogs = previousDay ? weekSetLogsRef.current[previousDay.date] : undefined
+    const activeEntry = activeEntryRef.current
+    const previousExercise = activeEntry.type === 'exercise'
+      ? previousDay?.exercises.find((exercise) => exercise.id === activeEntry.id)
+      : null
 
     let todayIndex = findDayIndexByDate(activePlan.days, todayId)
     if (options?.preferToday && todayIndex < 0) {
@@ -1829,18 +1835,33 @@ const App = () => {
     syncDayRefs(activePlan, safeIndex)
     const nextSelectedDay = activePlan.days[safeIndex]
     // Selection is navigation state; it must not restart account hydration.
-    const activeEntry = activeEntryRef.current
-    const activeEntryStillExists = Boolean(
-      options?.preserveActiveEntry
-      && activeEntry.id
-      && (
-        (activeEntry.type === 'exercise'
-          && nextSelectedDay?.exercises.some((exercise) => exercise.id === activeEntry.id))
-        || (activeEntry.type === 'extra'
-          && nextSelectedDay?.extras.some((extra) => extra.id === activeEntry.id))
-      )
-    )
-    if (!activeEntryStillExists) {
+    const sameExercise = nextSelectedDay?.exercises.find((exercise) => exercise.id === activeEntry.id)
+    const oldHadOpenSets = previousExercise?.sets.some((_, index) => (
+      !previousLogs?.[previousExercise.id]?.[index]?.done
+      && !previousLogs?.[previousExercise.id]?.[index]?.skipped
+    ))
+    const oldNowHasOpenSets = sameExercise?.sets.some((_, index) => (
+      !nextLogs[nextSelectedDay?.date ?? '']?.[sameExercise.id]?.[index]?.done
+      && !nextLogs[nextSelectedDay?.date ?? '']?.[sameExercise.id]?.[index]?.skipped
+    ))
+    const slotReplacement = previousExercise?.slotId && (!sameExercise || (oldHadOpenSets && !oldNowHasOpenSets))
+      ? nextSelectedDay?.exercises.find((exercise) => (
+        exercise.slotId === previousExercise.slotId
+        && exercise.id !== activeEntry.id
+        && nextLogs[nextSelectedDay.date]?.[exercise.id]?.some((set) => !set.done && !set.skipped)
+      ))
+      : null
+    const selectedExercise = slotReplacement ?? sameExercise
+      ?? (previousExercise?.slotId
+        ? nextSelectedDay?.exercises.find((exercise) => exercise.slotId === previousExercise.slotId)
+        : null)
+    if (options?.preserveActiveEntry && activeEntry.type === 'exercise' && selectedExercise) {
+      if (selectedExercise.id !== activeEntry.id) {
+        activeEntryRef.current = { id: selectedExercise.id, type: 'exercise' }
+        setActiveEntryId(selectedExercise.id)
+      }
+    } else if (!(options?.preserveActiveEntry && activeEntry.type === 'extra'
+      && nextSelectedDay?.extras.some((extra) => extra.id === activeEntry.id))) {
       hideWorkoutDetail()
     }
     bumpData()
@@ -2741,8 +2762,8 @@ const App = () => {
     weekPlan,
   ])
 
-  const applySavedWorkoutSessionToWeek = useCallback((session: WorkoutSession) => (
-    applySavedWorkoutSessionsToWeek([session])
+  const applySavedWorkoutSessionToWeek = useCallback((session: WorkoutSession, preserveActiveEntry = false) => (
+    applySavedWorkoutSessionsToWeek([session], { preserveActiveEntry })
   ), [applySavedWorkoutSessionsToWeek])
 
   useEffect(() => {
@@ -3801,9 +3822,9 @@ const App = () => {
     todayId,
   ])
 
-  const handleSelectSwapCandidate = useCallback(async (candidate: SwapCandidate) => {
+  const handleSelectSwapCandidate = useCallback(async (candidate: SwapCandidate): Promise<boolean> => {
     const response = swapResponseRef.current
-    if (!response || swappingCandidateId) return
+    if (!response || swappingCandidateId) return false
     setSwappingCandidateId(candidate.candidate_id)
     try {
       const headers = { 'Content-Type': 'application/json', ...await getPrivyAuthHeaders() }
@@ -3826,13 +3847,14 @@ const App = () => {
       }
       const receipt = await result.json() as BackendWorkoutReceipt
       if (!receipt.workout) throw new Error(t('workout.swapFailed'))
-      applySavedWorkoutSessionToWeek(backendWorkoutToSession(receipt.workout, currentUserId))
+      applySavedWorkoutSessionToWeek(backendWorkoutToSession(receipt.workout, currentUserId), true)
       handleCloseSwap()
       try {
         await refreshVisibleWorkoutSessions()
       } catch {
         // The swap receipt above already reflects the canonical record.
       }
+      return true
     } catch (error) {
       console.warn('Swap exercise failed:', error)
       const code = error instanceof SwapCandidatesError ? error.code : null
@@ -3840,6 +3862,7 @@ const App = () => {
       setSwapError(key === 'swapFailed'
         ? (error instanceof Error && error.message ? error.message : t('workout.swapFailed'))
         : t(`workout.${key}`))
+      return false
     } finally {
       setSwappingCandidateId(null)
     }

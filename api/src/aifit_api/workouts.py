@@ -6,7 +6,7 @@ call the same service so neither transport can create a second workout contract.
 
 from __future__ import annotations
 
-from collections import defaultdict
+from collections import Counter, defaultdict
 from contextvars import ContextVar
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
@@ -1653,6 +1653,28 @@ class WorkoutService:
             account_id, blueprint, day,
             GenerateInput(date=input.date, source="default", request_id=input.request_id),
         )
+        if current:
+            old_open_items = [item for segment in current["segments"] for item in segment["items"]
+                              if any(set_row.get("actual") is None for set_row in item["sets"])]
+            new_items = [item for segment in materialized["segments"] for item in segment["items"]]
+            old_counts = Counter(item["exercise_snapshot"]["exercise_id"] for item in old_open_items)
+            new_counts = Counter(item["exercise_snapshot"]["exercise_id"] for item in new_items)
+            removed, added = old_counts - new_counts, new_counts - old_counts
+            # A one-for-one agent replacement remains the same logical slot,
+            # even when its complete override artifact used a fresh slot ID.
+            # The native mini-chat can then continue with the new exercise.
+            if sum(removed.values()) == sum(added.values()) == 1:
+                removed_id, added_id = next(iter(removed)), next(iter(added))
+                if old_counts[removed_id] == new_counts[added_id] == 1:
+                    old_item = next(item for item in old_open_items
+                                    if item["exercise_snapshot"]["exercise_id"] == removed_id)
+                    new_item = next(item for item in new_items
+                                    if item["exercise_snapshot"]["exercise_id"] == added_id)
+                    old_slot_id = old_item.get("slot_id")
+                    if (old_slot_id
+                            and sum(item.get("slot_id") == old_slot_id for item in old_open_items) == 1
+                            and not any(item is not new_item and item.get("slot_id") == old_slot_id for item in new_items)):
+                        new_item["slot_id"] = old_slot_id
         if preserved_segments:
             used_segment_ids = {segment["segment_id"] for segment in preserved_segments}
             for segment in materialized["segments"]:

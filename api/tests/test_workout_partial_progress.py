@@ -243,6 +243,7 @@ async def test_override_keeps_logged_sets_and_replaces_only_open_work():
     database = FakeDatabase()
     service, workout = await generated_day(database)
     workout, logged_set_id = await log_set_at(service, workout, 0, "log-001")
+    original_slot_id = workout["segments"][0]["items"][0]["slot_id"]
 
     response = await service.override(
         "acc_one",
@@ -267,6 +268,7 @@ async def test_override_keeps_logged_sets_and_replaces_only_open_work():
     assert kept[0]["sets"][0]["actual"]["reps"] == 10
     added = merged["segments"][1]["items"]
     assert [item["exercise_snapshot"]["exercise_id"] for item in added] == ["ex_incline_press"]
+    assert added[0]["slot_id"] == original_slot_id
     assert all(set_row["actual"] is None for item in added for set_row in item["sets"])
     assert merged["lineage"]["source"] == "agent_override"
     assert merged["lineage"]["override"]["replaced_revision"] == workout["revision"]
@@ -276,6 +278,7 @@ async def test_override_keeps_logged_sets_and_replaces_only_open_work():
 async def test_override_without_logs_still_replaces_the_whole_day():
     database = FakeDatabase()
     service, workout = await generated_day(database)
+    original_slot_id = workout["segments"][0]["items"][0]["slot_id"]
 
     response = await service.override(
         "acc_one",
@@ -294,3 +297,4 @@ async def test_override_without_logs_still_replaces_the_whole_day():
     assert merged["status"] == "planned"
     assert len(merged["segments"]) == 1
     assert [item["exercise_snapshot"]["exercise_id"] for item in merged["segments"][0]["items"]] == ["ex_incline_press"]
+    assert merged["segments"][0]["items"][0]["slot_id"] == original_slot_id

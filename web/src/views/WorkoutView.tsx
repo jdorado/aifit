@@ -114,7 +114,7 @@ type WorkoutViewProps = {
   swapError: string | null
   swapCandidates: SwapCandidate[]
   onOpenSwap: (exerciseId: string) => Promise<boolean>
-  onSelectSwapCandidate: (candidate: SwapCandidate) => void
+  onSelectSwapCandidate: (candidate: SwapCandidate) => Promise<boolean>
   onCloseSwap: () => void
   onRemoveExercise: (exerciseId: string) => void
   onRemoveCircuit: (segmentId: string) => void
@@ -407,7 +407,7 @@ const WorkoutView: FC<WorkoutViewProps> = ({
     setCoachDraft('')
     setHistoryOpen(false)
     onCloseSwap()
-  }, [activeExercise?.id])
+  }, [activeExercise?.slotId || activeExercise?.id])
 
   const openExerciseHistory = useCallback(() => {
     const exerciseId = activeExercise?.exerciseKey
@@ -776,8 +776,15 @@ const WorkoutView: FC<WorkoutViewProps> = ({
             error={swapError}
             exerciseName={activeExercise.name}
             candidates={swapCandidates}
-            onSelect={onSelectSwapCandidate}
-            onClose={onCloseSwap}
+            onSelect={(candidate) => {
+              void onSelectSwapCandidate(candidate).then((swapped) => {
+                if (swapped) setCoachChatOpen(true)
+              })
+            }}
+            onClose={() => {
+              onCloseSwap()
+              setCoachChatOpen(true)
+            }}
           />
         ) : null}
       </section>
