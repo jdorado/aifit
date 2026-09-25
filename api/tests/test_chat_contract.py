@@ -585,6 +585,78 @@ async def test_mini_chat_model_selection_uses_scope_control(tmp_path, monkeypatc
     })]
 
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", ["owner-chat", "owner-minichat"])
+async def test_coach_model_controls_share_the_admitted_coach_scope(monkeypatch, identity, scope):
+    monkeypatch.setattr(main, "account_for", lambda *_args: async_value(COACH))
+    monkeypatch.setattr(main, "coach_links", lambda: link_service())
+    trainee_db(monkeypatch)
+    bound = []
+    monkeypatch.setattr(main, "verified_binding", lambda account_id: bound.append(account_id) or async_value({"bindingId": "trainee"}))
+    calls = []
+
+    async def ez_call(binding, method, path, body=None):
+        assert binding == {"bindingId": "trainee"}
+        calls.append((method, path, body))
+        if path == "/v1/runs":
+            return {"id": "coach_run"}
+        if path == "/v1/runs/coach_run":
+            return {"status": "completed", "messages": []}
+        return ez_control("deepseek", [DEEPSEEK_PRESET], CATALOG, "coach_session")
+
+    monkeypatch.setattr(main, "ez_call", ez_call)
+    result = await main.chat_models(identity, scope=scope, act_as_link_id="cl_1")
+    await main.select_chat_model(main.ModelSelectionInput(
+        scope=scope, act_as_link_id="cl_1", expected_session=result["active_session_id"], **DEEPSEEK,
+    ), identity)
+    await main.enqueue_chat(main.ChatInput(
+        user_id=identity.subject, request_id=uuid4(), message="read the workout",
+        scope=scope, act_as_link_id="cl_1",
+    ), identity)
+
+    expected_scope = main.stable_id("coach", f"cl_1:{scope}")
+    assert bound == [TRAINEE["account_id"]] * 3
+    assert calls[0][:2] == ("GET", f"/v1/scope-control?scope={expected_scope}")
+    assert calls[1] == ("POST", calls[0][1], {
+        "action": "model", "expectedSession": "coach_session", **DEEPSEEK,
+    })
+    assert calls[2][2]["scope"] == expected_scope
+    assert "followOwner" not in calls[2][2]
+    assert expected_scope != main.chat_run_scope(scope, "another_coach_link")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["get", "select"])
+@pytest.mark.parametrize("denial", ["foreign", "revoked", "read_only"])
+async def test_coach_model_controls_recheck_link_authority_before_contacting_ez(monkeypatch, identity, operation, denial):
+    from aifit_api.coach_links import CoachLinkService
+    from aifit_api.workouts import WorkoutDomainError
+    from test_coach_links import FakeDatabase, COACH as LINK_COACH, active_link
+
+    database = FakeDatabase()
+    service = CoachLinkService(database)
+    link = await active_link(service)
+    changes = {
+        "foreign": {"coach_account_id": "another_coach"},
+        "revoked": {"status": "revoked"},
+        "read_only": {"permissions": {"view_progress": True, "edit_programs": False}},
+    }
+    await database.coach_links.find_one_and_update({"link_id": link["link_id"]}, {"$set": changes[denial]})
+    monkeypatch.setattr(main, "account_for", lambda *_args: async_value(LINK_COACH))
+    monkeypatch.setattr(main, "coach_links", lambda: service)
+
+    async def no_binding(*_args):
+        pytest.fail("Unauthorized model controls must not reach a tenant binding")
+
+    monkeypatch.setattr(main, "verified_binding", no_binding)
+    with pytest.raises(WorkoutDomainError) as error:
+        if operation == "get":
+            await main.chat_models(identity, act_as_link_id=link["link_id"])
+        else:
+            await main.select_chat_model(main.ModelSelectionInput(act_as_link_id=link["link_id"], **DEEPSEEK), identity)
+    assert error.value.status_code == (409 if denial == "revoked" else 403)
+
 def async_value(value):
     async def result():
         return value
