@@ -3004,26 +3004,35 @@ const App = () => {
       }, revertLocal)
   }, [bumpData, canQuerySavedWorkoutSessions, coachActAsOwnerId, currentUserId, enqueueWorkoutWrite, getExercise, selectedDay?.date, todayId])
 
-  const completeTimedExercise = useCallback(async (exerciseId: string) => {
+  const completeExercise = useCallback(async (exerciseId: string) => {
     if (!canLogSelectedDay || logPendingRef.current) return
     const exercise = getExercise(exerciseId)
-    if (!exercise || exercise.metric !== 'time' || exercise.status === 'skip') return
+    if (!exercise || exercise.status === 'skip') return
     const stateList = ensureExerciseStateList(exercise)
     const unfinished = exercise.sets.map((set, index) => ({ set, index }))
       .filter(({ index }) => !stateList[index]?.done)
     if (!unfinished.length) return
+
+    const values = unfinished.map(({ set, index }) => {
+      const state = stateList[index]
+      const metric = exercise.metric === 'time'
+        ? (state.metric || `${parseDurationToSeconds(set.targetTime) ?? 60}s`)
+        : normalizeRepValue(state.metric || set.targetReps)
+      const weight = normalizeWeightLabel(normalizeWorkoutTargetText(state.weight || set.targetWeight) ?? '')
+      return { index, metric, weight }
+    })
+    if (values.some(({ metric, weight }) => !parseActualMetric(exercise, metric) || (weight && !parseActualLoad(weight)))) return
 
     logPendingRef.current = true
     queueMicrotask(() => { logPendingRef.current = false })
     resetHoldTimer()
     stopRest()
     const saves: Promise<boolean>[] = []
-    for (const { set, index } of unfinished) {
+    for (const { index, metric, weight } of values) {
       const state = stateList[index]
       const previous: SetSyncRevert = { ...state }
-      const duration = parseDurationToSeconds(set.targetTime) ?? 60
-      state.metric = `${duration}s`
-      state.weight = normalizeWorkoutTargetText(state.weight || set.targetWeight) ?? ''
+      state.metric = metric
+      state.weight = weight
       if (state.weight && !state.value_source) state.value_source = 'accepted_target'
       state.skipped = false
       state.done = true
@@ -3631,15 +3640,20 @@ const App = () => {
     if (typeof result?.job_id !== 'string') throw new Error(t('workout.coachingAudioFailed'))
     const params = new URLSearchParams({
       user_id: currentUserId,
+      language: profile.language,
       ...(coachActAsLinkId ? { act_as_link_id: coachActAsLinkId } : {}),
     })
     const response = await apiFetch(`${API_BASE_URL}/chat/jobs/${encodeURIComponent(result.job_id)}/speech?${params}`, {
       method: 'POST',
       headers: await getPrivyAuthHeaders(),
     })
-    if (!response.ok) throw readApiError(await response.json().catch(() => null), response.status, t('workout.coachingAudioFailed'))
+    if (!response.ok) {
+      const error = readApiError(await response.json().catch(() => null), response.status, t('workout.coachingAudioFailed'))
+      if (error.code === 'speech_credits_depleted') throw new Error(t('workout.coachingAudioCredits'))
+      throw error
+    }
     return response.blob()
-  }, [handleCoachSend, t, currentUserId, coachActAsLinkId, getPrivyAuthHeaders])
+  }, [handleCoachSend, t, currentUserId, profile.language, coachActAsLinkId, getPrivyAuthHeaders])
 
   const handleCloseSwap = useCallback(() => {
     swapExerciseIdRef.current = null
@@ -4812,7 +4826,7 @@ const App = () => {
             onSelectDay={handleSelectDay}
             onBack={hideWorkoutDetail}
             onLogSet={logNextSet}
-            onCompleteTimedExercise={(exerciseId) => { void completeTimedExercise(exerciseId) }}
+            onCompleteExercise={(exerciseId) => { void completeExercise(exerciseId) }}
             onUnlogSet={unlogSet}
             onUpdateSetEffort={(exerciseId, index, rpe) => {
               if (!canLogSelectedDay || logPendingRef.current) return

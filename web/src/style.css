@@ -2076,27 +2076,52 @@ p {
 }
 
 .coaching-audio {
-  margin-bottom: 12px;
+  position: relative;
 }
 
-.coaching-audio button {
+.view[data-view="workout"] .coaching-audio .detail-audio-btn {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  min-height: 40px;
-  padding: 8px 14px;
-  border: 1px solid var(--aifit-border, #e2e8f0);
-  border-radius: 12px;
-  background: var(--aifit-soft, #f1f5f9);
-  color: var(--aifit-ink, #17283b);
-  font: inherit;
-  font-size: 13px;
+  justify-content: center;
+  width: 36px;
+  min-width: 36px;
+  height: 36px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--aifit-ink);
   cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
 }
 
-.coaching-audio button:disabled {
+.view[data-view="workout"] .coaching-audio .detail-audio-btn.active {
+  background: var(--aifit-purple);
+  color: #ffffff;
+}
+
+.coaching-audio .detail-audio-btn svg {
+  width: 18px;
+  height: 18px;
+}
+
+.coaching-audio .detail-audio-btn:disabled {
   opacity: 0.6;
   cursor: default;
+}
+
+.coaching-audio-panel {
+  position: absolute;
+  top: 42px;
+  right: 0;
+  z-index: 5;
+  width: min(320px, calc(100vw - 28px));
+  padding: 10px;
+  border: 1px solid var(--aifit-border, #e2e8f0);
+  border-radius: 12px;
+  background: #ffffff;
+  box-shadow: var(--shadow-sm);
 }
 
 .coaching-audio audio {
@@ -2106,7 +2131,7 @@ p {
 }
 
 .coaching-audio p {
-  margin: 8px 0 0;
+  margin: 0;
   font-size: 13px;
 }
 
@@ -7365,6 +7390,8 @@ body:has(.view[data-view="workout"] .workout-detail.active) {
 }
 
 .view[data-view="workout"] .detail-header-bar {
+  position: relative;
+  z-index: 5;
   min-height: calc(var(--safe-top) + 72px);
   height: auto;
   padding: calc(var(--safe-top) + 18px) 20px 12px;

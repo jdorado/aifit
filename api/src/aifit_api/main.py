@@ -670,6 +670,7 @@ async def chat_job(job_id: str, user_id: str, identity: Identity = Depends(requi
 
 @app.post("/chat/jobs/{job_id}/speech")
 async def chat_speech(job_id: str, user_id: str, identity: Identity = Depends(require_identity),
+                      language: str = Query(default="en", pattern="^(en|es)$"),
                       act_as_link_id: str | None = Query(default=None, max_length=200)) -> Response:
     account = await chat_account(identity, user_id, act_as_link_id)
     if not re.fullmatch(r"r_app_[a-f0-9]{64}", job_id):
@@ -678,7 +679,7 @@ async def chat_speech(job_id: str, user_id: str, identity: Identity = Depends(re
     current = await ez_call(binding, "GET", f"/v1/runs/{job_id}")
     if current.get("scope") != chat_run_scope(MINI_CHAT_SCOPE, act_as_link_id):
         raise HTTPException(404, "Chat reply not found.")
-    audio = await ez_speech(binding, job_id)
+    audio = await ez_speech(binding, job_id, language)
     # Re-check a coach link in case access changed during synthesis.
     await chat_account(identity, user_id, act_as_link_id)
     return Response(audio, media_type="audio/wav", headers={"Cache-Control": "no-store"})

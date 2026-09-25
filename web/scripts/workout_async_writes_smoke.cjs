@@ -34,7 +34,7 @@ async function main() {
     parseActualMetric: (_exercise, value) => ({ reps: Number(value) }),
     enqueueWorkoutWrite: h.enqueue,
   }
-  const sync = callback('syncLoggedSet', 'completeTimedExercise', env)
+  const sync = callback('syncLoggedSet', 'completeExercise', env)
   // unlogLoggedSet is followed by an effect; extract only its declaration.
   const undo = callback('unlogLoggedSet', 'unlogSet', { ...env, useEffect() {}, syncLoggedSetRef: { current: null }, syncLoggedSet: sync })
   const logging = sync('a', 0)
