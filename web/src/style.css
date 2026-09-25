@@ -10944,26 +10944,31 @@ body:has(.landing) {
 .view[data-view="workout"] .workout-day-actions {
   display: flex;
   flex-wrap: wrap;
-  align-items: flex-start;
-  gap: 8px;
-  padding: 8px 16px 12px;
+  align-items: center;
+  gap: 6px;
+  margin: -8px 0 -8px;
+  padding: 0;
 }
 
 .view[data-view="workout"] .workout-day-actions .workout-add-exercise,
 .view[data-view="workout"] .workout-day-actions .plan-notes-toggle {
   width: auto;
-  min-height: 40px;
-  padding: 8px 12px;
+  min-height: 34px;
+  padding: 5px 10px;
   display: inline-flex;
   align-items: center;
-  gap: 7px;
+  gap: 6px;
   border: 1px solid rgba(7, 26, 53, 0.12);
-  border-radius: 12px;
+  border-radius: 10px;
   background: #fff;
   color: var(--aifit-ink);
   font: inherit;
-  font-size: calc(13px * var(--font-scale));
-  font-weight: 650;
+  font-size: calc(12px * var(--font-scale));
+  font-weight: 600;
+}
+
+.view[data-view="workout"] .workout-day-actions + .workout-list .workout-stage-row:first-child {
+  margin-top: 4px;
 }
 
 .view[data-view="workout"] .workout-day-actions .plan-notes {
