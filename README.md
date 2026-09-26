@@ -99,7 +99,9 @@ authenticated audio. This needs Ez's `POST /v1/runs/{id}/speech` endpoint and a
 configured `GEMINI_API_KEY`. Playback can be paused and replayed without another
 generation while the exercise remains open. Browsers that block autoplay show
 the native Play control. Changing exercise stops playback. Ez selects the
-configured English or Spanish voice from the app language.
+configured English or Spanish voice from the selected app language, which is
+saved for signed-in accounts. In coach view, the audio request reads the
+trainee's saved language when available.
 
 ## License
 
