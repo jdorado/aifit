@@ -1031,6 +1031,8 @@ const App = () => {
     language: initialLanguage,
     fontScale: getInitialFontScale(),
   }))
+  const accountLanguageLoadedForRef = useRef<string | null>(null)
+  const languageEditVersionRef = useRef(0)
   const [currentUserEmail, setCurrentUserEmail] = useState<string | null>(null)
   const [currentUserId, setCurrentUserId] = useState('')
   const [privyAuthError, setPrivyAuthError] = useState<string | null>(null)
@@ -3636,11 +3638,20 @@ const App = () => {
   ])
 
   const handleCoachListen = useCallback(async (exerciseId: string): Promise<Blob> => {
-    const result = await handleCoachSend(exerciseId, t('workout.coachingAudioPrompt'))
+    let language = profile.language
+    if (coachActAsLinkId) {
+      const response = await apiFetch(`${API_BASE_URL}/account/language?act_as_link_id=${encodeURIComponent(coachActAsLinkId)}`, {
+        headers: await getPrivyAuthHeaders(),
+      })
+      if (!response.ok) throw new Error(t('workout.coachingAudioFailed'))
+      const preference = await response.json() as { language?: unknown }
+      if (preference.language === 'en' || preference.language === 'es') language = preference.language
+    }
+    const result = await handleCoachSend(exerciseId, createI18n(language).t('workout.coachingAudioPrompt'))
     if (typeof result?.job_id !== 'string') throw new Error(t('workout.coachingAudioFailed'))
     const params = new URLSearchParams({
       user_id: currentUserId,
-      language: profile.language,
+      language,
       ...(coachActAsLinkId ? { act_as_link_id: coachActAsLinkId } : {}),
     })
     const response = await apiFetch(`${API_BASE_URL}/chat/jobs/${encodeURIComponent(result.job_id)}/speech?${params}`, {
@@ -4252,14 +4263,23 @@ const App = () => {
   }, [getPrivyAuthHeaders, privyAuthenticated, privyReady, privySubjectId])
 
   useEffect(() => {
-    if (!privyReady || !privyAuthenticated || !isBackendHealthy) return
+    if (!privyReady || !privyAuthenticated || !isBackendHealthy || !currentUserId
+      || accountLanguageLoadedForRef.current === currentUserId) return
     let cancelled = false
+    const languageEditVersion = languageEditVersionRef.current
     const provision = async () => {
       try {
         const headers = await getPrivyAuthHeaders()
         if (!headers.Authorization || cancelled) return
         const response = await apiFetch(`${API_BASE_URL}/account`, { headers })
-        if (!cancelled && !response.ok) {
+        if (!cancelled && response.ok) {
+          const account = await response.json() as { language?: unknown }
+          accountLanguageLoadedForRef.current = currentUserId
+          if (languageEditVersionRef.current === languageEditVersion
+            && (account.language === 'en' || account.language === 'es')) {
+            setProfile((prev) => ({ ...prev, language: account.language as Language }))
+          }
+        } else if (!cancelled) {
           console.warn('Account provision failed:', response.status)
           setPrivyAuthError(t('auth.signInFailed'))
         }
@@ -4274,7 +4294,7 @@ const App = () => {
     return () => {
       cancelled = true
     }
-  }, [getPrivyAuthHeaders, isBackendHealthy, privyAuthenticated, privyReady, t])
+  }, [currentUserId, getPrivyAuthHeaders, isBackendHealthy, privyAuthenticated, privyReady, t])
 
   useEffect(() => {
     if (!isBackendHealthy || !privyReady || !privyAuthenticated) {
@@ -4307,6 +4327,7 @@ const App = () => {
       if (privyAuthenticated) {
         await privyLogout()
         privyAccessTokenRef.current = null
+        accountLanguageLoadedForRef.current = null
         setUserEmail(null)
       } else {
         await privyLogin()
@@ -4726,10 +4747,21 @@ const App = () => {
   const handleProfileChange = useCallback((field: 'language' | 'fontScale', value: string) => {
     if (field === 'language') {
       const normalized = normalizeLanguage(value) ?? 'en'
+      languageEditVersionRef.current += 1
       setProfile((prev) => ({
         ...prev,
         language: normalized,
       }))
+      if (privyAuthenticated) {
+        void (async () => {
+          const response = await apiFetch(`${API_BASE_URL}/account/language`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json', ...(await getPrivyAuthHeaders()) },
+            body: JSON.stringify({ language: normalized }),
+          })
+          if (!response.ok) throw new Error(t('profile.languageSaveFailed'))
+        })().catch((error) => window.alert(error instanceof Error ? error.message : t('profile.languageSaveFailed')))
+      }
       return
     }
     if (field === 'fontScale') {
@@ -4740,7 +4772,7 @@ const App = () => {
       }))
       return
     }
-  }, [])
+  }, [getPrivyAuthHeaders, privyAuthenticated, t])
 
   useEffect(() => {
     if (!workoutSavePending) return

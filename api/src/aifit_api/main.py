@@ -189,6 +189,11 @@ class ModelSelectionInput(BaseModel):
     effort: str | None = Field(default=None, min_length=1, max_length=40)
 
 
+class LanguagePreferenceInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    language: Literal["en", "es"]
+
+
 class TelegramBotInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     bot_token: str = Field(min_length=26, max_length=512, pattern=r"^\d{5,}:[A-Za-z0-9_-]{20,}$")
@@ -265,7 +270,8 @@ async def account_for(identity: Identity) -> dict:
 
 def public_account(account: dict, setup_status: str) -> dict:
     return {"account_id": account["account_id"], "tenant_id": account["tenant_id"], "role": account["role"],
-            "email": account.get("email"), "setup": {"status": setup_status, "agent_available": setup_status == "ready"}}
+            "email": account.get("email"), "language": account.get("language"),
+            "setup": {"status": setup_status, "agent_available": setup_status == "ready"}}
 
 
 def public_telegram_connection(value: Any, needs_link: bool = False) -> dict:
@@ -732,6 +738,24 @@ def canonical_account(permission: str):
 
 require_view_account = canonical_account("view_progress")
 require_edit_account = canonical_account("edit_programs")
+
+
+@app.get("/account/language")
+async def get_account_language(account: dict = Depends(require_view_account)) -> dict:
+    owner = await db.accounts.find_one({"account_id": account["account_id"]}, {"language": 1})
+    if not owner:
+        raise HTTPException(404, "Account not found.")
+    language = owner.get("language")
+    return {"language": language if language in {"en", "es"} else None}
+
+
+@app.patch("/account/language")
+async def set_account_language(body: LanguagePreferenceInput,
+                               identity: Identity = Depends(require_identity)) -> dict:
+    account = await account_for(identity)
+    await db.accounts.update_one({"account_id": account["account_id"]},
+                                 {"$set": {"language": body.language, "updated_at": now()}})
+    return {"language": body.language}
 
 
 @app.post("/v1/coach-links")
