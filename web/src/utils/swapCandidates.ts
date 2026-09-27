@@ -1,3 +1,5 @@
+import { readExerciseFit, type ExerciseFit } from './exerciseFit'
+
 export type SwapCandidate = {
   candidate_id: string
   exercise_id: string
@@ -6,6 +8,7 @@ export type SwapCandidate = {
   priority: number
   target_summary: string
   rest_seconds: number
+  fit?: ExerciseFit
 }
 
 export type SwapCandidates = {
@@ -102,6 +105,7 @@ const normalizeCandidate = (value: unknown): SwapCandidate | null => {
     priority,
     target_summary: asString(row.target_summary) ?? '',
     rest_seconds: restSeconds,
+    fit: readExerciseFit(row.fit),
   }
 }
 
@@ -112,7 +116,7 @@ export const fetchSwapCandidates = async ({
   exerciseInstanceId,
   actAsLinkId = null,
 }: SwapCandidatesFetch): Promise<SwapCandidates> => {
-  const params = new URLSearchParams()
+  const params = new URLSearchParams({ rank_fit: 'true' })
   if (actAsLinkId) params.set('act_as_link_id', actAsLinkId)
   const query = params.toString()
   const response = await fetch(

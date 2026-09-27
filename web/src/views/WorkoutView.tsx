@@ -227,6 +227,17 @@ const WorkoutView: FC<WorkoutViewProps> = ({
   const { t, language } = useI18n()
   const [audioPanelTarget, setAudioPanelTarget] = useState<HTMLDivElement | null>(null)
   const [addExerciseOpen, setAddExerciseOpen] = useState(false)
+  const swapFromChatRef = useRef(false)
+
+  const openSwap = (fromChat: boolean) => {
+    if (!activeExercise) return
+    swapFromChatRef.current = fromChat
+    setHistoryOpen(false)
+    setCoachChatOpen(false)
+    void onOpenSwap(activeExercise.id).then((sentToCoach) => {
+      if (sentToCoach) setCoachChatOpen(true)
+    })
+  }
   const [planNotesOpen, setPlanNotesOpen] = useState(false)
   useEffect(() => { setAddExerciseOpen(false) }, [selectedDateId, actAsLinkId, active])
   const progressionKey = `${actAsLinkId ?? 'self'}:${workoutId ?? ''}:${workoutRevision ?? ''}`
@@ -655,7 +666,7 @@ const WorkoutView: FC<WorkoutViewProps> = ({
       {!activeEntryId ? (
         <div className="workout-day-actions">
           {canEditPlan && canLogDay && !loading ? (
-            <button type="button" className="workout-add-exercise" onClick={() => setAddExerciseOpen(true)}>
+            <button type="button" className="workout-add-exercise" disabled={savePending || saveError} onClick={() => setAddExerciseOpen(true)}>
               <span className="workout-day-action-icon" aria-hidden="true">＋</span>
               <span>{t('workout.addExercise')}</span>
             </button>
@@ -752,6 +763,19 @@ const WorkoutView: FC<WorkoutViewProps> = ({
                   </svg>
                 </button>
               ) : null}
+              <button
+                type="button"
+                className={`detail-history-btn${swapOpen ? ' active' : ''}`}
+                aria-label={t('workout.swapTitle')}
+                title={t('workout.swapTitle')}
+                aria-expanded={swapOpen}
+                disabled={!canEditPlan || savePending || saveError || !activeExercise.sets.some((_, index) => !setLogs[activeExercise.id]?.[index]?.done)}
+                onClick={() => openSwap(false)}
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path d="M4 7h15m-4-4 4 4-4 4M20 17H5m4-4-4 4 4 4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </button>
               <CoachingAudio
                 key={activeExercise.id}
                 disabled={!coachChatEnabled || coachMessages.some((message) => message.thinking)}
@@ -848,14 +872,7 @@ const WorkoutView: FC<WorkoutViewProps> = ({
             onQuickPrompt={(message) => {
               if (activeExercise) onCoachSend(activeExercise.id, message)
             }}
-            onSwap={() => {
-              if (activeExercise) {
-                setCoachChatOpen(false)
-                void onOpenSwap(activeExercise.id).then((sentToCoach) => {
-                  if (sentToCoach) setCoachChatOpen(true)
-                })
-              }
-            }}
+            onSwap={canEditPlan && !savePending && !saveError && activeExercise.sets.some((_, index) => !setLogs[activeExercise.id]?.[index]?.done) ? () => openSwap(true) : undefined}
           />
         ) : null}
 
@@ -869,12 +886,12 @@ const WorkoutView: FC<WorkoutViewProps> = ({
             candidates={swapCandidates}
             onSelect={(candidate) => {
               void onSelectSwapCandidate(candidate).then((swapped) => {
-                if (swapped) setCoachChatOpen(true)
+                if (swapped) setCoachChatOpen(swapFromChatRef.current)
               })
             }}
             onClose={() => {
               onCloseSwap()
-              setCoachChatOpen(true)
+              setCoachChatOpen(swapFromChatRef.current)
             }}
           />
         ) : null}

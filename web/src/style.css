@@ -11160,3 +11160,19 @@ body:has(.landing) {
   color: inherit;
   text-decoration: underline;
 }
+
+/* Compact fit ratings reuse the exercise picker cards. */
+.exercise-fit-hint { margin: 0 0 4px; color: #64748b; font-size: 12px; line-height: 1.5; }
+.exercise-fit { --fit-color: #64748b; display: grid; gap: 6px; margin: 3px 0; }
+.exercise-fit[data-level="strong"] { --fit-color: #16834b; }
+.exercise-fit[data-level="good"] { --fit-color: var(--aifit-purple); }
+.exercise-fit[data-level="low"] { --fit-color: #936217; }
+.exercise-fit-heading { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; font-size: 12px; }
+.exercise-fit-heading strong { color: var(--fit-color); font-size: 13px; }
+.exercise-fit-heading small { color: #64748b; font-size: 11px; }
+.exercise-fit-meter { display: block; height: 3px; background: #e8edf3; border-radius: 8px; overflow: hidden; }
+.exercise-fit-meter > span { display: block; height: 100%; background: var(--fit-color); border-radius: inherit; }
+.exercise-fit-factors { display: flex; flex-wrap: wrap; gap: 4px 12px; color: #64748b; font-size: 11px; }
+.exercise-fit-factors b { color: var(--aifit-ink); font-weight: 600; }
+.view[data-view="workout"] .detail-history-btn:disabled { opacity: .45; cursor: default; }
+@media (max-width: 380px) { .detail-header-actions { gap: 4px; } }

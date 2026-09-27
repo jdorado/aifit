@@ -89,6 +89,25 @@ exercise with the published sets and targets. It requires an existing workout,
 preserves logged sets, and uses revision checks and idempotent receipts. This
 browser flow does not run the coach or modify the blueprint.
 
+Add exercise and the swap icon in the exercise header request optional Jev fit
+ratings with `rank_fit=true` on their existing read endpoints. The same swap
+picker remains available in Ask coach. Ratings combine today's training intent
+(40%), recent logged training (30%), and current workout progress (30%). Each
+factor uses Jev's probability-weighted Score primitive; the displayed 0–100 fit
+is a rubric score, not a probability of success. Low-confidence factors mark the
+rating as tentative. Only eligible published candidates can be selected, and a
+partial swap still preserves logged sets.
+
+Set `TYPESAFE_API_KEY` in the external API env file to enable ratings; optional
+`TYPESAFE_MODEL` defaults to `jev-latest`. This bounded read uses TypeSafe's
+[System One API](https://docs.typesafe.ai/api), with the selected tenant's
+canonical training records for the preceding 14 days. It does not read agent
+workspace files, change the blueprint, or add a coach session. Small concurrent
+batches support a full monthly repertoire, with a five-second total deadline.
+Without a key, or when scoring fails or exceeds the context bound, the picker
+remains usable with explicit unavailable copy and no fabricated ratings.
+The default deterministic API/plugin reads and generation path are unchanged.
+
 The speaker icon beside exercise history and chat requests a short form guide through its
 existing coach chat, using the exercise, profile, and plan context available to
 the agent. It asks for setup, useful cues, and mistakes to avoid, with adjustments

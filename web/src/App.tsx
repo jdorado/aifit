@@ -3743,7 +3743,7 @@ const App = () => {
         headers,
         body: JSON.stringify({
           source: 'jev',
-          reason: `Picked ${candidate.name} from the MiniChat alternatives.`,
+          reason: `Picked ${candidate.name} from the plan alternatives.`,
           target_candidate_id: candidate.candidate_id,
           expected_revision: response.workout_revision,
           expected_blueprint_revision: response.blueprint_revision,
@@ -3911,7 +3911,7 @@ const App = () => {
     const context = requireEditContext()
     if (!context) throw new Error(t('workout.addExerciseUnavailable'))
     const response = await apiFetch(
-      withCoachActAs(`${API_BASE_URL}/v1/workouts/${encodeURIComponent(context.workoutId)}/exercise-repertoire`),
+      withCoachActAs(`${API_BASE_URL}/v1/workouts/${encodeURIComponent(context.workoutId)}/exercise-repertoire?rank_fit=true`),
       { headers: await getPrivyAuthHeaders() },
     )
     if (!response.ok) {
