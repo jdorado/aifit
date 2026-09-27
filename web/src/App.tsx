@@ -39,7 +39,6 @@ const MAIN_CHAT_HISTORY_LIMIT = 40
 const BACKEND_HEALTH_STALE_MS = 4 * 60 * 1000
 const BACKEND_HEALTH_PING_TIMEOUT_MS = 12 * 1000
 const CHAT_JOB_POLL_MS = 2500
-const CHAT_JOB_MAX_WAIT_MS = 8 * 60 * 1000
 
 type EzPreset = {
   id: string
@@ -2554,8 +2553,7 @@ const App = () => {
       ...(payload.act_as_link_id ? { act_as_link_id: payload.act_as_link_id } : {}),
     })
 
-    const startedAt = Date.now()
-    while (Date.now() - startedAt < CHAT_JOB_MAX_WAIT_MS) {
+    while (true) {
       await new Promise((resolve) => window.setTimeout(resolve, CHAT_JOB_POLL_MS))
 
       // Chat jobs can outlive the short-lived Privy token used to enqueue
@@ -2578,8 +2576,6 @@ const App = () => {
       }
       if (statusData.status === 'cancelled') throw new Error('Chat request was cancelled')
     }
-
-    throw new Error('Chat job timed out')
   }, [getPrivyAuthHeaders])
 
   const fetchWorkoutSessionsByDates = useCallback(async (dateIds: string[]): Promise<WorkoutSession[]> => {
