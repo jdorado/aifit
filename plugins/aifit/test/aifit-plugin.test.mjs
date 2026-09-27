@@ -74,6 +74,7 @@ test('help exposes the canonical reads and the full write surface', async () => 
     'aifit workout list',
     'aifit workout generate',
     'aifit workout log-set',
+    'aifit workout set-target',
     'aifit workout override',
     'aifit workout swap',
   ]) {
@@ -99,6 +100,7 @@ test('help and skill carry the artifact schema the agent must author', async () 
     'aifit workout show',
     'aifit exercise create',
     'aifit workout log-set',
+    'aifit workout set-target',
     'Receipts and errors',
   ]) {
     assert.ok(skill.includes(marker), `skill is missing ${marker}`);
@@ -223,6 +225,18 @@ test('exercise, log-set, generate, and swap transport their typed payloads', asy
       method: 'PATCH',
       headers: { authorization: 'Bearer capability-test', 'content-type': 'application/json' },
       body: { actual, expected_revision: 'rev_test', request_id: 'set-test' },
+    });
+
+    const target = { target: { reps: { min: 8, max: 12 }, load: { value: 125, unit: 'kg' } }, apply_to_remaining: true };
+    const retargeted = await runCli([
+      'workout', 'set-target', 'wrk_test', 'set_test', '--input', '-',
+      '--expected-revision', 'rev_test', '--request-id', 'target-test',
+    ], { context: scopedContext, fetchOutput, input: JSON.stringify(target) });
+    assert.equal(retargeted.code, 0, retargeted.stderr);
+    assert.deepEqual(await fetchRequest(fetchOutput), {
+      url: 'https://aifit.test/v1/agent/workouts/wrk_test/sets/set_test/target', method: 'PATCH',
+      headers: { authorization: 'Bearer capability-test', 'content-type': 'application/json' },
+      body: { ...target, expected_revision: 'rev_test', request_id: 'target-test' },
     });
 
     const generated = await runCli(['workout', 'generate', '--date', '2026-09-21', '--request-id', 'generate-test'], {

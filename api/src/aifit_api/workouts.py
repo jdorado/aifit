@@ -109,7 +109,7 @@ class Tempo(StrictModel):
 
 class ProgressionWhen(StrictModel):
     completed_reps_at_or_above: int = Field(ge=0, le=10_000)
-    max_rpe: float = Field(ge=0, le=10)
+    max_rpe: float | None = Field(default=None, ge=0, le=10)
 
 
 class Progression(StrictModel):

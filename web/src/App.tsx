@@ -4856,13 +4856,6 @@ const App = () => {
             onLogSet={logNextSet}
             onCompleteExercise={(exerciseId) => { void completeExercise(exerciseId) }}
             onUnlogSet={unlogSet}
-            onUpdateSetEffort={(exerciseId, index, rpe) => {
-              if (!canLogSelectedDay || logPendingRef.current) return
-              const setItem = setLogsRef.current[exerciseId]?.[index]
-              if (!setItem || (setItem.done && (editingSet?.exerciseId !== exerciseId || editingSet.index !== index))) return
-              setItem.rpe = rpe
-              bumpData()
-            }}
             onStartEditingSet={(exerciseId, index) => {
               const stateList = setLogsRef.current[exerciseId]
               const setItem = stateList?.[index]

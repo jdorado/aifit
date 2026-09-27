@@ -12,12 +12,14 @@ export type ExerciseProgression = {
   load_basis: string; prescribed_load: Load | null; next_load: Load | null
   policy: {
     kind: 'none' | 'double_progression'; goal?: string | null; phase?: string
-    increase_when?: { completed_reps_at_or_above: number; max_rpe: number } | null
+    increase_when?: { completed_reps_at_or_above: number; max_rpe?: number | null } | null
     load_range?: Load[] | null; review_by?: string | null
   }
   status: string; reason: string; qualifying_sessions: number; required_sessions: number
   expected_sets: number | null; target_reps: { min: number; max: number } | null
   latest: Exposure | null; trend: PerformanceTrend; review_reasons: string[]
+  previous?: Exposure | null
+  comparison?: { status: string; partial?: boolean; reference: Exposure | null; sets_compared: number }
 }
 export type MuscleProgression = {
   muscle: string; tracked_exercises: number; comparable_exercises: number; improving_exercises: number
@@ -33,8 +35,7 @@ export type WorkoutProgression = {
 
 export const formatProgressionLoad = (load: Load | null) => load ? `${Number(load.value.toFixed(2))} ${load.unit}` : '—'
 
-// This is only a preview against the prescribed target. Recorded performance
-// and readiness always come from the canonical API calculation.
+// A selected weight is only a preview; recorded sets establish progress.
 export const previewLoad = (value: string, summary: ExerciseProgression): string | null => {
   const match = value.trim().toLowerCase().match(/^(\d+(?:[.,]\d+)?)\s*(kg|lb)?$/)
   if (!match || !summary.prescribed_load) return null
@@ -42,6 +43,6 @@ export const previewLoad = (value: string, summary: ExerciseProgression): string
   const selected = kg({ value: Number(match[1].replace(',', '.')), unit: match[2] === 'lb' ? 'lb' : 'kg' })
   const range = summary.policy.load_range
   if (range && selected > kg(range[1]) + 0.001) return 'outsidePlan'
-  const delta = selected - kg(summary.prescribed_load)
+  const delta = selected - kg(summary.previous?.load ?? summary.prescribed_load)
   return Math.abs(delta) < 0.001 ? 'atTarget' : delta > 0 ? 'aboveTarget' : 'belowTarget'
 }
