@@ -1,5 +1,6 @@
 import { useEffect, type FC } from 'react'
 import { useI18n } from '../../i18n'
+import ExerciseFitRating from './ExerciseFitRating'
 import type { SwapCandidate } from '../../utils/swapCandidates'
 
 type SwapCandidateSheetProps = {
@@ -57,6 +58,7 @@ const SwapCandidateSheet: FC<SwapCandidateSheetProps> = ({
           ) : null}
           {!loading && !error && candidates.length > 0 ? (
             <div className="exercise-history-list">
+              <p className="exercise-fit-hint">{t(candidates.some((candidate) => candidate.fit) ? 'workout.fitHint' : 'workout.fitUnavailable')}</p>
               {candidates.map((candidate) => {
                 const busy = swappingId === candidate.candidate_id
                 return (
@@ -66,12 +68,13 @@ const SwapCandidateSheet: FC<SwapCandidateSheetProps> = ({
                     className="exercise-history-row"
                     disabled={swappingId !== null}
                     onClick={() => onSelect(candidate)}
-                    aria-label={t('workout.swapSelect', { name: candidate.name })}
+                    aria-label={`${t('workout.swapSelect', { name: candidate.name })}${candidate.fit ? ` · ${t('workout.fitScore', { score: candidate.fit.score })}` : ''}`}
                   >
                     <span className="exercise-history-row-head">
                       <strong>{candidate.name}</strong>
                       {busy ? <span>{t('workout.swapSwapping')}</span> : null}
                     </span>
+                    {candidate.fit ? <ExerciseFitRating fit={candidate.fit} /> : null}
                     <span className="exercise-history-metrics">
                       {candidate.target_summary ? <span>{candidate.target_summary}</span> : null}
                       {candidate.equipment_kind ? <span>{candidate.equipment_kind}</span> : null}

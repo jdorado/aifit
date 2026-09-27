@@ -25,6 +25,7 @@ from .auth import (
 )
 from . import telegram_admit
 from . import videos
+from .exercise_fit import rank_candidates
 from .coach_links import (
     CoachLinkAcceptInput,
     CoachLinkInviteInput,
@@ -929,8 +930,11 @@ async def remove_workout_segment_v1(workout_id: str, segment_id: str, body: Plan
 
 
 @app.get("/v1/workouts/{workout_id}/exercise-repertoire")
-async def workout_exercise_repertoire_v1(workout_id: str, account: dict = Depends(require_view_account)) -> dict:
-    return await workouts().exercise_repertoire(account["account_id"], workout_id)
+async def workout_exercise_repertoire_v1(workout_id: str, account: dict = Depends(require_view_account),
+                                         rank_fit: bool = False) -> dict:
+    service = workouts()
+    picker = await service.exercise_repertoire(account["account_id"], workout_id)
+    return await rank_candidates(service, account["account_id"], picker, "add") if rank_fit else picker
 
 
 @app.post("/v1/workouts/{workout_id}/exercises")
@@ -971,8 +975,10 @@ async def update_workout_exercise_notes_v1(workout_id: str, exercise_instance_id
 
 @app.get("/v1/workouts/{workout_id}/exercises/{exercise_instance_id}/swap-candidates")
 async def swap_candidates_v1(workout_id: str, exercise_instance_id: str,
-                             account: dict = Depends(require_view_account)) -> dict:
-    return await workouts().swap_candidates(account["account_id"], workout_id, exercise_instance_id)
+                             account: dict = Depends(require_view_account), rank_fit: bool = False) -> dict:
+    service = workouts()
+    picker = await service.swap_candidates(account["account_id"], workout_id, exercise_instance_id)
+    return await rank_candidates(service, account["account_id"], picker, "swap") if rank_fit else picker
 
 
 @app.post("/v1/workouts/{workout_id}/exercises/{exercise_instance_id}/swap")

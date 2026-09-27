@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FC } from 'react'
 import { createPortal } from 'react-dom'
 import { useI18n } from '../../i18n'
+import ExerciseFitRating from './ExerciseFitRating'
 import type { ExerciseRepertoire, RepertoireCandidate } from '../../utils/exerciseRepertoire'
 
 type Props = {
@@ -106,14 +107,16 @@ const AddExerciseSheet: FC<Props> = ({ onLoad, onAdd, onClose }) => {
         ) : null}
         {!loading && !error ? (
           <div className="exercise-history-list">
+            <p className="exercise-fit-hint">{t(repertoire?.candidates.some((candidate) => candidate.fit) ? 'workout.fitHint' : 'workout.fitUnavailable')}</p>
             {candidates.map((candidate) => (
               <button key={candidate.exercise_id} type="button" className="exercise-history-row"
                 disabled={candidate.already_added || addingId !== null} onClick={() => void add(candidate)}
-                aria-label={candidate.already_added ? `${candidate.name}: ${t('workout.addExerciseAlreadyAdded')}` : t('workout.addExerciseSelect', { name: candidate.name })}>
+                aria-label={candidate.already_added ? `${candidate.name}: ${t('workout.addExerciseAlreadyAdded')}` : `${t('workout.addExerciseSelect', { name: candidate.name })}${candidate.fit ? ` · ${t('workout.fitScore', { score: candidate.fit.score })}` : ''}`}>
                 <span className="exercise-history-row-head">
                   <strong>{candidate.name}</strong>
                   <span>{candidate.already_added ? t('workout.addExerciseAlreadyAdded') : addingId === candidate.exercise_id ? t('workout.addExerciseSaving') : '+'}</span>
                 </span>
+                {candidate.fit ? <ExerciseFitRating fit={candidate.fit} /> : null}
                 <span className="exercise-history-metrics">
                   <span>{t('workout.addExerciseSets', { count: candidate.sets })} · {candidate.target_summary}</span>
                   {candidate.equipment_kind ? <span>{candidate.equipment_kind.replace(/_/g, ' ')}</span> : null}
