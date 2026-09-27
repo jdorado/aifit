@@ -2263,12 +2263,12 @@ p {
 
 .coach-chat-input {
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   gap: 8px;
   margin: 0 12px max(10px, var(--chat-safe-bottom));
   min-height: 52px;
   padding: 6px 8px;
-  border-radius: 999px;
+  border-radius: 18px;
   border: 1px solid var(--glass-border);
   background: rgba(255, 255, 255, 0.03);
   flex-shrink: 0;
@@ -2276,6 +2276,8 @@ p {
 
 .coach-chat-input textarea {
   flex: 1;
+  min-width: 0;
+  min-height: 40px;
   border: none;
   background: transparent;
   color: var(--ink-primary);
@@ -2290,10 +2292,13 @@ p {
 }
 
 .coach-chat-input button {
+  flex: 0 0 auto;
+  min-width: 52px;
+  height: 40px;
   border: none;
   background: var(--brand-primary);
   color: white;
-  padding: 8px 14px;
+  padding: 0 14px;
   border-radius: 999px;
   font-size: calc(12px * var(--font-scale));
   font-weight: 600;
@@ -8393,7 +8398,7 @@ body:has(.view[data-view="workout"] .workout-detail.active) {
 .view[data-view="workout"] .coach-chat-input {
   min-height: 52px;
   border: 0;
-  border-radius: 999px;
+  border-radius: 18px;
   background: #ffffff;
 }
 
