@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState, type FC, type FocusEvent, type MouseEvent as ReactMouseEvent, type TouchEvent } from 'react'
+import { useCallback, useRef, useState, type FC, type ReactNode, type FocusEvent, type MouseEvent as ReactMouseEvent, type TouchEvent } from 'react'
 import { useI18n } from '../../i18n'
 import type { WorkoutExercise } from '../../data/testWorkout'
 import type { HoldTimerState, SetState } from '../../types/app'
@@ -21,7 +21,7 @@ type SwipeState = {
 
 type ExerciseSetListProps = {
   exercise: WorkoutExercise
-  selectedLoadFeedback?: string
+  progressionFeedback?: ReactNode
   setLabel: string
   stateList: SetState[]
   nextIndex: number
@@ -38,7 +38,6 @@ type ExerciseSetListProps = {
   onSaveEditingSet: () => void
   onCancelEditingSet: () => void
   onUnlogSet: (exerciseId: string, index: number) => void
-  onUpdateSetEffort: (exerciseId: string, index: number, rpe: number | undefined) => void
   onUpdateSetField: (exerciseId: string, index: number, field: 'weight' | 'metric', value: string, propagate?: boolean) => void
   onCommitSetTarget: (exerciseId: string, index: number, field: 'weight' | 'metric') => void
   onStartHoldTimer: (
@@ -53,7 +52,7 @@ type ExerciseSetListProps = {
 
 const ExerciseSetList: FC<ExerciseSetListProps> = ({
   exercise,
-  selectedLoadFeedback,
+  progressionFeedback,
   setLabel,
   stateList,
   nextIndex,
@@ -70,7 +69,6 @@ const ExerciseSetList: FC<ExerciseSetListProps> = ({
   onSaveEditingSet,
   onCancelEditingSet,
   onUnlogSet,
-  onUpdateSetEffort,
   onUpdateSetField,
   onCommitSetTarget,
   onStartHoldTimer,
@@ -126,18 +124,6 @@ const ExerciseSetList: FC<ExerciseSetListProps> = ({
 
     setSwipeActiveIndex((current) => (current === index ? null : index))
   }
-
-  const effortInput = (index: number) => exercise.metric === 'reps' && !exercise.sets[index].isWarmup ? (
-    <label className="set-effort" data-set-action="effort">
-      <span>{t('progression.effort')}</span>
-      <select aria-label={t('progression.effort')} value={stateList[index]?.rpe ?? ''} disabled={!canLogDay}
-        onChange={(event) => onUpdateSetEffort(exercise.id, index, event.target.value === '' ? undefined : Number(event.target.value))}>
-        <option value="">{t('progression.notRecorded')}</option>
-        {stateList[index]?.rpe !== undefined && ![6, 7, 8, 9, 10].includes(stateList[index].rpe!) ? <option value={stateList[index].rpe}>{stateList[index].rpe}</option> : null}
-        {[6, 7, 8, 9, 10].map((rpe) => <option key={rpe} value={rpe}>{rpe} · {t('progression.repsLeft', { count: 10 - rpe })}</option>)}
-      </select>
-    </label>
-  ) : null
 
   return (
     <>
@@ -234,6 +220,8 @@ const ExerciseSetList: FC<ExerciseSetListProps> = ({
                     </button>
                   </div>
 
+                  {progressionFeedback}
+
                   {hasDropSet ? (
                     <div className="drop-set">
                       <span className="drop-set-label">{t('workout.dropSetLabel')}</span>
@@ -320,8 +308,6 @@ const ExerciseSetList: FC<ExerciseSetListProps> = ({
                       </label>
                     ) : null}
                   </div>
-                  {selectedLoadFeedback ? <p className="progression-preview" aria-live="polite">{selectedLoadFeedback}</p> : null}
-                  {effortInput(index)}
                 </div>
               )
             }
@@ -388,7 +374,6 @@ const ExerciseSetList: FC<ExerciseSetListProps> = ({
                       </label>
                     ) : null}
                   </div>
-                  {effortInput(index)}
                 </div>
               )
             }
@@ -421,7 +406,7 @@ const ExerciseSetList: FC<ExerciseSetListProps> = ({
                 <div className="set-row-main">
                   <span className="set-num">{displayLabel}</span>
                   <div className="set-row-info">
-                    <span className="set-prev">{resultText}{currentState.rpe !== undefined && currentState.done && !isSkipped ? ` · RPE ${currentState.rpe}` : ''}</span>
+                    <span className="set-prev">{resultText}</span>
                     {hasDropSet ? (
                       <span className="set-drop-set">{t('workout.dropSetWithValue', { value: dropSetInfo.label })}</span>
                     ) : null}

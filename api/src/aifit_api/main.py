@@ -1173,3 +1173,15 @@ async def agent_log_set_v1(
     require_agent_permission(capability, AGENT_WRITE)
     require_agent_request(capability, body.request_id)
     return await workouts().log_set(capability.account_id, workout_id, set_id, body)
+
+
+@app.patch("/v1/agent/workouts/{workout_id}/sets/{set_id}/target")
+async def agent_set_target_v1(
+    workout_id: str,
+    set_id: str,
+    body: SetTargetInput,
+    capability: AgentCapability = Depends(require_agent_capability),
+) -> dict:
+    require_agent_permission(capability, AGENT_WRITE)
+    require_agent_request(capability, body.request_id)
+    return await workouts().update_set_target(capability.account_id, workout_id, set_id, body)

@@ -67,6 +67,7 @@ def exposure(workout: dict, item: dict) -> dict:
         "complete": complete, "logged_sets": len(actuals), "expected_sets": expected,
         "load": actuals[0].get("load") if uniform else None,
         "load_kg": loads[0] if uniform else None,
+        "set_positions": [index for index, row in enumerate(rows) if (row.get("actual") or {}).get("status") == "completed"],
         "reps": reps, "total_reps": sum(reps) if reps and None not in reps else None,
         "rpe": efforts, "effort_recorded": bool(efforts) and None not in efforts,
         "context": execution_context(item),
@@ -83,7 +84,7 @@ def public_exposure(row: dict | None) -> dict | None:
 def comparable(row: dict, reference: dict, *, same_load: bool = True) -> bool:
     return (row["complete"] and reference["complete"]
             and row["expected_sets"] == reference["expected_sets"]
-            and row["context"] is not None and row["context"] == reference["context"]
+            and (row["context"] is None or reference["context"] is None or row["context"] == reference["context"])
             and row["phase"] == reference["phase"] == "build"
             and not row["pain_or_form"] and not reference["pain_or_form"]
             and row["load_kg"] is not None and reference["load_kg"] is not None
@@ -98,9 +99,7 @@ def trend_for(exposures: list[dict]) -> dict:
     if not completed:
         return result
     latest = completed[-1]
-    matches = [row for row in completed if comparable(row, latest, same_load=False)
-               and (row["load_kg"] == latest["load_kg"]
-                    or (row["load_kg"] < latest["load_kg"] and all(a <= b for a, b in zip(row["reps"], latest["reps"]))))]
+    matches = [row for row in completed if comparable(row, latest, same_load=False)]
     result["latest"] = public_exposure(latest)
     result["exposures"] = len(matches)
     if len(matches) < 2:
@@ -113,7 +112,38 @@ def trend_for(exposures: list[dict]) -> dict:
     result.update({"reps_change": change, "days": (date.fromisoformat(latest["date"]) - date.fromisoformat(first["date"])).days,
                    "load_change_kg": load_change,
                    "effort_comparable": effort_comparable, "baseline": public_exposure(first),
-                   "status": ("improving" if change > 0 or load_change > 0 else "holding" if change == 0 else "lower") if effort_comparable else "effort_unconfirmed"})
+                   "status": performance_direction(latest, first)})
+    return result
+
+
+def performance_direction(latest: dict, reference: dict) -> str:
+    """Observed weight/reps only. A heavier, shorter set is a tradeoff."""
+    changes = [latest["load_kg"] - reference["load_kg"],
+               *[a - b for a, b in zip(latest["reps"], reference["reps"])]]
+    if all(value >= 0 for value in changes) and any(value > 0 for value in changes):
+        return "improving"
+    if all(value <= 0 for value in changes) and any(value < 0 for value in changes):
+        return "lower"
+    return "holding" if all(value == 0 for value in changes) else "mixed"
+
+
+def current_comparison(rows: list[dict]) -> dict:
+    """Compare logged sets with the same set positions last time, even mid-session."""
+    result = {"status": "baseline", "reference": None, "sets_compared": 0}
+    if not rows:
+        return result
+    latest = rows[-1]
+    previous = next((row for row in reversed(rows[:-1]) if comparable(row, {**latest, "complete": True}, same_load=False)), None)
+    if not previous or latest["load_kg"] is None or latest["total_reps"] is None:
+        return result
+    positions = latest["set_positions"]
+    if not positions or max(positions) >= len(previous["reps"]):
+        return result
+    reference = {**previous, "reps": [previous["reps"][index] for index in positions]}
+    status = performance_direction(latest, reference)
+    # A partly logged day never becomes a whole-session regression or PR.
+    result.update(status=status, reference=public_exposure(previous), sets_compared=len(positions),
+                  partial=not latest["complete"], date=latest["date"])
     return result
 
 
@@ -145,12 +175,16 @@ def analyze_exercise(snapshot: dict, context: dict | None, workouts: list[dict],
         "expected_sets": context.get("expected_sets"),
         "target_reps": context.get("prescription", {}).get("target", {}).get("reps"),
         "latest": public_exposure(latest), "trend": trend_for([row for row in rows if row["date"] >= (date.fromisoformat(as_of) - timedelta(days=27)).isoformat()]), "review_reasons": [],
+        "comparison": current_comparison(rows),
+        "previous": public_exposure(next((row for row in reversed(rows) if row["date"] < as_of and row["complete"]), None)),
         "age_comparison": {"status": "unavailable", "reason": "no_matching_reference"},
     }
-    equipment_known = not (snapshot.get("equipment_kind") in ("machine", "cable") and not snapshot.get("equipment_profile_id"))
     load_supported = snapshot.get("load_basis") in ("total", "per_hand", "per_side", "machine_stack")
-    if not equipment_known or not load_supported:
+    # Missing profile IDs match only other missing IDs for this same exercise.
+    # An explicit equipment change still starts a separate history via load_key.
+    if not load_supported:
         result["trend"] = trend_for([])
+        result["comparison"] = {"status": "baseline", "reference": None, "sets_compared": 0}
     since = context.get("start_date", as_of)
     block_rows = [row for row in rows if row["date"] >= since]
     if policy.get("review_by") and as_of >= policy["review_by"]:
@@ -159,8 +193,8 @@ def analyze_exercise(snapshot: dict, context: dict | None, workouts: list[dict],
         result["review_reasons"].append("review_exposures")
     count = policy.get("plateau_after_exposures")
     recent = block_rows[-count:] if count else []
-    if count and len(recent) == count and all(comparable(row, recent[0]) and row["effort_recorded"] for row in recent):
-        if all(row["total_reps"] <= recent[0]["total_reps"] and max(row["rpe"]) >= max(recent[0]["rpe"]) for row in recent[1:]):
+    if count and len(recent) == count and all(comparable(row, recent[0]) for row in recent):
+        if all(row["total_reps"] <= recent[0]["total_reps"] for row in recent[1:]):
             result["review_reasons"].append("no_recent_improvement")
     if latest and latest["pain_or_form"]:
         result["review_reasons"].append("exercise_feedback")
@@ -169,7 +203,7 @@ def analyze_exercise(snapshot: dict, context: dict | None, workouts: list[dict],
         return result
     if policy["kind"] != "double_progression":
         return result
-    if not load_supported or not equipment_known:
+    if not load_supported:
         result.update(status="insufficient_data", reason="equipment_not_comparable")
         return result
     if not latest:
@@ -195,7 +229,7 @@ def analyze_exercise(snapshot: dict, context: dict | None, workouts: list[dict],
         if not row["complete"] or row["expected_sets"] != expected:
             reason = "incomplete_exposure"
             break
-        if row["context"] is None or row["context"] != execution or row["phase"] != "build":
+        if (row["context"] is not None and row["context"] != execution) or row["phase"] != "build":
             reason = "execution_changed"
             break
         if row["pain_or_form"]:
@@ -203,12 +237,9 @@ def analyze_exercise(snapshot: dict, context: dict | None, workouts: list[dict],
             break
         if row["load_kg"] != recent_kg:
             break
-        if not row["effort_recorded"]:
-            reason = "missing_effort"
-            break
         if any(rep is None or rep < when["completed_reps_at_or_above"] for rep in row["reps"]):
             break
-        if any(effort > when["max_rpe"] for effort in row["rpe"]):
+        if when.get("max_rpe") is not None and any(effort is not None and effort > when["max_rpe"] for effort in row["rpe"]):
             reason = "effort_target_exceeded"
             break
         streak += 1
@@ -227,12 +258,23 @@ def analyze_exercise(snapshot: dict, context: dict | None, workouts: list[dict],
     elif streak:
         result.update(status="building", reason="more_qualifying_sessions")
     else:
-        result.update(status="insufficient_data" if reason in ("incomplete_exposure", "missing_effort", "execution_changed") else "building", reason=reason)
+        result.update(status="insufficient_data" if reason in ("incomplete_exposure", "execution_changed") else "building", reason=reason)
     if result["status"] == "insufficient_data":
+        previous = next((row for row in reversed(rows[:-1])
+                         if reason == "incomplete_exposure" and row["complete"]
+                         and row["expected_sets"] == expected and row["phase"] == "build"
+                         and not row["pain_or_form"]
+                         and (row["context"] is None or row["context"] == execution)
+                         and row["load_kg"] is not None
+                         and load_kg(lower) <= row["load_kg"] <= load_kg(upper)), None)
         previous_target = latest["prescribed_load"]
         previous_kg = load_kg(previous_target)
-        result["next_load"] = previous_target if (latest["context"] == execution and previous_kg is not None
-            and load_kg(lower) <= previous_kg <= load_kg(upper)) else target_load
+        if previous:
+            result["next_load"] = previous["load"]
+        elif latest["context"] == execution and previous_kg is not None and load_kg(lower) <= previous_kg <= load_kg(upper):
+            result["next_load"] = previous_target
+        else:
+            result["next_load"] = target_load
     if latest["pain_or_form"]:
         result.update(status="review", reason="exercise_feedback", next_load=target_load)
     return result
@@ -273,7 +315,7 @@ def summarize_muscles(workouts: list[dict], as_of: str) -> list[dict]:
         for name in set(snapshot.get("primary_muscles", [])):
             row = muscle(name)
             row["tracked_exercises"] += 1
-            row["comparable_exercises"] += int(summary["trend"]["effort_comparable"])
+            row["comparable_exercises"] += int(summary["trend"]["exposures"] >= 2)
             row["improving_exercises"] += int(summary["trend"]["status"] == "improving")
             row["exercises"].append({"exercise_id": snapshot["exercise_id"], "name": snapshot["name"], "trend": summary["trend"]})
     return sorted(muscles.values(), key=lambda row: row["muscle"])

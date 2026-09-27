@@ -1,60 +1,66 @@
 # Coaching progression
 
-The coach chooses the training path and publishes its parameters in the existing
-blueprint. The API calculates evidence from canonical workouts; the web app shows
-the result and previews a selected weight against today's prescription. Coaching
-judgment stays in the tenant's native Ez agent.
-
-The tenant template and installed AIFit skill describe a Galpin-inspired,
-individualized coaching approach. Existing personal workspace files are not
-rewritten. The plugin skill documents the complete progression schema and
-`aifit workout progression WORKOUT_ID` read command.
+The coach chooses the training path and publishes parameters in the blueprint.
+The API calculates observations from canonical workouts. Coaching judgment stays
+in the tenant's native Ez agent, guided by the installed AIFit skill; personal
+workspace files are not rewritten by the app.
 
 ## Workout experience
 
-- The exercise shows the goal, qualifying-session rule, current evidence and next
-  earned weight. Selected-weight feedback sits next to the active set controls.
-- Effort is recorded as RPE on each work set. It can be corrected with the existing
-  logged-set editor. Effort is never inherited into the next set.
-- Training history has a Muscle progress tab: improving/comparable exercise
-  setups and separate direct and indirect weekly work. These are performance and
-  workload observations, not a muscle-growth or population score.
-- Review with coach opens an editable prompt in the existing exercise chat.
+The active set has a compact traffic-light indicator: green for improving or
+ready to increase, amber for steady/building, red for lower performance or feedback
+needing attention. Text and arrows accompany color. Tap it for the next step,
+comparison and “Ask why” in the existing coach chat. Users log weight and reps;
+there is no effort questionnaire. A partly logged workout can say “Improving so
+far”, comparing the same set positions last time without declaring a whole-session PR.
+
+Training history's Muscle progress tab counts improving exercises and separates
+direct and indirect weekly sets. These are observed performance and workload,
+not a muscle-growth or population score. Unavailable age comparisons are hidden.
 
 ## Evidence rules
 
-Both generation and the progression endpoint use the same calculator. A complete
-exposure must contain the prescribed number of completed work sets, with compatible
-equipment, load basis, rest and tempo. Missing RPE cannot qualify for an increase.
-Skipped, removed, partially swapped and partially overridden work cannot earn a
-full-session increase. Logged records remain intact when the plan changes.
+Generation and the progression endpoint share the calculator. The same exercise,
+load basis, laterality and equipment profile match; missing profile IDs can match
+other missing IDs on that exercise. Legacy records without execution context are
+usable. Explicit differences in rest, tempo or equipment separate comparisons.
 
-Trends use 28 days; readiness can read 84 days. Higher load with fewer reps is an
-unresolved tradeoff. Increased assistance is not treated as increased strength.
-Legacy records without execution context remain visible but unconfirmed. Weekly
-set totals cover generated workouts, not every blueprint candidate. Future
-performance never informs an earlier workout.
+A full-session increase requires every prescribed work set to reach the coach's
+rep threshold for the required consecutive sessions. Missing RPE never blocks it;
+an optional effort limit only checks recorded effort. Skipped, removed, partially
+swapped and partially overridden work cannot earn an increase. Completed actuals
+establish the working load; partial work does not raise it or reset an established
+load to an older blueprint starting weight. For example, 125 kg × 10/12/12 holds
+125; 125 kg × 12/12/12 can earn 130 with a 5 kg, one-session policy.
 
-Maintenance and deload preserve the agent's prescribed target. Review dates,
-exposure counts and possible plateaus expose evidence for the coach; they do not
-automatically rewrite a plan. Age comparisons remain unavailable without a
-supported reference test. Newly generated workouts snapshot the policy; existing
-workouts are not silently backfilled or rewritten.
+Trends use 28 days; readiness can read 84 days. More weight with fewer reps is a
+mixed result. Assistance is not strength gain. Future performance never informs
+an earlier workout. Weekly totals cover materialized workouts.
 
-## Local verification
+Maintenance and deload preserve the coach's explicit prescription. Review dates,
+exposure counts and possible plateaus expose evidence for the coach. The agent
+combines history and volunteered feedback to judge fatigue and revise the path;
+it never writes inferred RPE as fact. `workout set-target` corrects an existing
+unlogged target through the existing revision-guarded operation; lasting policy
+changes belong in the blueprint. Logged sets remain intact.
 
-API progression tests cover completeness, effort, setup identity, load ceilings,
-future records, assistance, review triggers and tenant isolation. Frontend smoke
-checks exercise actual RPE persistence, effort edits, missing effort and weight
-previews, alongside existing workout interaction checks.
+## Focused QA
 
-The installed plugin was exercised through the local Ez coach against an isolated
-Mongo database: an incomplete 40 kg session stayed unconfirmed; completing its
-third set at 12 reps / RPE 8 earned 42 kg after two qualifying sessions. Canonical
-readback confirmed 42 kg on all three sets of the next generated workout and no
-changes to previously logged sets. The actual workout components were inspected
-with synthetic fixtures for weight feedback, RPE entry and muscle history.
+Run `api/tests/test_progression.py` and the plugin context contract; these cover
+legacy 125 kg carry-forward without RPE, partial set comparisons, the 130 kg step,
+explicit deloads, setup identity, ceilings, future records and tenant isolation.
+The existing set-target tests protect revision checks and logged-set preservation.
+Type-check the web app and inspect the actual workout components at phone width.
 
-This is a local change. Promotion needs the API, web app and updated plugin skill
-together. Existing tenants receive package guidance through the plugin manager;
-their personal plans and workspace guidance stay agent-owned.
+Through the installed local plugin and native Ez agent, use an isolated database
+to read progression, correct an unlogged target, complete work without RPE, and
+generate the next day. Read back canonical targets and ensure previous actuals
+are unchanged. Do not create synthetic records in the shared live database.
+
+For manual QA in `yarn dev`: open Leg Press, check the compact indicator and last
+125 kg performance, tap for the next step, then log only weight/reps. Verify the
+indicator refreshes after saving and remains correct after reload. Check Training
+history → Muscle progress for the same exercise trend.
+
+Promotion needs the API, web app and updated plugin together. Local QA is not a
+production deployment.

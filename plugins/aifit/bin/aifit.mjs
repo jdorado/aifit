@@ -41,6 +41,7 @@ Write (all require --request-id):
   aifit blueprint solidify --input FILE|- [--blueprint-id ID --expected-revision REV]
   aifit workout generate --date DATE [--source default|jev]
   aifit workout log-set WORKOUT_ID SET_ID --input FILE|- --expected-revision REV
+  aifit workout set-target WORKOUT_ID SET_ID --input FILE|- --expected-revision REV
   aifit workout override --input FILE|- [--expected-revision REV]
   aifit workout swap --input FILE|- --expected-revision REV [--source default|jev] [--target-candidate CAND]
 
@@ -58,6 +59,7 @@ Artifacts (full typed schema and rules are in the installed aifit skill):
   e.g. "Chest + Back", "Warm-up Flow") naming its focus.
   override: date, title, reason_md, segments (every slot exactly one candidate)
   set actual: status, reps, duration_seconds, load, rpe, completed_at
+  set target: target{reps|duration_seconds,load,rpe}, apply_to_remaining (optional)
   swap: workout_id, exercise_instance_id, expected_blueprint_revision, reason
     (pass --target-candidate CAND when the user already picked a slot candidate,
     e.g. a mini-chat top-3 choice; otherwise the API selects via --source)
@@ -272,6 +274,14 @@ async function main() {
     const [workoutId, setId] = exactly(positional, 2, 'workout log-set WORKOUT_ID SET_ID');
     result = await call(context, 'PATCH', `/workouts/${workoutId}/sets/${setId}`, {
       actual: await jsonFile(required(values, '--input'), jsonShape('set actual', ['expected_revision', 'request_id'])),
+      expected_revision: required(values, '--expected-revision'),
+      request_id: required(values, '--request-id'),
+    });
+  } else if (area === 'workout' && action === 'set-target') {
+    const { values, positional } = parseArgs(rest, new Set(['--input', '--expected-revision', '--request-id']));
+    const [workoutId, setId] = exactly(positional, 2, 'workout set-target WORKOUT_ID SET_ID');
+    result = await call(context, 'PATCH', `/workouts/${encodeURIComponent(workoutId)}/sets/${encodeURIComponent(setId)}/target`, {
+      ...await jsonFile(required(values, '--input'), jsonShape('set target object', ['expected_revision', 'request_id'])),
       expected_revision: required(values, '--expected-revision'),
       request_id: required(values, '--request-id'),
     });

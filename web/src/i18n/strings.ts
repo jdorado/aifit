@@ -12,6 +12,26 @@ export const normalizeLanguage = (value: unknown): Language | null => {
 export const STRINGS = {
   en: {
     progression: {
+      compact: {
+        "improving": "Improving",
+        "improvingSoFar": "Improving so far",
+        "steady": "Steady",
+        "building": "Building",
+        "lower": "Below last time",
+        "ready": "Ready for more",
+        "review": "Check with coach",
+        "baseline": "Starting point",
+        "lighter": "Lighter day",
+        "maintain": "Maintaining",
+        "last": "Last: {load} × {reps}",
+        "justLog": "Log your weight and reps",
+        "buildReps": "Build to {reps} reps per set at {load}.",
+        "followPlan": "Follow today’s planned session.",
+        "selected": "Selected: {load}",
+        "compared": "Compared with {date} · {count} logged sets",
+        "askCoach": "Ask why",
+        "seeExercises": "See exercises"
+      },
       "title": "Progression",
       "effort": "Effort (RPE)",
       "notRecorded": "Not recorded",
@@ -32,7 +52,7 @@ export const STRINGS = {
       "reviewBy": "Coach review by {date}.",
       "ageUnavailable": "Age comparison unavailable: no matching reference test selected.",
       "reviewCoach": "Review with coach",
-      "reviewPrompt": "Read this workout’s progression and my history. Review my goal, effort, recovery and training experience; explain whether to progress, hold or revise the blueprint. Use age as context, not an invented score.",
+      "reviewPrompt": "Read my logged weights, reps and recent training history. Explain my progress and choose the next target. If today’s weight is below what I already lifted, explain the reason or correct the unlogged targets. Infer likely fatigue from patterns and feedback without asking me to score RPE.",
       "muscleTitle": "Muscle progress",
       "muscleWindow": "Last 4 weeks · performance against your own history",
       "muscleImproving": "{improved} of {total} tracked exercise setups improving",
@@ -89,7 +109,8 @@ export const STRINGS = {
         "improving": "Improving",
         "holding": "Holding",
         "lower": "Lower recorded reps",
-        "effort_unconfirmed": "Effort unconfirmed"
+        "effort_unconfirmed": "Building history",
+        "mixed": "Weight and reps changed"
       }
     },
     common: {
@@ -424,6 +445,26 @@ export const STRINGS = {
   },
   es: {
     progression: {
+      compact: {
+        "improving": "Mejorando",
+        "improvingSoFar": "Mejorando hasta ahora",
+        "steady": "Estable",
+        "building": "En progreso",
+        "lower": "Menos que la última vez",
+        "ready": "Listo para subir",
+        "review": "Revisar con entrenador",
+        "baseline": "Punto de partida",
+        "lighter": "Día ligero",
+        "maintain": "Mantenimiento",
+        "last": "Última vez: {load} × {reps}",
+        "justLog": "Registra peso y repeticiones",
+        "buildReps": "Llega a {reps} repeticiones por serie con {load}.",
+        "followPlan": "Sigue la sesión prevista para hoy.",
+        "selected": "Seleccionado: {load}",
+        "compared": "Comparado con {date} · {count} series registradas",
+        "askCoach": "Preguntar por qué",
+        "seeExercises": "Ver ejercicios"
+      },
       "title": "Progresión",
       "effort": "Esfuerzo (RPE)",
       "notRecorded": "Sin registrar",
@@ -444,7 +485,7 @@ export const STRINGS = {
       "reviewBy": "Revisar con el entrenador antes del {date}.",
       "ageUnavailable": "Comparación por edad no disponible: no se ha seleccionado una prueba de referencia adecuada.",
       "reviewCoach": "Revisar con el entrenador",
-      "reviewPrompt": "Lee la progresión de este entrenamiento y mi historial. Revisa mi objetivo, esfuerzo, recuperación y experiencia; explica si debo progresar, mantener o revisar el blueprint. Usa la edad como contexto, sin inventar puntuaciones.",
+      "reviewPrompt": "Lee mis pesos, repeticiones e historial reciente. Explica mi progreso y elige el siguiente objetivo. Si la carga de hoy es menor que la que ya levanté, explica el motivo o corrige los objetivos sin registrar. Valora la posible fatiga por los patrones y comentarios sin pedirme una puntuación RPE.",
       "muscleTitle": "Progreso muscular",
       "muscleWindow": "Últimas 4 semanas · rendimiento frente a tu propio historial",
       "muscleImproving": "{improved} de {total} variantes de ejercicio están mejorando",
@@ -501,7 +542,8 @@ export const STRINGS = {
         "improving": "Mejorando",
         "holding": "Manteniendo",
         "lower": "Menos repeticiones registradas",
-        "effort_unconfirmed": "Esfuerzo sin confirmar"
+        "effort_unconfirmed": "Creando historial",
+        "mixed": "Han cambiado el peso y las repeticiones"
       }
     },
     common: {
