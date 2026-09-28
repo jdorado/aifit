@@ -23,7 +23,7 @@ def seed(database, exercise_id, name, revision="rev_current", account="acc_one",
 
 @pytest.mark.asyncio
 async def test_catalog_pages_current_identities_without_other_tenants_or_old_revisions():
-    database = FakeDatabase()
+    database = FakeDatabase(seed_catalog=False)
     seed(database, "ex_serratus", "Single-arm cable serratus press reach", "rev_old", current=False)
     seed(database, "ex_serratus", "Single-arm cable serratus reach")
     seed(database, "ex_press", "Cable chest press")
@@ -45,7 +45,7 @@ async def test_catalog_pages_current_identities_without_other_tenants_or_old_rev
 
 @pytest.mark.asyncio
 async def test_agent_catalog_uses_capability_account_and_requires_read_permission(monkeypatch):
-    database = FakeDatabase()
+    database = FakeDatabase(seed_catalog=False)
     seed(database, "ex_serratus", "Cable serratus press")
     monkeypatch.setattr(main, "workouts", lambda: WorkoutService(database))
     capability = auth.AgentCapability("acc_one", "tenant_one", "job_one", frozenset({main.AGENT_READ}))
