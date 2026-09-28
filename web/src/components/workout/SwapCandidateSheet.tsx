@@ -6,6 +6,7 @@ import type { SwapCandidate } from '../../utils/swapCandidates'
 type SwapCandidateSheetProps = {
   open: boolean
   loading: boolean
+  fitLoading: boolean
   swappingId: string | null
   error: string | null
   exerciseName: string
@@ -17,6 +18,7 @@ type SwapCandidateSheetProps = {
 const SwapCandidateSheet: FC<SwapCandidateSheetProps> = ({
   open,
   loading,
+  fitLoading,
   swappingId,
   error,
   exerciseName,
@@ -58,7 +60,7 @@ const SwapCandidateSheet: FC<SwapCandidateSheetProps> = ({
           ) : null}
           {!loading && !error && candidates.length > 0 ? (
             <div className="exercise-history-list">
-              <p className="exercise-fit-hint">{t(candidates.some((candidate) => candidate.fit) ? 'workout.fitHint' : 'workout.fitUnavailable')}</p>
+              <p className="exercise-fit-hint" role="status">{t(fitLoading ? 'workout.fitLoading' : candidates.some((candidate) => candidate.fit) ? 'workout.fitHint' : 'workout.fitUnavailable')}</p>
               {candidates.map((candidate) => {
                 const busy = swappingId === candidate.candidate_id
                 return (
