@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { overlayFitScores } from './utils/exerciseFit'
 import { usePrivy } from '@privy-io/react-auth'
 import { marked } from 'marked'
 import { formatDurationForDisplay, normalizeWorkoutTargetText } from './utils/workoutDisplay'
@@ -990,6 +991,8 @@ const App = () => {
   const [coachMessagesByScope, setCoachMessagesByScope] = useState<Record<string, ChatMessage[]>>({})
   const [swapOpen, setSwapOpen] = useState(false)
   const [swapLoading, setSwapLoading] = useState(false)
+  const [swapFitLoading, setSwapFitLoading] = useState(false)
+  const swapRequestRef = useRef<AbortController | null>(null)
   const [swapError, setSwapError] = useState<string | null>(null)
   const [swapCandidates, setSwapCandidates] = useState<SwapCandidate[]>([])
   const [swappingCandidateId, setSwappingCandidateId] = useState<string | null>(null)
@@ -3663,6 +3666,9 @@ const App = () => {
   }, [handleCoachSend, t, currentUserId, profile.language, coachActAsLinkId, getPrivyAuthHeaders])
 
   const handleCloseSwap = useCallback(() => {
+    swapRequestRef.current?.abort()
+    swapRequestRef.current = null
+    setSwapFitLoading(false)
     swapExerciseIdRef.current = null
     swapResponseRef.current = null
     setSwapOpen(false)
@@ -3672,11 +3678,20 @@ const App = () => {
     setSwappingCandidateId(null)
   }, [])
 
+  useEffect(() => {
+    handleCloseSwap()
+    return () => { swapRequestRef.current?.abort() }
+  }, [handleCloseSwap, selectedDay?.date, coachActAsLinkId, currentUserId, activeEntryId])
+
   const handleOpenSwap = useCallback(async (exerciseId: string): Promise<boolean> => {
     if (!canQuerySavedWorkoutSessions || !coachCanEditPrograms || !isBackendHealthy) return false
     const targetDate = selectedDay?.date ?? todayId
     const workoutId = workoutIdByOwnerDateRef.current[`${coachActAsOwnerId ?? currentUserId}:${targetDate}`]
     if (!workoutId) return false
+    swapRequestRef.current?.abort()
+    const controller = new AbortController()
+    swapRequestRef.current = controller
+    setSwapFitLoading(false)
     swapExerciseIdRef.current = exerciseId
     swapResponseRef.current = null
     setSwapOpen(true)
@@ -3692,17 +3707,35 @@ const App = () => {
         workoutId,
         exerciseInstanceId: exerciseId,
         actAsLinkId: coachActAsLinkId,
+        signal: controller.signal,
       })
-      if (swapExerciseIdRef.current !== exerciseId) return false
+      if (controller.signal.aborted) return false
       swapResponseRef.current = result
       setSwapCandidates(result.candidates)
+      setSwapLoading(false)
       if (result.candidates.length === 0 && coachChatEnabled) {
         handleCloseSwap()
         void handleCoachSend(exerciseId, t('workout.swapCoachPrompt'))
         return true
       }
+      if (result.candidates.length) {
+        setSwapFitLoading(true)
+        void fetchSwapCandidates({
+          apiBaseUrl: API_BASE_URL, getHeaders: async () => headers, workoutId,
+          exerciseInstanceId: exerciseId, actAsLinkId: coachActAsLinkId,
+          rankFit: true, signal: controller.signal,
+        }).then((rated) => {
+          if (controller.signal.aborted) return
+          const candidates = overlayFitScores(result, rated)
+          if (candidates) setSwapCandidates(candidates)
+        }).catch(() => {
+          // Keep the original choices available if optional scoring fails.
+        }).finally(() => {
+          if (!controller.signal.aborted) setSwapFitLoading(false)
+        })
+      }
     } catch (error) {
-      if (swapExerciseIdRef.current !== exerciseId) return false
+      if (controller.signal.aborted) return false
       const code = error instanceof SwapCandidatesError ? error.code : null
       if (needsCoachSwap(code) && coachChatEnabled) {
         handleCloseSwap()
@@ -3711,7 +3744,7 @@ const App = () => {
       }
       setSwapError(t(`workout.${swapErrorKey(code)}`))
     } finally {
-      if (swapExerciseIdRef.current === exerciseId) setSwapLoading(false)
+      if (!controller.signal.aborted) setSwapLoading(false)
     }
     return false
   }, [
@@ -3733,6 +3766,8 @@ const App = () => {
   const handleSelectSwapCandidate = useCallback(async (candidate: SwapCandidate): Promise<boolean> => {
     const response = swapResponseRef.current
     if (!response || swappingCandidateId) return false
+    swapRequestRef.current?.abort()
+    setSwapFitLoading(false)
     setSwappingCandidateId(candidate.candidate_id)
     try {
       const headers = { 'Content-Type': 'application/json', ...await getPrivyAuthHeaders() }
@@ -3907,12 +3942,12 @@ const App = () => {
     todayId,
   ])
 
-  const loadExerciseRepertoire = useCallback(async (): Promise<ExerciseRepertoire> => {
+  const loadExerciseRepertoire = useCallback(async (rankFit = false, signal?: AbortSignal): Promise<ExerciseRepertoire> => {
     const context = requireEditContext()
     if (!context) throw new Error(t('workout.addExerciseUnavailable'))
     const response = await apiFetch(
-      withCoachActAs(`${API_BASE_URL}/v1/workouts/${encodeURIComponent(context.workoutId)}/exercise-repertoire?rank_fit=true`),
-      { headers: await getPrivyAuthHeaders() },
+      withCoachActAs(`${API_BASE_URL}/v1/workouts/${encodeURIComponent(context.workoutId)}/exercise-repertoire?rank_fit=${rankFit}`),
+      { headers: await getPrivyAuthHeaders(), signal },
     )
     if (!response.ok) {
       const error = readApiError(await response.json().catch(() => null), response.status, t('workout.addExerciseFailed'))
@@ -4925,6 +4960,7 @@ const App = () => {
             onCoachListen={handleCoachListen}
             swapOpen={swapOpen}
             swapLoading={swapLoading}
+            swapFitLoading={swapFitLoading}
             swappingCandidateId={swappingCandidateId}
             swapError={swapError}
             swapCandidates={swapCandidates}

@@ -89,9 +89,13 @@ exercise with the published sets and targets. It requires an existing workout,
 preserves logged sets, and uses revision checks and idempotent receipts. This
 browser flow does not run the coach or modify the blueprint.
 
-Add exercise and the swap icon in the exercise header request optional Jev fit
-ratings with `rank_fit=true` on their existing read endpoints. The same swap
-picker remains available in Ask coach. Ratings combine today's training intent
+Add exercise and the swap icon in the exercise header first load selectable
+choices without ranking, then request optional ratings with `rank_fit=true` on
+the same read endpoints. The list stays usable while Fit scores arrive and
+reorder it. Delayed scores only decorate the same candidate identities and
+workout/blueprint revisions; closing or choosing an exercise cancels the rating
+request. The same swap picker remains available in Ask coach. Ratings combine
+today's training intent
 (40%), recent logged training (30%), and current workout progress (30%). Each
 factor uses Jev's probability-weighted Score primitive; the displayed 0–100 fit
 is a rubric score, not a probability of success. Low-confidence factors mark the

@@ -107,7 +107,7 @@ type WorkoutViewProps = {
   onCancelEditingSet: () => void
   onUpdateSetField: (exerciseId: string, index: number, field: 'weight' | 'metric', value: string, propagate?: boolean) => void
   onCommitSetTarget: (exerciseId: string, index: number, field: 'weight' | 'metric') => void
-  onLoadExerciseRepertoire: () => Promise<ExerciseRepertoire>
+  onLoadExerciseRepertoire: (rankFit?: boolean, signal?: AbortSignal) => Promise<ExerciseRepertoire>
   onAddExercise: (candidate: RepertoireCandidate, repertoire: ExerciseRepertoire) => Promise<boolean>
   onAddSet: (exerciseId: string) => void
   onRemoveSet: (exerciseId: string, index: number) => void
@@ -125,6 +125,7 @@ type WorkoutViewProps = {
   onCoachListen: (exerciseId: string) => Promise<Blob>
   swapOpen: boolean
   swapLoading: boolean
+  swapFitLoading: boolean
   swappingCandidateId: string | null
   swapError: string | null
   swapCandidates: SwapCandidate[]
@@ -211,6 +212,7 @@ const WorkoutView: FC<WorkoutViewProps> = ({
   onCoachListen,
   swapOpen,
   swapLoading,
+  swapFitLoading,
   swappingCandidateId,
   swapError,
   swapCandidates,
@@ -880,6 +882,7 @@ const WorkoutView: FC<WorkoutViewProps> = ({
           <SwapCandidateSheet
             open={swapOpen}
             loading={swapLoading}
+            fitLoading={swapFitLoading}
             swappingId={swappingCandidateId}
             error={swapError}
             exerciseName={activeExercise.name}
