@@ -271,7 +271,10 @@ important rules are:
 - Every day is inside the declared period; IDs and array orders are unique in
   their enclosing collection.
 - Training days have segments; rest days have none.
-- A day cannot place the same exercise in multiple candidate slots.
+- Candidate pools may share canonical exercise IDs across slots. Every slot
+  must still be fillable with a distinct selected exercise. Generation reserves
+  options needed by narrower slots, and Swap excludes exercises already used
+  elsewhere. Slot IDs must be unique across the whole day.
 - Each blueprint slot selects one exercise for one function. Put mandatory pairs
   in separate slots. A narrow slot may have no alternative; never pad its pool.
   Every catalog ID/revision must exist for the authenticated tenant, and distinct
@@ -341,6 +344,12 @@ Neither source can introduce an exercise outside the published blueprint.
 Every materialized workout stores the blueprint ID/revision, day ID, source,
 and selection decision receipt in its lineage. Generation is idempotent by
 `request_id` and date.
+
+Resolved-day overrides preserve canonical slot/candidate IDs for movements
+already in the blueprint. Legacy renamed slots can recover their pool from an
+unambiguous candidate/exercise ID match; names alone never establish that link.
+If a shared exercise fits multiple source slots and no exact link remains, the
+agent must resolve the role instead of the API guessing an alternative pool.
 
 ## 6. Other backend behavior
 
