@@ -2525,31 +2525,57 @@ const App = () => {
   }, [addMessage, removeMessage, updateMessage])
 
   const fetchChatJobResult = useCallback(async (payload: ChatRequestPayload): Promise<ChatResponsePayload> => {
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      ...(await getPrivyAuthHeaders()),
+    // A lost admission response does not mean the run failed to start. Ez
+    // deduplicates the unchanged request_id; after admission, retry only GET.
+    const request = async (url: string, init?: RequestInit): Promise<ChatJobResponsePayload> => {
+      let retryDelay = CHAT_JOB_POLL_MS
+      while (true) {
+        const headers = await getPrivyAuthHeaders()
+        const controller = new AbortController()
+        const timeout = window.setTimeout(() => controller.abort(), 45_000)
+        try {
+          const response = await apiFetch(url, {
+            ...init,
+            headers: { ...init?.headers, ...headers },
+            signal: controller.signal,
+          })
+          if (![408, 429, 500, 502, 503, 504].includes(response.status)) {
+            if (init?.method === 'POST' && (response.status === 404 || response.status === 405)) {
+              throw new Error('Async chat endpoint unavailable. Restart the backend so /chat/async is available.')
+            }
+            if (!response.ok) {
+              throw readApiError(await response.json().catch(() => null), response.status, 'Chat request failed.')
+            }
+            // Reading the body can also fail after the server has accepted it.
+            return await response.json() as ChatJobResponsePayload
+          }
+        } catch (error) {
+          if (!(error instanceof TypeError) && !(error instanceof DOMException && ['AbortError', 'NetworkError'].includes(error.name))) {
+            throw error
+          }
+        } finally {
+          window.clearTimeout(timeout)
+        }
+        // Retry individual network requests without imposing a deadline on
+        // the agent's work. Back off while the API or connection recovers.
+        await new Promise((resolve) => window.setTimeout(resolve, retryDelay))
+        retryDelay = Math.min(retryDelay * 2, 10_000)
+      }
     }
 
-    const enqueueResponse = await apiFetch(`${API_BASE_URL}/chat/async`, {
+    const queued = await request(`${API_BASE_URL}/chat/async`, {
       method: 'POST',
-      headers,
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     })
 
-    if (enqueueResponse.status === 404 || enqueueResponse.status === 405) {
-      throw new Error('Async chat endpoint unavailable. Restart the backend so /chat/async is available.')
-    }
-    if (!enqueueResponse.ok) {
-      throw readApiError(await enqueueResponse.json().catch(() => null), enqueueResponse.status, 'Chat could not start.')
-    }
-
-    const queued = (await enqueueResponse.json()) as ChatJobResponsePayload
     const jobId = typeof queued.job_id === 'string' ? queued.job_id : ''
     if (!jobId) return queued
     if (queued.status === 'complete') return queued
     if (queued.status === 'failed') {
       throw new Error(typeof queued.error === 'string' ? queued.error : 'Chat job failed')
     }
+    if (queued.status === 'cancelled') throw new Error('Chat request was cancelled')
 
     const params = new URLSearchParams({
       user_id: payload.user_id,
@@ -2559,20 +2585,10 @@ const App = () => {
     while (true) {
       await new Promise((resolve) => window.setTimeout(resolve, CHAT_JOB_POLL_MS))
 
-      // Chat jobs can outlive the short-lived Privy token used to enqueue
-      // them. Do not reuse the initial headers or a completed reply becomes
-      // invisible to the user when its final poll is rejected with 401.
-      const pollHeaders = await getPrivyAuthHeaders()
-      const pollResponse = await apiFetch(
-        `${API_BASE_URL}/chat/jobs/${encodeURIComponent(jobId)}?${params.toString()}`,
-        { headers: pollHeaders }
+      const statusData = await request(
+        `${API_BASE_URL}/chat/jobs/${encodeURIComponent(jobId)}?${params.toString()}`
       )
 
-      if (!pollResponse.ok) {
-        throw new Error(`Chat job poll failed (${pollResponse.status})`)
-      }
-
-      const statusData = (await pollResponse.json()) as ChatJobResponsePayload
       if (statusData.status === 'complete') return statusData
       if (statusData.status === 'failed') {
         throw new Error(typeof statusData.error === 'string' ? statusData.error : 'Chat job failed')
@@ -3288,9 +3304,10 @@ const App = () => {
           act_as_link_id: coachActAsLinkId,
         })
         await updateCoachMessage(scopeId, statusId, typeof result.reply === 'string' ? result.reply : String(result.reply ?? ''))
-        await refreshVisibleWorkoutSessions()
+        await refreshVisibleWorkoutSessions().catch(() => undefined)
       } catch (error) {
-        await updateCoachMessage(scopeId, statusId, error instanceof Error ? error.message : t('messages.networkError'))
+        removeCoachMessage(scopeId, statusId)
+        await addCoachMessage(scopeId, error instanceof Error ? error.message : t('messages.networkError'), 'ai')
       }
       return
     }
@@ -3332,6 +3349,7 @@ const App = () => {
     fetchChatJobResult,
     fetchChatReply,
     refreshVisibleWorkoutSessions,
+    removeCoachMessage,
     removeMessage,
     selectedDay?.date,
     selectedModelLabel,
