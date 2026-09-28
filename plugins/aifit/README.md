@@ -3,8 +3,8 @@
 This is the AIFit domain plugin for Ez: the coach's canonical read and write
 surface for the AIFit app. Reads return the same records the frontend renders
 (exercises and history, active blueprint, workouts). Writes are deterministic
-domain operations (exercises, blueprints, workout generation, set logging,
-swaps, and resolved exception days). The user profile is the agent's own
+domain operations across catalog definitions, blueprints, workout days,
+segments, exercise instances, and sets. The user profile is the agent's own
 `profile.md` in its workspace, not an app record. It contains no model loop, conversation history,
 context builder, workout generator, or workout store.
 
@@ -47,6 +47,15 @@ unlogged set to one exercise instance, `remove-set` removes one unlogged set,
 and `set-target` changes planned reps/load/duration. All require the current
 workout revision and an idempotency key. They preserve logged history and other
 exercises; never use a day override for these edits.
+
+The plugin also exposes every existing workout control: repertoire and swap
+candidate reads, exercise add/remove/move/extract, segment reorder/remove,
+workout and exercise notes, clear, and explicit log correction. `workout copy`
+copies any saved source date to another date using source and target revisions;
+the browser's last-week shortcut calls the same implementation. Agent writes
+reuse the frontend's typed services and tenant, revision, and history checks.
+The installed skill maps each primitive to its payload, effect, preserved
+records, and sequential composition rules.
 
 The override input is the complete resolved unlogged remainder of the target day.
 Already logged work is preserved automatically; including its dose in the

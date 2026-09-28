@@ -39,6 +39,7 @@ from .workouts import (
     BlueprintInput,
     ClearWorkoutInput,
     CopyLastWeekInput,
+    CopyWorkoutInput,
     ExerciseDefinitionInput,
     ExerciseNoteInput,
     GenerateInput,
@@ -1203,6 +1204,151 @@ async def agent_remove_set_v1(
     require_agent_permission(capability, AGENT_WRITE)
     require_agent_request(capability, body.request_id)
     return await workouts().remove_set(capability.account_id, workout_id, set_id, body)
+
+
+@app.post("/v1/agent/workouts/{workout_id}/sets/{set_id}/unlog")
+async def agent_unlog_set_v1(
+    workout_id: str,
+    set_id: str,
+    body: SetUnlogInput,
+    capability: AgentCapability = Depends(require_agent_capability),
+) -> dict:
+    require_agent_permission(capability, AGENT_WRITE)
+    require_agent_request(capability, body.request_id)
+    return await workouts().unlog_set(capability.account_id, workout_id, set_id, body)
+
+
+@app.post("/v1/agent/workouts/{workout_id}/exercises")
+async def agent_add_exercise_v1(
+    workout_id: str,
+    body: ExerciseAddInput,
+    capability: AgentCapability = Depends(require_agent_capability),
+) -> dict:
+    require_agent_permission(capability, AGENT_WRITE)
+    require_agent_request(capability, body.request_id)
+    return await workouts().add_exercise(capability.account_id, workout_id, body)
+
+
+@app.post("/v1/agent/workouts/{workout_id}/exercises/{exercise_instance_id}/remove")
+async def agent_remove_exercise_v1(
+    workout_id: str,
+    exercise_instance_id: str,
+    body: PlanEntryRemoveInput,
+    capability: AgentCapability = Depends(require_agent_capability),
+) -> dict:
+    require_agent_permission(capability, AGENT_WRITE)
+    require_agent_request(capability, body.request_id)
+    return await workouts().remove_exercise(capability.account_id, workout_id, exercise_instance_id, body)
+
+
+@app.post("/v1/agent/workouts/{workout_id}/segments/{segment_id}/remove")
+async def agent_remove_segment_v1(
+    workout_id: str,
+    segment_id: str,
+    body: PlanEntryRemoveInput,
+    capability: AgentCapability = Depends(require_agent_capability),
+) -> dict:
+    require_agent_permission(capability, AGENT_WRITE)
+    require_agent_request(capability, body.request_id)
+    return await workouts().remove_segment(capability.account_id, workout_id, segment_id, body)
+
+
+@app.post("/v1/agent/workouts/{workout_id}/segments/reorder")
+async def agent_reorder_segments_v1(
+    workout_id: str,
+    body: PlanReorderInput,
+    capability: AgentCapability = Depends(require_agent_capability),
+) -> dict:
+    require_agent_permission(capability, AGENT_WRITE)
+    require_agent_request(capability, body.request_id)
+    return await workouts().reorder_segments(capability.account_id, workout_id, body)
+
+
+@app.post("/v1/agent/workouts/{workout_id}/exercises/{exercise_instance_id}/move")
+async def agent_move_item_v1(
+    workout_id: str,
+    exercise_instance_id: str,
+    body: PlanItemMoveInput,
+    capability: AgentCapability = Depends(require_agent_capability),
+) -> dict:
+    require_agent_permission(capability, AGENT_WRITE)
+    require_agent_request(capability, body.request_id)
+    return await workouts().move_item(capability.account_id, workout_id, exercise_instance_id, body)
+
+
+@app.post("/v1/agent/workouts/{workout_id}/exercises/{exercise_instance_id}/extract")
+async def agent_extract_item_v1(
+    workout_id: str,
+    exercise_instance_id: str,
+    body: PlanItemExtractInput,
+    capability: AgentCapability = Depends(require_agent_capability),
+) -> dict:
+    require_agent_permission(capability, AGENT_WRITE)
+    require_agent_request(capability, body.request_id)
+    return await workouts().extract_item(capability.account_id, workout_id, exercise_instance_id, body)
+
+
+@app.patch("/v1/agent/workouts/{workout_id}/notes")
+async def agent_workout_notes_v1(
+    workout_id: str,
+    body: WorkoutNotesInput,
+    capability: AgentCapability = Depends(require_agent_capability),
+) -> dict:
+    require_agent_permission(capability, AGENT_WRITE)
+    require_agent_request(capability, body.request_id)
+    return await workouts().update_notes(capability.account_id, workout_id, body)
+
+
+@app.patch("/v1/agent/workouts/{workout_id}/exercises/{exercise_instance_id}/notes")
+async def agent_exercise_notes_v1(
+    workout_id: str,
+    exercise_instance_id: str,
+    body: ExerciseNoteInput,
+    capability: AgentCapability = Depends(require_agent_capability),
+) -> dict:
+    require_agent_permission(capability, AGENT_WRITE)
+    require_agent_request(capability, body.request_id)
+    return await workouts().update_exercise_notes(capability.account_id, workout_id, exercise_instance_id, body)
+
+
+@app.post("/v1/agent/workouts/{workout_id}/clear")
+async def agent_clear_workout_v1(
+    workout_id: str,
+    body: ClearWorkoutInput,
+    capability: AgentCapability = Depends(require_agent_capability),
+) -> dict:
+    require_agent_permission(capability, AGENT_WRITE)
+    require_agent_request(capability, body.request_id)
+    return await workouts().clear_workout(capability.account_id, workout_id, body)
+
+
+@app.post("/v1/agent/workouts/copy")
+async def agent_copy_workout_v1(
+    body: CopyWorkoutInput,
+    capability: AgentCapability = Depends(require_agent_capability),
+) -> dict:
+    require_agent_permission(capability, AGENT_WRITE)
+    require_agent_request(capability, body.request_id)
+    return await workouts().copy_workout(capability.account_id, body)
+
+
+@app.get("/v1/agent/workouts/{workout_id}/exercise-repertoire")
+async def agent_exercise_repertoire_v1(
+    workout_id: str,
+    capability: AgentCapability = Depends(require_agent_capability),
+) -> dict:
+    require_agent_permission(capability, AGENT_READ)
+    return await workouts().exercise_repertoire(capability.account_id, workout_id)
+
+
+@app.get("/v1/agent/workouts/{workout_id}/exercises/{exercise_instance_id}/swap-candidates")
+async def agent_swap_candidates_v1(
+    workout_id: str,
+    exercise_instance_id: str,
+    capability: AgentCapability = Depends(require_agent_capability),
+) -> dict:
+    require_agent_permission(capability, AGENT_READ)
+    return await workouts().swap_candidates(capability.account_id, workout_id, exercise_instance_id)
 
 
 @app.patch("/v1/agent/workouts/{workout_id}/sets/{set_id}/target")

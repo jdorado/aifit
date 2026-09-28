@@ -16,6 +16,8 @@ aifit exercise history EXERCISE_ID [--before DATE] [--limit N]
 aifit blueprint active [--date DATE]
 aifit workout show WORKOUT_ID
 aifit workout list --start DATE --end DATE
+aifit workout exercise-repertoire WORKOUT_ID
+aifit workout swap-candidates WORKOUT_ID EXERCISE_INSTANCE_ID
 
 aifit exercise create --input FILE|- --request-id KEY [--expected-revision REV]
 aifit blueprint draft --input FILE|- --request-id KEY [--blueprint-id ID --expected-revision REV]
@@ -25,6 +27,17 @@ aifit workout add-set WORKOUT_ID EXERCISE_INSTANCE_ID --expected-revision REV --
 aifit workout remove-set WORKOUT_ID SET_ID --expected-revision REV --request-id KEY
 aifit workout set-target WORKOUT_ID SET_ID --input FILE|- --expected-revision REV --request-id KEY
 aifit workout log-set WORKOUT_ID SET_ID --input FILE|- --expected-revision REV --request-id KEY
+aifit workout unlog-set WORKOUT_ID SET_ID --expected-revision REV --request-id KEY
+aifit workout add-exercise WORKOUT_ID --input FILE|- --expected-revision REV --request-id KEY
+aifit workout remove-exercise WORKOUT_ID EXERCISE_INSTANCE_ID --expected-revision REV --request-id KEY
+aifit workout move-exercise WORKOUT_ID EXERCISE_INSTANCE_ID --input FILE|- --expected-revision REV --request-id KEY
+aifit workout extract-exercise WORKOUT_ID EXERCISE_INSTANCE_ID [--input FILE|-] --expected-revision REV --request-id KEY
+aifit workout remove-segment WORKOUT_ID SEGMENT_ID --expected-revision REV --request-id KEY
+aifit workout reorder-segments WORKOUT_ID --input FILE|- --expected-revision REV --request-id KEY
+aifit workout set-notes WORKOUT_ID --input FILE|- --expected-revision REV --request-id KEY
+aifit workout set-exercise-notes WORKOUT_ID EXERCISE_INSTANCE_ID --input FILE|- --expected-revision REV --request-id KEY
+aifit workout clear WORKOUT_ID --expected-revision REV --request-id KEY
+aifit workout copy --from DATE --date DATE --source-revision REV [--expected-revision REV] --request-id KEY
 aifit workout override --input FILE|- --request-id KEY [--expected-revision REV]
 aifit workout swap --input FILE|- --request-id KEY --expected-revision REV [--source default|jev] [--target-candidate CAND]
 ```
@@ -102,7 +115,29 @@ derives those from the signed run context and grants the surface in two
 permissions: `aifit:read` for canonical reads, `aifit:write` for domain
 mutations.
 
-## 3. Exceptional workout artifact
+## 3. Workout operations and exceptional artifacts
+
+The plugin exposes the full deterministic workout surface used by the frontend,
+at set, exercise-instance, segment, and day scope. It reuses the same service
+methods rather than implementing agent-specific mutation logic. The installed
+`plugins/aifit/SKILL.md` contains the operation map, complete input shapes,
+preservation rules, and examples. API parity tests cover every frontend workout
+route, allowing only the existing swap and last-week-copy aliases.
+
+Moves, extraction into a standalone segment, and reordering preserve sets and
+snapshots. Exercise/segment removal and day clearing preserve logged sets and
+remove only open work. Notes replace only the named note. Unlog removes an
+explicitly mistaken performance entry and its history effect; it is never a
+planning workaround. Multi-step changes run sequentially with the latest
+receipt revision and stop on failure; earlier successful steps remain saved.
+
+`copy` takes a source date/revision and a different target date, with the target
+revision when replacing an existing day. It copies structure and targets into
+new IDs with no actuals, refuses targets with logged history, and records the
+source identity/revision in lineage. It does not copy notes or change the
+source/active blueprint. The last-week UI shortcut delegates to this same
+operation with a source seven days earlier. `generate` returns an existing day
+unchanged; it cannot be used to reset a partially completed workout.
 
 Set edits use `add-set`, `remove-set`, and `set-target`, backed by the same
 deterministic service as the frontend. Adding a set appends exactly one unlogged
@@ -114,9 +149,8 @@ their receipt without applying twice. Missing commands must not fall back to
 whole-day overrides.
 
 An exception is the complete resolved unlogged remainder of a target day. It is
-the agent-facing escape hatch for a request such as “replace today's exercise with one that is not in
-the blueprint,” “make today a wholly new workout,” or “do yesterday's workout
-today.” The agent resolves that intent from its native context and sends the
+the agent-facing escape hatch for a custom prescription outside the blueprint
+or a wholly new remaining workout. The agent resolves that intent and sends the
 full target day:
 
 ```sh
@@ -130,9 +164,8 @@ The input contains `date`, `title`, `reason_md`, and the complete typed
 `segments` array. Every override slot must contain exactly one already-resolved
 candidate; the backend never silently chooses an item for an exception day. An
 out-of-pool exercise change is still sent as the complete unlogged remainder so
-the backend never has to infer which other items should remain. Copying a previous day is also
-resolved by the agent into that complete artifact; the plugin does not read or
-copy workout records.
+the backend never has to infer which other items should remain. Copying a saved
+day uses the dedicated copy operation instead of reconstructing an artifact.
 
 The backend validates every exercise revision and metric, applies the active
 blueprint's hard constraints, and applies the resolved day to the target date.

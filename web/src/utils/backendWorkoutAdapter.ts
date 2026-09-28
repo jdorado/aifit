@@ -90,7 +90,7 @@ export type BackendWorkout = {
   notes?: string | null
   segments: BackendSegment[]
   lineage?: {
-    source?: 'default' | 'jev' | 'agent_override' | 'copy_last_week' | 'legacy_import'
+    source?: 'default' | 'jev' | 'agent_override' | 'copy' | 'copy_last_week' | 'legacy_import'
     blueprint_id?: string
     blueprint_revision?: string
     day_id?: string

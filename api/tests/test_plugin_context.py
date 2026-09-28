@@ -50,10 +50,37 @@ def test_plugin_agent_surface_covers_the_canonical_reads_and_writes():
         "/v1/agent/workouts/{workout_id}/sets/{set_id}/remove",
         "/v1/agent/workouts/override",
         "/v1/agent/workouts/swap",
+        "/v1/agent/workouts/{workout_id}/sets/{set_id}/unlog",
+        "/v1/agent/workouts/{workout_id}/exercises",
+        "/v1/agent/workouts/{workout_id}/exercises/{exercise_instance_id}/remove",
+        "/v1/agent/workouts/{workout_id}/segments/{segment_id}/remove",
+        "/v1/agent/workouts/{workout_id}/segments/reorder",
+        "/v1/agent/workouts/{workout_id}/exercises/{exercise_instance_id}/move",
+        "/v1/agent/workouts/{workout_id}/exercises/{exercise_instance_id}/extract",
+        "/v1/agent/workouts/{workout_id}/notes",
+        "/v1/agent/workouts/{workout_id}/exercises/{exercise_instance_id}/notes",
+        "/v1/agent/workouts/{workout_id}/clear",
+        "/v1/agent/workouts/copy",
+        "/v1/agent/workouts/{workout_id}/exercise-repertoire",
+        "/v1/agent/workouts/{workout_id}/exercises/{exercise_instance_id}/swap-candidates",
     }
     assert by_path["/v1/agent/workouts/{workout_id}/sets/{set_id}"] == {"PATCH"}
     assert by_path["/v1/agent/workouts"] == {"GET"}
     assert by_path["/v1/agent/exercises"] == {"GET", "POST"}
+
+
+def test_every_frontend_workout_operation_has_an_agent_equivalent():
+    agent_routes = {(route.path, method) for route in main.app.routes
+                    if route.path.startswith("/v1/agent/workouts") for method in route.methods}
+    aliases = {
+        "/v1/workouts/copy-last-week": "/v1/agent/workouts/copy",
+        "/v1/workouts/{workout_id}/exercises/{exercise_instance_id}/swap": "/v1/agent/workouts/swap",
+    }
+    for route in main.app.routes:
+        if route.path.startswith("/v1/workouts"):
+            counterpart = aliases.get(route.path, route.path.replace("/v1/", "/v1/agent/", 1))
+            for method in route.methods:
+                assert (counterpart, method) in agent_routes, (method, route.path)
 
 
 @pytest.mark.asyncio
@@ -112,6 +139,67 @@ async def test_agent_set_count_edits_preserve_started_workout_and_enforce_author
         assert removed.json()["workout"]["segments"] == before["segments"]
         readback = await client.get("/v1/agent/workouts/wrk_manual", headers=headers())
         assert readback.json() == removed.json()["workout"]
+
+
+@pytest.mark.parametrize("method,path,operation,ids,payload", [['POST', '/workouts/wrk_one/sets/set_one/unlog', 'unlog_set', ['wrk_one', 'set_one'], {}],
+ ['POST', '/workouts/wrk_one/exercises', 'add_exercise', ['wrk_one'],
+  {'blueprint_id': 'bp_one',
+   'expected_blueprint_revision': 'rev_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+   'day_id': 'day_one',
+   'slot_id': 'slot_one',
+   'candidate_id': 'cand_one'}],
+ ['POST', '/workouts/wrk_one/exercises/wex_one/remove', 'remove_exercise', ['wrk_one', 'wex_one'], {}],
+ ['POST', '/workouts/wrk_one/segments/seg_one/remove', 'remove_segment', ['wrk_one', 'seg_one'], {}],
+ ['POST', '/workouts/wrk_one/segments/reorder', 'reorder_segments', ['wrk_one'], {'segment_ids': ['seg_one']}],
+ ['POST', '/workouts/wrk_one/exercises/wex_one/move', 'move_item', ['wrk_one', 'wex_one'],
+  {'target_segment_id': 'seg_one', 'target_index': 1}],
+ ['POST', '/workouts/wrk_one/exercises/wex_one/extract', 'extract_item', ['wrk_one', 'wex_one'],
+  {'before_segment_id': 'seg_two'}],
+ ['PATCH', '/workouts/wrk_one/notes', 'update_notes', ['wrk_one'], {'notes': 'QA notes'}],
+ ['PATCH', '/workouts/wrk_one/exercises/wex_one/notes', 'update_exercise_notes', ['wrk_one', 'wex_one'],
+  {'note': 'QA feedback', 'preset': 'form'}],
+ ['POST', '/workouts/wrk_one/clear', 'clear_workout', ['wrk_one'], {}],
+ ['POST', '/workouts/copy', 'copy_workout', [],
+  {'source_date': '2026-09-21', 'date': '2026-09-23', 'expected_source_revision': 'rev_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'}],
+ ['GET', '/workouts/wrk_one/exercise-repertoire', 'exercise_repertoire', ['wrk_one'], None],
+ ['GET', '/workouts/wrk_one/exercises/wex_one/swap-candidates', 'swap_candidates', ['wrk_one', 'wex_one'], None]])
+@pytest.mark.asyncio
+async def test_workout_operations_use_bound_authority_and_typed_service(monkeypatch, method, path, operation, ids, payload):
+    calls = []
+
+    class Service:
+        def __getattr__(self, name):
+            async def invoke(*args):
+                calls.append((name, args))
+                return {"ok": True}
+            return invoke
+
+    monkeypatch.setattr(main, "workouts", lambda: Service())
+    monkeypatch.setattr(auth, "AIFIT_AGENT_CAPABILITY_SECRET", "test-secret-with-at-least-thirty-two-bytes")
+    body = None if payload is None else {
+        **payload, "request_id": "qa-operation", "expected_revision": "rev_" + "a" * 32,
+    }
+    permission = main.AGENT_READ if method == "GET" else main.AGENT_WRITE
+
+    def headers(permissions):
+        token = auth.mint_agent_capability(
+            account_id="acc_bound", tenant_id="ten_bound", job_id="job_bound", permissions=permissions,
+        )
+        return {"Authorization": f"Bearer {token}"}
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url="http://test") as client:
+        assert (await client.request(method, "/v1/agent" + path, json=body)).status_code == 401
+        denied = await client.request(method, "/v1/agent" + path, json=body, headers=headers({"unrelated:read"}))
+        assert denied.status_code == 403
+        assert not calls
+        response = await client.request(method, "/v1/agent" + path, json=body, headers=headers({permission}))
+        assert response.status_code == 200, response.text
+        assert len(calls) == 1
+        name, args = calls[0]
+        assert name == operation
+        assert args[:1 + len(ids)] == ("acc_bound", *ids)
+        if body is not None:
+            assert args[-1].model_dump(mode="json") == body
 
 
 @pytest.mark.parametrize("value", [

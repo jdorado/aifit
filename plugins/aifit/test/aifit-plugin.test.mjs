@@ -369,6 +369,51 @@ test('unknown commands, options, and missing required values fail closed', async
 });
 
 
+
+test('workout primitives transport bounded reads and edits with current revisions', async () => {
+  const cases = [
+    ["unlog-set","POST","/workouts/wrk_one/sets/set_one/unlog",["wrk_one","set_one"],{}],
+    ["add-exercise","POST","/workouts/wrk_one/exercises",["wrk_one"],{"blueprint_id": "bp_one","expected_blueprint_revision": "rev_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","day_id": "day_one","slot_id": "slot_one","candidate_id": "cand_one"}],
+    ["remove-exercise","POST","/workouts/wrk_one/exercises/wex_one/remove",["wrk_one","wex_one"],{}],
+    ["remove-segment","POST","/workouts/wrk_one/segments/seg_one/remove",["wrk_one","seg_one"],{}],
+    ["reorder-segments","POST","/workouts/wrk_one/segments/reorder",["wrk_one"],{"segment_ids": ["seg_one"]}],
+    ["move-exercise","POST","/workouts/wrk_one/exercises/wex_one/move",["wrk_one","wex_one"],{"target_segment_id": "seg_one","target_index": 1}],
+    ["extract-exercise","POST","/workouts/wrk_one/exercises/wex_one/extract",["wrk_one","wex_one"],{"before_segment_id": "seg_two"}],
+    ["set-notes","PATCH","/workouts/wrk_one/notes",["wrk_one"],{"notes": "QA notes"}],
+    ["set-exercise-notes","PATCH","/workouts/wrk_one/exercises/wex_one/notes",["wrk_one","wex_one"],{"note": "QA feedback","preset": "form"}],
+    ["clear","POST","/workouts/wrk_one/clear",["wrk_one"],{}],
+    ["copy","POST","/workouts/copy",[],{"source_date": "2026-09-21","date": "2026-09-23","expected_source_revision": "rev_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}],
+    ["exercise-repertoire","GET","/workouts/wrk_one/exercise-repertoire",["wrk_one"],null],
+    ["swap-candidates","GET","/workouts/wrk_one/exercises/wex_one/swap-candidates",["wrk_one","wex_one"],null],
+  ];
+  for (const [action, method, path, ids, payload] of cases) {
+    await withFetchOutput(async (fetchOutput) => {
+      let args = ['workout', action, ...ids];
+      let body = null;
+      if (method !== 'GET') {
+        args.push('--expected-revision', 'rev_test', '--request-id', 'operation-test');
+        body = { ...payload, expected_revision: 'rev_test', request_id: 'operation-test' };
+        if (action === 'copy') {
+          args.push('--from', payload.source_date, '--date', payload.date, '--source-revision', payload.expected_source_revision);
+        } else if (Object.keys(payload).length) args.push('--input', '-');
+      }
+      const result = await runCli(args, { context: scopedContext, fetchOutput, input: JSON.stringify(payload) });
+      assert.equal(result.code, 0, result.stderr);
+      assert.deepEqual(await fetchRequest(fetchOutput), {
+        url: 'https://aifit.test/v1/agent' + path, method,
+        headers: { authorization: 'Bearer capability-test', ...(body ? { 'content-type': 'application/json' } : {}) },
+        body,
+      }, action);
+    });
+  }
+  await withFetchOutput(async (fetchOutput) => {
+    const result = await runCli(['workout', 'extract-exercise', 'wrk_one', 'wex_one',
+      '--expected-revision', 'rev_test', '--request-id', 'extract-end'], { context: scopedContext, fetchOutput });
+    assert.equal(result.code, 0, result.stderr);
+    assert.deepEqual((await fetchRequest(fetchOutput)).body, { expected_revision: 'rev_test', request_id: 'extract-end' });
+  });
+});
+
 test('progression reads use the bound canonical workout endpoint', async () => {
   await withFetchOutput(async (fetchOutput) => {
     const result = await runCli(['workout', 'progression', 'wrk_0123456789abcdef0123456789abcdef'], { context: scopedContext, fetchOutput });

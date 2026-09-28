@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from copy import deepcopy
 
 import pytest
 
@@ -6,6 +7,7 @@ from aifit_api.workouts import (
     BlueprintInput,
     ClearWorkoutInput,
     CopyLastWeekInput,
+    CopyWorkoutInput,
     GenerateInput,
     SetActual,
     SetLogInput,
@@ -67,6 +69,46 @@ async def log_first_set(service: WorkoutService, workout: dict, request_id: str)
         ),
     )
     return response["workout"]
+
+
+@pytest.mark.asyncio
+async def test_copy_any_saved_date_checks_source_and_preserves_history():
+    database = DayShortcutDatabase()
+    service, source = await generated_day(database)
+    source = await log_first_set(service, source, "copy-source-log")
+    before = deepcopy(source)
+    body = CopyWorkoutInput(
+        source_date=SOURCE_DATE, date="2026-09-23", expected_source_revision=source["revision"],
+        request_id="copy-arbitrary-date",
+    )
+    with pytest.raises(WorkoutDomainError) as stale:
+        await service.copy_workout("acc_one", body.model_copy(update={"expected_source_revision": MISSING_REVISION}))
+    assert stale.value.code == "stale_revision"
+    with pytest.raises(WorkoutDomainError) as same:
+        await service.copy_workout("acc_one", body.model_copy(update={"date": SOURCE_DATE}))
+    assert same.value.code == "copy_same_date"
+
+    receipt = await service.copy_workout("acc_one", body)
+    copied = receipt["workout"]
+    assert copied["date"] == "2026-09-23"
+    assert copied["lineage"]["source"] == "copy"
+    assert copied["lineage"]["copied_from"] == {
+        "workout_id": source["workout_id"], "date": source["date"], "revision": source["revision"],
+    }
+    old_sets = [row for segment in source["segments"] for item in segment["items"] for row in item["sets"]]
+    new_sets = [row for segment in copied["segments"] for item in segment["items"] for row in item["sets"]]
+    assert [row["target"] for row in new_sets] == [row["target"] for row in old_sets]
+    assert all(row["actual"] is None for row in new_sets)
+    assert not ({row["set_id"] for row in new_sets} & {row["set_id"] for row in old_sets})
+    assert await service.workout("acc_one", source["workout_id"]) == before
+    assert await service.copy_workout("acc_one", body) == receipt
+
+    logged_target = await log_first_set(service, copied, "copy-target-log")
+    with pytest.raises(WorkoutDomainError) as protected:
+        await service.copy_workout("acc_one", body.model_copy(update={
+            "request_id": "replace-started-copy", "expected_revision": logged_target["revision"],
+        }))
+    assert protected.value.code == "workout_has_logged_sets"
 
 
 @pytest.mark.asyncio

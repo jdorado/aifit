@@ -27,7 +27,7 @@ from .progression import analyze_exercise, progression_context, summarize_muscle
 SCHEMA_VERSION = 1
 SEGMENT_KINDS = {"warmup", "straight_sets", "superset", "circuit", "interval", "mobility", "cooldown"}
 LOAD_BASES = {"total", "per_side", "per_hand", "machine_stack", "bodyweight", "assisted", "band_level"}
-LineageSource = Literal["default", "jev", "agent_override", "copy_last_week", "legacy_import"]
+LineageSource = Literal["default", "jev", "agent_override", "copy", "copy_last_week", "legacy_import"]
 
 
 class WorkoutDomainError(ValueError):
@@ -355,6 +355,11 @@ class CopyLastWeekInput(StrictModel):
     date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
     expected_revision: str | None = Field(default=None, pattern=r"^rev_[a-f0-9]{32}$")
     request_id: str = Field(min_length=1, max_length=160, pattern=r"^[A-Za-z0-9_.:-]+$")
+
+
+class CopyWorkoutInput(CopyLastWeekInput):
+    source_date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    expected_source_revision: str | None = Field(default=None, pattern=r"^rev_[a-f0-9]{32}$")
 
 
 class ClearWorkoutInput(StrictModel):
@@ -2041,25 +2046,42 @@ class WorkoutService:
             for set_row in item["sets"]
         )
 
-    @transactional_mutation
     async def copy_last_week(self, account_id: str, input: CopyLastWeekInput) -> dict[str, Any]:
-        """Copy the same weekday seven days earlier as fresh planned structure.
+        try:
+            source_date = shift_date(input.date, -7)
+        except ValueError:
+            raise WorkoutDomainError("invalid_date", "date must be a valid calendar date.", 422) from None
+        return await self.copy_workout(account_id, CopyWorkoutInput(
+            **input.model_dump(), source_date=source_date,
+        ))
+
+    @transactional_mutation
+    async def copy_workout(self, account_id: str, input: CopyWorkoutInput) -> dict[str, Any]:
+        """Copy a saved source day as fresh planned structure on another date.
 
         Only the segment/item shape, snapshots and targets travel; every set is
         unlogged and every id is new. A target day that owns logged history is
         never replaced.
         """
         try:
-            source_date = shift_date(input.date, -7)
+            source_date = shift_date(input.source_date, 0)
+            shift_date(input.date, 0)
         except ValueError:
             raise WorkoutDomainError("invalid_date", "date must be a valid calendar date.", 422) from None
-        fingerprint = _fingerprint({"date": input.date, "source_date": source_date, "expected_revision": input.expected_revision})
+        if source_date == input.date:
+            raise WorkoutDomainError("copy_same_date", "Source and target dates must differ.", 422)
+        fingerprint_fields = {"date": input.date, "source_date": source_date, "expected_revision": input.expected_revision}
+        if input.expected_source_revision is not None:
+            fingerprint_fields["expected_source_revision"] = input.expected_source_revision
+        fingerprint = _fingerprint(fingerprint_fields)
         prior = await self._receipt(account_id, input.request_id, fingerprint)
         if prior:
             return prior
         source = await self.db.workouts.find_one({"account_id": account_id, "date": source_date, "deleted_at": {"$exists": False}})
         if not source:
             raise WorkoutDomainError("copy_source_missing", f"No workout was saved for {source_date}.", 404)
+        if input.expected_source_revision is not None and source["revision"] != input.expected_source_revision:
+            raise WorkoutDomainError("stale_revision", "Source workout changed. Pull it before copying.")
         current = await self.db.workouts.find_one({"account_id": account_id, "date": input.date, "deleted_at": {"$exists": False}})
         if input.expected_revision is not None and (not current or current["revision"] != input.expected_revision):
             raise WorkoutDomainError("stale_revision", "Workout changed. Pull the current revision before copying.")
@@ -2101,7 +2123,7 @@ class WorkoutService:
                 segment_copy["title"] = segment["title"]
             segments.append(segment_copy)
         source_lineage = source.get("lineage", {})
-        source_kind: LineageSource = "copy_last_week"
+        source_kind: LineageSource = "copy_last_week" if shift_date(source_date, 7) == input.date else "copy"
         lineage: dict[str, Any] = {
             "source": source_kind,
             "copied_from": {"workout_id": source["workout_id"], "date": source["date"], "revision": source["revision"]},

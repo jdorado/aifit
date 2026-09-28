@@ -34,6 +34,8 @@ Read:
   aifit workout progression WORKOUT_ID
   aifit workout show WORKOUT_ID
   aifit workout list --start DATE --end DATE
+  aifit workout exercise-repertoire WORKOUT_ID
+  aifit workout swap-candidates WORKOUT_ID EXERCISE_INSTANCE_ID
 
 Write (all require --request-id):
   aifit exercise create --input FILE|- [--expected-revision REV]
@@ -44,6 +46,17 @@ Write (all require --request-id):
   aifit workout remove-set WORKOUT_ID SET_ID --expected-revision REV
   aifit workout log-set WORKOUT_ID SET_ID --input FILE|- --expected-revision REV
   aifit workout set-target WORKOUT_ID SET_ID --input FILE|- --expected-revision REV
+  aifit workout unlog-set WORKOUT_ID SET_ID --expected-revision REV
+  aifit workout add-exercise WORKOUT_ID --input FILE|- --expected-revision REV
+  aifit workout remove-exercise WORKOUT_ID EXERCISE_INSTANCE_ID --expected-revision REV
+  aifit workout move-exercise WORKOUT_ID EXERCISE_INSTANCE_ID --input FILE|- --expected-revision REV
+  aifit workout extract-exercise WORKOUT_ID EXERCISE_INSTANCE_ID [--input FILE|-] --expected-revision REV
+  aifit workout remove-segment WORKOUT_ID SEGMENT_ID --expected-revision REV
+  aifit workout reorder-segments WORKOUT_ID --input FILE|- --expected-revision REV
+  aifit workout set-notes WORKOUT_ID --input FILE|- --expected-revision REV
+  aifit workout set-exercise-notes WORKOUT_ID EXERCISE_INSTANCE_ID --input FILE|- --expected-revision REV
+  aifit workout clear WORKOUT_ID --expected-revision REV
+  aifit workout copy --from DATE --date DATE --source-revision REV [--expected-revision REV]
   aifit workout override --input FILE|- [--expected-revision REV]
   aifit workout swap --input FILE|- --expected-revision REV [--source default|jev] [--target-candidate CAND]
 
@@ -64,6 +77,13 @@ Artifacts (full typed schema and rules are in the installed aifit skill):
   override: date, title, reason_md, segments (every slot exactly one candidate)
   set actual: status, reps, duration_seconds, load, rpe, completed_at
   set target: target{reps|duration_seconds,load,rpe}, apply_to_remaining (optional)
+  add exercise: blueprint_id, expected_blueprint_revision, day_id, slot_id, candidate_id
+    (read exercise-repertoire; copies one eligible published prescription)
+  move exercise: target_segment_id, target_index (1-based, after source removal)
+  extract exercise: before_segment_id (optional; default is end of workout)
+  reorder segments: segment_ids (every current segment exactly once)
+  workout note: notes (string; empty clears)
+  exercise note: note (string), preset (pain|hard|easy|form|null, optional)
   swap: workout_id, exercise_instance_id, expected_blueprint_revision, reason
     (pass --target-candidate CAND when the user already picked a slot candidate,
     e.g. a mini-chat top-3 choice; otherwise the API selects via --source)
@@ -76,6 +96,11 @@ Use remove-set for one unlogged set; set-target for reps/load/time changes.
 Never regenerate or override a day for a set edit. Override replaces the entire
 unlogged remainder; logged sets are kept separately, so repeating the full
 planned dose in an override adds that work again.
+Exercise/segment removal and clear remove only unlogged work. Moving, extracting
+and reordering preserve sets. Notes replace the named note. Unlog is only for
+an explicit correction of recorded performance, never to bypass logged history.
+Copy reads a saved source day and creates fresh unlogged sets on a different date;
+it refuses to replace a target with logged sets. Read both days before copying.
 Before authoring blueprint candidates or overrides, reuse matching catalog
 exercise IDs from exercise list. Use common exercise names; keep setup cues
 in instructions and prescriptions. Naming variations alone do not need new IDs.
@@ -197,6 +222,30 @@ function jsonShape(name, forbidden = []) {
   return { name, forbidden };
 }
 
+// Scoped workout edits all use the same revision/request envelope.
+const workoutEdits = {
+  'unlog-set': { ids: 2, shape: 'WORKOUT_ID SET_ID', method: 'POST', input: null,
+    path: (workout, id) => `/workouts/${workout}/sets/${id}/unlog` },
+  'add-exercise': { ids: 1, shape: 'WORKOUT_ID', method: 'POST', input: "required",
+    path: (workout) => `/workouts/${workout}/exercises` },
+  'remove-exercise': { ids: 2, shape: 'WORKOUT_ID EXERCISE_INSTANCE_ID', method: 'POST', input: null,
+    path: (workout, id) => `/workouts/${workout}/exercises/${id}/remove` },
+  'move-exercise': { ids: 2, shape: 'WORKOUT_ID EXERCISE_INSTANCE_ID', method: 'POST', input: "required",
+    path: (workout, id) => `/workouts/${workout}/exercises/${id}/move` },
+  'extract-exercise': { ids: 2, shape: 'WORKOUT_ID EXERCISE_INSTANCE_ID', method: 'POST', input: "optional",
+    path: (workout, id) => `/workouts/${workout}/exercises/${id}/extract` },
+  'remove-segment': { ids: 2, shape: 'WORKOUT_ID SEGMENT_ID', method: 'POST', input: null,
+    path: (workout, id) => `/workouts/${workout}/segments/${id}/remove` },
+  'reorder-segments': { ids: 1, shape: 'WORKOUT_ID', method: 'POST', input: "required",
+    path: (workout) => `/workouts/${workout}/segments/reorder` },
+  'set-notes': { ids: 1, shape: 'WORKOUT_ID', method: 'PATCH', input: "required",
+    path: (workout) => `/workouts/${workout}/notes` },
+  'set-exercise-notes': { ids: 2, shape: 'WORKOUT_ID EXERCISE_INSTANCE_ID', method: 'PATCH', input: "required",
+    path: (workout, id) => `/workouts/${workout}/exercises/${id}/notes` },
+  'clear': { ids: 1, shape: 'WORKOUT_ID', method: 'POST', input: null,
+    path: (workout) => `/workouts/${workout}/clear` },
+};
+
 async function main() {
   const args = process.argv.slice(2);
   if (!args.length || args.includes('--help') || args.includes('-h')) {
@@ -258,6 +307,14 @@ async function main() {
       expected_revision: optional(values, '--expected-revision') || null,
       request_id: required(values, '--request-id'),
     });
+  } else if (area === 'workout' && action === 'exercise-repertoire') {
+    const { positional } = parseArgs(rest, new Set());
+    const [workoutId] = exactly(positional, 1, 'workout exercise-repertoire WORKOUT_ID');
+    result = await call(context, 'GET', `/workouts/${encodeURIComponent(workoutId)}/exercise-repertoire`);
+  } else if (area === 'workout' && action === 'swap-candidates') {
+    const { positional } = parseArgs(rest, new Set());
+    const [workoutId, instanceId] = exactly(positional, 2, 'workout swap-candidates WORKOUT_ID EXERCISE_INSTANCE_ID');
+    result = await call(context, 'GET', `/workouts/${encodeURIComponent(workoutId)}/exercises/${encodeURIComponent(instanceId)}/swap-candidates`);
   } else if (area === 'workout' && action === 'progression') {
     const { positional } = parseArgs(rest, new Set());
     const [workoutId] = exactly(positional, 1, 'workout progression WORKOUT_ID');
@@ -307,6 +364,29 @@ async function main() {
     result = await call(context, 'PATCH', `/workouts/${encodeURIComponent(workoutId)}/sets/${encodeURIComponent(setId)}/target`, {
       ...await jsonFile(required(values, '--input'), jsonShape('set target object', ['expected_revision', 'request_id'])),
       expected_revision: required(values, '--expected-revision'),
+      request_id: required(values, '--request-id'),
+    });
+  } else if (area === 'workout' && Object.hasOwn(workoutEdits, action)) {
+    const edit = workoutEdits[action];
+    const { values, positional } = parseArgs(rest, new Set([
+      '--expected-revision', '--request-id', ...(edit.input ? ['--input'] : []),
+    ]));
+    const ids = exactly(positional, edit.ids, `workout ${action} ${edit.shape}`).map(encodeURIComponent);
+    const input = edit.input === 'optional' && !values['--input'] ? {}
+      : edit.input ? await jsonFile(required(values, '--input'), jsonShape(`${action} object`, ['expected_revision', 'request_id'])) : {};
+    result = await call(context, edit.method, edit.path(...ids), {
+      ...input,
+      expected_revision: required(values, '--expected-revision'),
+      request_id: required(values, '--request-id'),
+    });
+  } else if (area === 'workout' && action === 'copy') {
+    const { values, positional } = parseArgs(rest, new Set(['--from', '--date', '--source-revision', '--expected-revision', '--request-id']));
+    exactly(positional, 0, 'workout copy --from DATE --date DATE --source-revision REV [--expected-revision REV] --request-id KEY');
+    result = await call(context, 'POST', '/workouts/copy', {
+      source_date: date(required(values, '--from'), '--from'),
+      date: date(required(values, '--date'), '--date'),
+      expected_source_revision: required(values, '--source-revision'),
+      expected_revision: optional(values, '--expected-revision') || null,
       request_id: required(values, '--request-id'),
     });
   } else if (area === 'workout' && action === 'override') {

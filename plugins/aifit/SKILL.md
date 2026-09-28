@@ -29,6 +29,8 @@ aifit blueprint active [--date DATE]
 aifit workout show WORKOUT_ID
 aifit workout progression WORKOUT_ID
 aifit workout list --start DATE --end DATE
+aifit workout exercise-repertoire WORKOUT_ID
+aifit workout swap-candidates WORKOUT_ID EXERCISE_INSTANCE_ID
 ```
 
 Reads print the canonical JSON record the app renders. Use them whenever the
@@ -87,67 +89,106 @@ health-gate, and revision checks. Never ask which exercise the user means.
 If a required reference or plugin read fails, report the missing information
 briefly; do not browse packages, permissions, source, or old plans to guess it.
 
-## Writes
+## Operation model
+
+The canonical hierarchy is blueprint -> dated workout -> ordered segments ->
+exercise instances -> sets. A catalog exercise definition is reusable; a workout
+instance is one occurrence of it. Choose operations by the record being changed.
+Combine them to fulfill the user's intent; these are domain primitives, not
+prescribed coaching workflows.
+
+| Scope | Operations | Effect and boundary |
+| --- | --- | --- |
+| Catalog | `exercise list/show/create` | Find, create, or revise a definition. Existing workout snapshots stay unchanged. |
+| Blueprint | `blueprint active/draft/solidify` | Read, author, and publish future training structure and progression. Does not rewrite materialized workouts. |
+| Workout | `workout list/show/progression/generate/copy/override/clear/set-notes` | Read state/evidence, materialize a published day, copy a saved day, replace remaining work, clear remaining work, or replace its note. |
+| Segment | `reorder-segments/remove-segment` | Order entire blocks or remove their unlogged work. `extract-exercise` creates a standalone block; `move-exercise` moves between or within existing blocks. |
+| Exercise instance | `exercise-repertoire/add-exercise/swap-candidates/swap/remove-exercise/move-exercise/extract-exercise/set-exercise-notes` | Discover published choices, add/swap a prescribed movement, remove its unlogged sets, change its position/group, or replace its feedback note. |
+| Set | `add-set/remove-set/set-target/log-set/unlog-set` | Change planned volume/targets or explicitly record/correct performance. |
+
+Ordinary set, exercise, ordering, and note edits preserve all unrelated records
+and do not publish a blueprint or regenerate a day. Moving/extracting/reordering
+preserves set IDs, targets, and actuals. Removing an exercise or segment removes
+only unlogged sets: completed work remains under its original snapshot. Clearing
+a day follows the same rule; an empty day returns `workout: null`. A set-level
+remove or target change rejects a logged set. Use `unlog-set` only when the user
+explicitly corrects a mistaken log; it returns that set to pending and removes
+its performance-history effect. Never unlog to get around a planning restriction.
+`log-set` records completed/skipped work, or explicitly corrects its actuals.
+
+## Commands and composition
+
+All writes require a unique `--request-id KEY`. Every edit to an existing
+workout requires `--expected-revision REV`. The command list below includes
+those flags even where the same envelope repeats. JSON is the domain payload
+only: no request/revision envelope fields, account identity, or credentials.
+Stream artifacts with `--input -` into the isolated plugin container.
 
 ```sh
 aifit exercise create --input FILE|- --request-id KEY [--expected-revision REV]
-
-aifit blueprint draft --input FILE|- --request-id KEY \
-  [--blueprint-id ID --expected-revision REV]
-
-aifit blueprint solidify --input FILE|- --request-id KEY \
-  [--blueprint-id ID --expected-revision REV]
-
+aifit blueprint draft --input FILE|- --request-id KEY [--blueprint-id ID --expected-revision REV]
+aifit blueprint solidify --input FILE|- --request-id KEY [--blueprint-id ID --expected-revision REV]
 aifit workout generate --date DATE [--source default|jev] --request-id KEY
-
-aifit workout add-set WORKOUT_ID EXERCISE_INSTANCE_ID \
-  --expected-revision REV --request-id KEY
-
-aifit workout remove-set WORKOUT_ID SET_ID \
-  --expected-revision REV --request-id KEY
-
-aifit workout set-target WORKOUT_ID SET_ID --input FILE|- \
-  --expected-revision REV --request-id KEY
-
-aifit workout log-set WORKOUT_ID SET_ID --input FILE|- \
-  --expected-revision REV --request-id KEY
-
-aifit workout override --input FILE|- --request-id KEY \
-  [--expected-revision REV]
-
-aifit workout swap --input FILE|- --request-id KEY \
-  --expected-revision REV [--source default|jev] [--target-candidate CAND]
+aifit workout copy --from DATE --date DATE --source-revision REV [--expected-revision REV] --request-id KEY
+aifit workout override --input FILE|- --request-id KEY [--expected-revision REV]
+aifit workout clear WORKOUT_ID --expected-revision REV --request-id KEY
+aifit workout add-set WORKOUT_ID EXERCISE_INSTANCE_ID --expected-revision REV --request-id KEY
+aifit workout remove-set WORKOUT_ID SET_ID --expected-revision REV --request-id KEY
+aifit workout set-target WORKOUT_ID SET_ID --input FILE|- --expected-revision REV --request-id KEY
+aifit workout log-set WORKOUT_ID SET_ID --input FILE|- --expected-revision REV --request-id KEY
+aifit workout unlog-set WORKOUT_ID SET_ID --expected-revision REV --request-id KEY
+aifit workout add-exercise WORKOUT_ID --input FILE|- --expected-revision REV --request-id KEY
+aifit workout swap --input FILE|- --expected-revision REV --request-id KEY [--source default|jev] [--target-candidate CAND]
+aifit workout remove-exercise WORKOUT_ID EXERCISE_INSTANCE_ID --expected-revision REV --request-id KEY
+aifit workout move-exercise WORKOUT_ID EXERCISE_INSTANCE_ID --input FILE|- --expected-revision REV --request-id KEY
+aifit workout extract-exercise WORKOUT_ID EXERCISE_INSTANCE_ID [--input FILE|-] --expected-revision REV --request-id KEY
+aifit workout remove-segment WORKOUT_ID SEGMENT_ID --expected-revision REV --request-id KEY
+aifit workout reorder-segments WORKOUT_ID --input FILE|- --expected-revision REV --request-id KEY
+aifit workout set-notes WORKOUT_ID --input FILE|- --expected-revision REV --request-id KEY
+aifit workout set-exercise-notes WORKOUT_ID EXERCISE_INSTANCE_ID --input FILE|- --expected-revision REV --request-id KEY
 ```
 
-Use stdin (`--input -` or `--markdown -`) because Ez runs the plugin in an
-isolated container. The agent swap path selects with JEV unless `--source`
-says otherwise. Choose the smallest operation for the user's request:
+| Input for | JSON payload and semantics |
+| --- | --- |
+| `add-exercise` | `{"blueprint_id":"bp_...","expected_blueprint_revision":"rev_...","day_id":"day_...","slot_id":"slot_...","candidate_id":"cand_..."}` from `exercise-repertoire`. That read returns `workout_revision`, `blueprint_id`, `blueprint_revision`, and candidates across all published days. Select a candidate with `already_added: false`; map `blueprint_revision` to `expected_blueprint_revision`. Adds its published dose in a new standalone segment. Duplicate exercises and stale blueprints are rejected. |
+| `move-exercise` | `{"target_segment_id":"seg_...","target_index":1}`. Position is 1-based **after removing the source item**, including moves within the same segment. Sets and the target segment's kind/rest remain unchanged; an emptied source segment disappears. |
+| `extract-exercise` | Optional `{"before_segment_id":"seg_..."}`; omit input or use `{}` to append at the end. Creates a new straight-sets segment holding that same instance and sets. |
+| `reorder-segments` | `{"segment_ids":["seg_second","seg_first"]}`. Include every current segment exactly once. |
+| `set-notes` | `{"notes":"Day note"}` (max 4,000 characters). Replaces the day note; empty string clears. |
+| `set-exercise-notes` | `{"note":"Feedback","preset":"form"}` (max 2,000 characters). Preset is `pain`, `hard`, `easy`, `form`, or null (default). Replaces only that instance's note; read and combine existing text if the user means append. |
+| `set-target` | `{"target":{"reps":{"min":8,"max":12},"load":{"value":40,"unit":"kg"}},"apply_to_remaining":true}`. Copy the existing target and change the intended fields. Replaces the selected unlogged target, optionally later unlogged targets of the same instance. Duration targets use `duration_seconds` instead of `reps`. |
 
-- **Add a set / one more set:** use `workout add-set` with the mini-chat's current
-  exercise instance. It appends exactly one unlogged set, copying the last
-  non-warmup set's target (or the last set when there are only warmups). It works
-  even when all existing sets are logged. It preserves existing set IDs,
-  targets, actuals, other exercises, segments, and blueprint lineage.
-- **Remove a set:** use `workout remove-set` with an unlogged set ID from that
-  instance. Logged sets cannot be removed by this command.
-- **Change planned reps, load, or duration:** use `workout set-target`.
-- **Record performance:** use `workout log-set`.
-- **Change to an in-blueprint alternative:** use `workout swap`.
-- **Replace the day's remaining workout or an exercise outside its pool:**
-  author the complete intended unlogged remainder and use `workout override`.
+`add-set` appends exactly one unlogged set to the selected instance, even after
+all its prior sets are logged. It copies the last non-warmup target (last set
+when only warmups exist); an empty instance restores its saved last target or
+published prescription when available. It does not add a circuit round to other
+exercises. For two additional sets, call it twice with distinct request IDs and
+carry the first receipt's revision into the second call. For a whole extra round,
+apply one add-set to each intended instance, preserving all other work.
 
-Never use override, generate, or blueprint publication to add/remove a set or
-change a set target. `add-set` and `remove-set` need no JSON artifact. For two
-extra sets, call add-set twice in sequence with distinct request IDs, using the
-first receipt's revision for the second call. After an uncertain result, retry
-the exact same request ID and revision; do not create a fresh request that could
-add another set. On `stale_revision`, read the workout and reassess before writing.
-Verify the receipt's workout (or `workout show`) has only the requested change
-before confirming it to the user. A missing command or endpoint is a failure to
-report, never a reason to substitute a whole-day rewrite.
+Compose writes **sequentially**, using each returned workout and revision to
+resolve the next IDs. A swap/override creates new instance IDs; removing or
+moving the final item can remove a segment. Stop if a step fails; earlier
+successful steps remain saved, so report partial completion honestly. After an
+uncertain result, retry the exact same request ID and payload; a fresh ID may
+apply the change twice. On `stale_revision`, read current state and reassess.
+Verify receipts or canonical reads before confirming the requested result.
+Never substitute an override for a missing/failed scoped command.
 
-Copying a previous day is resolved by you into an override artifact; the plugin
-never reads or copies workout records for you.
+`generate` returns an existing workout unchanged when that date already exists.
+It is not a reset. `copy` reads a saved source date, verifies its source revision,
+and creates fresh IDs and unlogged targets on another date. Read both dates:
+pass the target's current revision when replacing it, omit only for an absent
+target. A target containing any logged set is rejected. The source, logs,
+feedback notes, and active blueprint are not changed or copied as performance.
+The browser's last-week shortcut uses this same copy implementation.
+
+Use `override` only when intentionally authoring the entire remaining day,
+including a custom out-of-blueprint prescription unsupported by the bounded
+add/swap operations. No arbitrary JSON patch, identity edits, legacy program
+publication, or model/session controls belong in this surface. Keep fitness
+judgment and workspace plans with the agent. For permanent programming changes,
+publish a blueprint; for today's scoped edit, use these workout primitives.
 
 ## Exercise definition artifact
 
@@ -409,9 +450,10 @@ under the original exercise and swaps only the sets that are still open, so a
 partially logged exercise can still be swapped. Only an exercise whose every
 set is logged returns `completed_exercise_locked`. An item kept verbatim from
 outside the blueprint (legacy import, copied day, or override remainder) has
-no blueprint slot and returns `blueprint_slot_missing`: do not retry it —
-regenerate the day from the active blueprint first (clear the unlogged
-remainder, then generate) so every item maps to a slot with alternatives.
+no blueprint slot and returns `blueprint_slot_missing`. Read the repertoire to
+find an eligible add/remove composition, or explain that an explicitly authored
+remaining-day override is needed. Do not clear then generate to force a swap:
+generate returns any existing day unchanged, including its preserved logs.
 If the required workout or
 blueprint context is absent, stop with structured feedback; never invent a
 candidate or turn a swap into an exception day.
