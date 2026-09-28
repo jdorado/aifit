@@ -4,7 +4,7 @@ import re
 import pytest
 from pymongo.errors import OperationFailure
 
-from aifit_api.workouts import BlueprintInput, GenerateInput, WorkoutService
+from aifit_api.workouts import BlueprintInput, GenerateInput, WorkoutDomainError, WorkoutService
 
 from test_workout_contract import blueprint
 
@@ -115,7 +115,7 @@ class FakeClient:
 
 
 class FakeDatabase:
-    def __init__(self):
+    def __init__(self, seed_catalog=True):
         self.documents = {
             "profiles": [],
             "exercises": [],
@@ -131,6 +131,23 @@ class FakeDatabase:
         self.client = FakeClient(self)
         self.committed = 0
         self.aborted = 0
+        if seed_catalog:
+            self.seed_blueprint_catalog(blueprint())
+
+    def seed_blueprint_catalog(self, plan, account="acc_one"):
+        for day in plan["days"]:
+            for segment in day["segments"]:
+                for slot in segment["slots"]:
+                    for candidate in slot["candidates"]:
+                        key = {"account_id": account, "exercise_id": candidate["exercise_id"], "revision": candidate["exercise_revision"]}
+                        if any(matches(row, key) for row in self.documents["exercises"]):
+                            continue
+                        self.documents["exercises"].append({
+                            **key, "name": candidate["exercise_id"].removeprefix("ex_").replace("_", " ").title(),
+                            "movement_pattern": slot["role"], "primary_muscles": [], "secondary_muscles": [],
+                            "equipment_kind": "", "laterality": "bilateral", "load_basis": "total",
+                            "metrics": [candidate["prescription"]["metric"]], "instructions_md": "Controlled movement.",
+                        })
 
     def __getattr__(self, name):
         if name in self.documents:
@@ -284,9 +301,14 @@ async def test_generate_rolls_back_workout_when_receipt_write_fails():
 
 
 @pytest.mark.asyncio
-async def test_solidify_and_generate_accept_agent_authored_exercise_ids():
-    database = FakeDatabase()
+async def test_solidify_requires_real_catalog_revisions_before_generation():
+    database = FakeDatabase(seed_catalog=False)
     service = WorkoutService(database)
+    with pytest.raises(WorkoutDomainError) as error:
+        await service.solidify_blueprint("acc_one", BlueprintInput(**blueprint()), None, "missing-definition", {"kind": "agent"})
+    assert error.value.code == "blueprint_exercise_missing"
+    assert database.documents["blueprints"] == database.documents["program_state"] == []
+    database.seed_blueprint_catalog(blueprint())
     published = await service.solidify_blueprint(
         "acc_one",
         BlueprintInput(**blueprint()),
@@ -299,7 +321,7 @@ async def test_solidify_and_generate_accept_agent_authored_exercise_ids():
         GenerateInput(date="2026-09-21", request_id="generate-authored-001"),
     )
 
-    assert database.documents["exercises"] == []
+    assert len(database.documents["exercises"]) == 2
     assert published["status"] == "saved"
     snapshot = generated["workout"]["segments"][0]["items"][0]["exercise_snapshot"]
     assert snapshot["exercise_id"] == "ex_chest_supported_row_machine"

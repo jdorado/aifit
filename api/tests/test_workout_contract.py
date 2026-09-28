@@ -110,11 +110,10 @@ def test_blueprint_rejects_a_candidate_that_is_also_hard_forbidden():
         BlueprintInput(**value)
 
 
-def test_blueprint_requires_an_alternative_beyond_selection_count():
+def test_blueprint_allows_a_narrow_slot_without_padding_alternatives():
     value = blueprint()
     value["days"][0]["segments"][0]["slots"][0]["candidates"].pop()
-    with pytest.raises(ValueError, match="alternative"):
-        BlueprintInput(**value)
+    assert len(BlueprintInput(**value).days[0].segments[0].slots[0].candidates) == 1
 
 
 def test_agent_override_keeps_the_same_typed_segment_contract():

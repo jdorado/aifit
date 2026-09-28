@@ -27,6 +27,7 @@ async def repertoire_fixture():
             {'reps': {'min': 10 + number, 'max': 10 + number}, 'load': {'value': 8 + number, 'unit': 'kg'}} for number in range(3)
         ]
     plan['days'].append(day)
+    database.seed_blueprint_catalog(plan)
     await service.solidify_blueprint('acc_one', BlueprintInput(**plan), None, 'publish', {'kind': 'agent'})
     result = await service.generate('acc_one', GenerateInput(date='2026-09-21', request_id='generate'))
     workout, _ = await log_set_at(service, result['workout'], 0, 'log-original')

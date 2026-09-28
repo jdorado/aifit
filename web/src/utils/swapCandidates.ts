@@ -5,6 +5,7 @@ export type SwapCandidate = {
   equipment_kind: string
   priority: number
   target_summary: string
+  sets?: number
   rest_seconds: number
 }
 
@@ -101,6 +102,7 @@ const normalizeCandidate = (value: unknown): SwapCandidate | null => {
     equipment_kind: asString(row.equipment_kind) ?? '',
     priority,
     target_summary: asString(row.target_summary) ?? '',
+    sets: typeof row.sets === 'number' && Number.isInteger(row.sets) && row.sets > 0 ? row.sets : undefined,
     rest_seconds: restSeconds,
   }
 }
