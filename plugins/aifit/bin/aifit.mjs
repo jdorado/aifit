@@ -40,6 +40,8 @@ Write (all require --request-id):
   aifit blueprint draft --input FILE|- [--blueprint-id ID --expected-revision REV]
   aifit blueprint solidify --input FILE|- [--blueprint-id ID --expected-revision REV]
   aifit workout generate --date DATE [--source default|jev]
+  aifit workout add-set WORKOUT_ID EXERCISE_INSTANCE_ID --expected-revision REV
+  aifit workout remove-set WORKOUT_ID SET_ID --expected-revision REV
   aifit workout log-set WORKOUT_ID SET_ID --input FILE|- --expected-revision REV
   aifit workout set-target WORKOUT_ID SET_ID --input FILE|- --expected-revision REV
   aifit workout override --input FILE|- [--expected-revision REV]
@@ -68,6 +70,12 @@ Artifacts (full typed schema and rules are in the installed aifit skill):
 
 Reads print canonical JSON records. Writes print one receipt. Use stdin
 (--input -) because Ez runs the plugin in an isolated container.
+For "add a set", use add-set on the current exercise instance: it appends one
+unlogged set with the last working set's target and preserves everything else.
+Use remove-set for one unlogged set; set-target for reps/load/time changes.
+Never regenerate or override a day for a set edit. Override replaces the entire
+unlogged remainder; logged sets are kept separately, so repeating the full
+planned dose in an override adds that work again.
 Before authoring blueprint candidates or overrides, reuse matching catalog
 exercise IDs from exercise list. Use common exercise names; keep setup cues
 in instructions and prescriptions. Naming variations alone do not need new IDs.
@@ -269,6 +277,20 @@ async function main() {
     result = await call(context, 'POST', '/workouts/generate', {
       date: date(required(values, '--date'), '--date'),
       source: optional(values, '--source') ? oneOf(values['--source'], '--source', ['default', 'jev']) : 'default',
+      request_id: required(values, '--request-id'),
+    });
+  } else if (area === 'workout' && action === 'add-set') {
+    const { values, positional } = parseArgs(rest, new Set(['--expected-revision', '--request-id']));
+    const [workoutId, instanceId] = exactly(positional, 2, 'workout add-set WORKOUT_ID EXERCISE_INSTANCE_ID');
+    result = await call(context, 'POST', `/workouts/${encodeURIComponent(workoutId)}/exercises/${encodeURIComponent(instanceId)}/sets`, {
+      expected_revision: required(values, '--expected-revision'),
+      request_id: required(values, '--request-id'),
+    });
+  } else if (area === 'workout' && action === 'remove-set') {
+    const { values, positional } = parseArgs(rest, new Set(['--expected-revision', '--request-id']));
+    const [workoutId, setId] = exactly(positional, 2, 'workout remove-set WORKOUT_ID SET_ID');
+    result = await call(context, 'POST', `/workouts/${encodeURIComponent(workoutId)}/sets/${encodeURIComponent(setId)}/remove`, {
+      expected_revision: required(values, '--expected-revision'),
       request_id: required(values, '--request-id'),
     });
   } else if (area === 'workout' && action === 'log-set') {

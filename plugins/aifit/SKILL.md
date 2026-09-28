@@ -100,6 +100,15 @@ aifit blueprint solidify --input FILE|- --request-id KEY \
 
 aifit workout generate --date DATE [--source default|jev] --request-id KEY
 
+aifit workout add-set WORKOUT_ID EXERCISE_INSTANCE_ID \
+  --expected-revision REV --request-id KEY
+
+aifit workout remove-set WORKOUT_ID SET_ID \
+  --expected-revision REV --request-id KEY
+
+aifit workout set-target WORKOUT_ID SET_ID --input FILE|- \
+  --expected-revision REV --request-id KEY
+
 aifit workout log-set WORKOUT_ID SET_ID --input FILE|- \
   --expected-revision REV --request-id KEY
 
@@ -112,10 +121,33 @@ aifit workout swap --input FILE|- --request-id KEY \
 
 Use stdin (`--input -` or `--markdown -`) because Ez runs the plugin in an
 isolated container. The agent swap path selects with JEV unless `--source`
-says otherwise. Use swap for one in-blueprint exercise; resolve any other
-item-level request into a complete target day and use override. Copying a
-previous day is resolved by you into that complete artifact; the plugin never
-reads or copies workout records for you.
+says otherwise. Choose the smallest operation for the user's request:
+
+- **Add a set / one more set:** use `workout add-set` with the mini-chat's current
+  exercise instance. It appends exactly one unlogged set, copying the last
+  non-warmup set's target (or the last set when there are only warmups). It works
+  even when all existing sets are logged. It preserves existing set IDs,
+  targets, actuals, other exercises, segments, and blueprint lineage.
+- **Remove a set:** use `workout remove-set` with an unlogged set ID from that
+  instance. Logged sets cannot be removed by this command.
+- **Change planned reps, load, or duration:** use `workout set-target`.
+- **Record performance:** use `workout log-set`.
+- **Change to an in-blueprint alternative:** use `workout swap`.
+- **Replace the day's remaining workout or an exercise outside its pool:**
+  author the complete intended unlogged remainder and use `workout override`.
+
+Never use override, generate, or blueprint publication to add/remove a set or
+change a set target. `add-set` and `remove-set` need no JSON artifact. For two
+extra sets, call add-set twice in sequence with distinct request IDs, using the
+first receipt's revision for the second call. After an uncertain result, retry
+the exact same request ID and revision; do not create a fresh request that could
+add another set. On `stale_revision`, read the workout and reassess before writing.
+Verify the receipt's workout (or `workout show`) has only the requested change
+before confirming it to the user. A missing command or endpoint is a failure to
+report, never a reason to substitute a whole-day rewrite.
+
+Copying a previous day is resolved by you into an override artifact; the plugin
+never reads or copies workout records for you.
 
 ## Exercise definition artifact
 
@@ -307,7 +339,16 @@ fitness equivalence for you.
 
 ## Exception-day artifact
 
-`workout override` takes one complete resolved day:
+`workout override` takes the complete intended **unlogged remainder** of one day.
+For an untouched day, that is the whole workout. For a started day, every set in
+this artifact becomes new unlogged work, in addition to the logged sets the API
+preserves automatically. Do not repeat completed exercises or include logged
+sets in the dose: after 2 of 3 sets are logged, prescribe 1 remaining set, not 3.
+Use each candidate's `prescription.set_count` for differing remaining counts.
+Include all other work that should remain unlogged; omitted open work is removed.
+Simple set edits use the dedicated commands above and never need this artifact.
+
+Example for an untouched day:
 
 ```json
 {

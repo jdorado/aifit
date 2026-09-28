@@ -27,6 +27,8 @@ authored artifact through stdin:
 ```sh
 aifit workout show wrk_0123456789abcdef0123456789abcdef
 aifit workout list --start 2026-09-21 --end 2026-09-27
+aifit workout add-set WORKOUT_ID EXERCISE_INSTANCE_ID --expected-revision REV --request-id add-set-<unique-key>
+aifit workout remove-set WORKOUT_ID SET_ID --expected-revision REV --request-id remove-set-<unique-key>
 
 cat /absolute/path/blueprint.json | ez aifit blueprint solidify \
   --input - --request-id blueprint-<unique-key>
@@ -40,7 +42,15 @@ cat /absolute/path/swap.json | ez aifit workout swap \
 
 The full typed artifact schema, rules, and command list live in `SKILL.md`,
 which is installed with the plugin and is the agent-facing format contract.
-The override input is a complete resolved target-day artifact. Every override
+Set edits use the existing deterministic app operations: `add-set` appends one
+unlogged set to one exercise instance, `remove-set` removes one unlogged set,
+and `set-target` changes planned reps/load/duration. All require the current
+workout revision and an idempotency key. They preserve logged history and other
+exercises; never use a day override for these edits.
+
+The override input is the complete resolved unlogged remainder of the target day.
+Already logged work is preserved automatically; including its dose in the
+artifact would add that work again. Every override
 slot contains exactly one resolved candidate. The agent resolves item changes
 and copied days from native context; a swap input contains the current
 `workout_id`, `exercise_instance_id`, `expected_blueprint_revision`, and a

@@ -73,6 +73,8 @@ test('help exposes the canonical reads and the full write surface', async () => 
     'aifit workout show',
     'aifit workout list',
     'aifit workout generate',
+    'aifit workout add-set',
+    'aifit workout remove-set',
     'aifit workout log-set',
     'aifit workout set-target',
     'aifit workout override',
@@ -201,6 +203,37 @@ test('valid input is transported with only the Ez capability and typed options',
       },
     });
   });
+});
+
+test('set count commands require revision and request ID and send only a scoped edit', async () => {
+  for (const [action, itemId, path] of [
+    ['add-set', 'wex_test', 'exercises/wex_test/sets'],
+    ['remove-set', 'set_test', 'sets/set_test/remove'],
+  ]) {
+    for (const missing of ['--expected-revision', '--request-id']) {
+      await withFetchOutput(async (fetchOutput) => {
+        const flags = { '--expected-revision': 'rev_test', '--request-id': 'set-count-test' };
+        delete flags[missing];
+        const result = await runCli(['workout', action, 'wrk_test', itemId, ...Object.entries(flags).flat()], {
+          context: scopedContext, fetchOutput,
+        });
+        assert.match(errorPayload(result).error.message, new RegExp(`${missing} is required`));
+        assert.equal(await fetchRequest(fetchOutput), null);
+      });
+    }
+    await withFetchOutput(async (fetchOutput) => {
+      const result = await runCli(['workout', action, 'wrk_test', itemId,
+        '--expected-revision', 'rev_test', '--request-id', 'set-count-test'], {
+        context: scopedContext, fetchOutput,
+      });
+      assert.equal(result.code, 0, result.stderr);
+      assert.deepEqual(await fetchRequest(fetchOutput), {
+        url: `https://aifit.test/v1/agent/workouts/wrk_test/${path}`, method: 'POST',
+        headers: { authorization: 'Bearer capability-test', 'content-type': 'application/json' },
+        body: { expected_revision: 'rev_test', request_id: 'set-count-test' },
+      });
+    });
+  }
 });
 
 test('exercise, log-set, generate, and swap transport their typed payloads', async () => {

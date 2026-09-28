@@ -21,6 +21,9 @@ aifit exercise create --input FILE|- --request-id KEY [--expected-revision REV]
 aifit blueprint draft --input FILE|- --request-id KEY [--blueprint-id ID --expected-revision REV]
 aifit blueprint solidify --input FILE|- --request-id KEY [--blueprint-id ID --expected-revision REV]
 aifit workout generate --date DATE [--source default|jev] --request-id KEY
+aifit workout add-set WORKOUT_ID EXERCISE_INSTANCE_ID --expected-revision REV --request-id KEY
+aifit workout remove-set WORKOUT_ID SET_ID --expected-revision REV --request-id KEY
+aifit workout set-target WORKOUT_ID SET_ID --input FILE|- --expected-revision REV --request-id KEY
 aifit workout log-set WORKOUT_ID SET_ID --input FILE|- --expected-revision REV --request-id KEY
 aifit workout override --input FILE|- --request-id KEY [--expected-revision REV]
 aifit workout swap --input FILE|- --request-id KEY --expected-revision REV [--source default|jev] [--target-candidate CAND]
@@ -101,8 +104,17 @@ mutations.
 
 ## 3. Exceptional workout artifact
 
-An exception is one complete resolved target day. It is the agent-facing escape
-hatch for a request such as “replace today's exercise with one that is not in
+Set edits use `add-set`, `remove-set`, and `set-target`, backed by the same
+deterministic service as the frontend. Adding a set appends exactly one unlogged
+set to the named instance, including a completed instance, and copies its last
+non-warmup target (last set if only warmups exist). Other sets, exercises and
+blueprint lineage remain unchanged. Removing or retargeting a logged set is
+rejected. Writes require the current revision; exact request retries replay
+their receipt without applying twice. Missing commands must not fall back to
+whole-day overrides.
+
+An exception is the complete resolved unlogged remainder of a target day. It is
+the agent-facing escape hatch for a request such as “replace today's exercise with one that is not in
 the blueprint,” “make today a wholly new workout,” or “do yesterday's workout
 today.” The agent resolves that intent from its native context and sends the
 full target day:
@@ -117,8 +129,8 @@ cat /absolute/path/exception-day.json | ez aifit workout override \
 The input contains `date`, `title`, `reason_md`, and the complete typed
 `segments` array. Every override slot must contain exactly one already-resolved
 candidate; the backend never silently chooses an item for an exception day. An
-item-level change is still sent as the complete target day so the backend never
-has to infer which other items should remain. Copying a previous day is also
+out-of-pool exercise change is still sent as the complete unlogged remainder so
+the backend never has to infer which other items should remain. Copying a previous day is also
 resolved by the agent into that complete artifact; the plugin does not read or
 copy workout records.
 
@@ -128,7 +140,11 @@ If `--expected-revision` is supplied it must match the current workout revision;
 if omitted, the backend resolves the current target and applies the replacement
 atomically. Logged sets are immutable: they keep their original exercise
 snapshot, target, and actual, while the resolved day owns only the unlogged
-remainder, so an override still works after the user has logged sets. It stores
+remainder, so an override still works after the user has logged sets. Every
+artifact set becomes new open work in addition to the preserved history: after
+2 of 3 sets are logged, the artifact must prescribe 1 remaining set, not 3.
+Omit completed exercises and use `prescription.set_count` for different remaining
+counts. Including completed work repeats that dose. It stores
 the result with `lineage.source: "agent_override"`, the active blueprint
 ID/revision, the agent job ID, the reason, and any replaced workout revision. It
 does not modify the blueprint or its active pointer. A stale supplied revision

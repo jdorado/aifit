@@ -1181,6 +1181,30 @@ async def agent_log_set_v1(
     return await workouts().log_set(capability.account_id, workout_id, set_id, body)
 
 
+@app.post("/v1/agent/workouts/{workout_id}/exercises/{exercise_instance_id}/sets")
+async def agent_add_set_v1(
+    workout_id: str,
+    exercise_instance_id: str,
+    body: SetAddInput,
+    capability: AgentCapability = Depends(require_agent_capability),
+) -> dict:
+    require_agent_permission(capability, AGENT_WRITE)
+    require_agent_request(capability, body.request_id)
+    return await workouts().add_set(capability.account_id, workout_id, exercise_instance_id, body)
+
+
+@app.post("/v1/agent/workouts/{workout_id}/sets/{set_id}/remove")
+async def agent_remove_set_v1(
+    workout_id: str,
+    set_id: str,
+    body: SetRemoveInput,
+    capability: AgentCapability = Depends(require_agent_capability),
+) -> dict:
+    require_agent_permission(capability, AGENT_WRITE)
+    require_agent_request(capability, body.request_id)
+    return await workouts().remove_set(capability.account_id, workout_id, set_id, body)
+
+
 @app.patch("/v1/agent/workouts/{workout_id}/sets/{set_id}/target")
 async def agent_set_target_v1(
     workout_id: str,
