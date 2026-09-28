@@ -9806,10 +9806,22 @@ body:has(.view[data-view="profile"].active) {
    when the portal leaves the .view[data-view="workout"] selector scope. */
 @media (max-width: 640px) {
   .coach-chat.coach-chat--portaled {
+    top: var(--visual-viewport-offset-top);
+    height: var(--chat-viewport-height);
+    padding-top: var(--safe-top);
     background: #ffffff;
     border: 0;
-    border-radius: 22px 22px 0 0;
-    box-shadow: 0 -18px 48px rgba(7, 26, 53, 0.18);
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  .coach-chat--portaled .coach-chat-text {
+    flex: 0 0 auto;
+  }
+
+  .coach-chat--portaled .coach-chat-model-select {
+    flex: 1 1 0;
+    min-width: 0;
   }
 
   .coach-chat--portaled .coach-chat-panel {
@@ -9842,18 +9854,25 @@ body:has(.view[data-view="profile"].active) {
   }
 
   .coach-chat--portaled .coach-chat-input {
+    align-items: flex-end;
+    border-radius: 18px;
     background: #ffffff;
     border: 0;
     box-shadow: 0 1px 0 rgba(7, 26, 53, 0.04), 0 10px 24px rgba(7, 26, 53, 0.06);
   }
 
   .coach-chat--portaled .coach-chat-input textarea {
+    max-height: 112px;
     border: 0;
     border-radius: 0;
     background: transparent;
     box-shadow: none;
     outline: none;
     font-size: max(16px, calc(16px * var(--font-scale)));
+  }
+
+  .coach-chat--portaled .coach-chat-input button {
+    align-self: flex-end;
   }
 
   .coach-chat--portaled .coach-chat-input textarea:focus {
