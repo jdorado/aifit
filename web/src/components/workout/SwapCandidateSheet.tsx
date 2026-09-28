@@ -73,6 +73,7 @@ const SwapCandidateSheet: FC<SwapCandidateSheetProps> = ({
                       {busy ? <span>{t('workout.swapSwapping')}</span> : null}
                     </span>
                     <span className="exercise-history-metrics">
+                      {candidate.sets ? <span>{t('workout.addExerciseSets', { count: candidate.sets })}</span> : null}
                       {candidate.target_summary ? <span>{candidate.target_summary}</span> : null}
                       {candidate.equipment_kind ? <span>{candidate.equipment_kind}</span> : null}
                     </span>

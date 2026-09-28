@@ -271,11 +271,15 @@ important rules are:
 - Every day is inside the declared period; IDs and array orders are unique in
   their enclosing collection.
 - Training days have segments; rest days have none.
-- A day cannot place the same exercise in multiple candidate slots.
-- A blueprint slot has more candidates than `selection_count`, leaving at least
-  one blueprint-approved alternative when equipment, space, or preference
-  changes. An exception-day slot is different: it must contain exactly one
-  already-resolved candidate.
+- Candidate pools may share canonical exercise IDs across slots. Every slot
+  must still be fillable with a distinct selected exercise. Generation reserves
+  options needed by narrower slots, and Swap excludes exercises already used
+  elsewhere. Slot IDs must be unique across the whole day.
+- Each blueprint slot selects one exercise for one function. Put mandatory pairs
+  in separate slots. A narrow slot may have no alternative; never pad its pool.
+  Every catalog ID/revision must exist for the authenticated tenant, and distinct
+  IDs must have unambiguous display names. These checks run before draft,
+  solidification and publication; legacy reads retain their display fallback.
 - A target uses exactly one primary metric: repetitions or duration.
 - Loads use a numeric `value` and a `kg` or `lb` unit.
 - Hard-forbidden exercises cannot appear as candidates.
@@ -340,6 +344,12 @@ Neither source can introduce an exercise outside the published blueprint.
 Every materialized workout stores the blueprint ID/revision, day ID, source,
 and selection decision receipt in its lineage. Generation is idempotent by
 `request_id` and date.
+
+Resolved-day overrides preserve canonical slot/candidate IDs for movements
+already in the blueprint. Legacy renamed slots can recover their pool from an
+unambiguous candidate/exercise ID match; names alone never establish that link.
+If a shared exercise fits multiple source slots and no exact link remains, the
+agent must resolve the role instead of the API guessing an alternative pool.
 
 ## 6. Other backend behavior
 
@@ -414,3 +424,13 @@ A local installation is complete only when:
 6. The active-blueprint route observes the unchanged published revision.
 7. Backend generation consumes that revision through `default` and `jev`, and
    the workout read route returns the exceptional day for the frontend.
+
+### Alternative set counts
+
+`prescription.set_count` optionally overrides the segment's round count (1–10).
+When supplied, `round_targets` must have exactly that many targets; otherwise it
+must match `segment.rounds`. Generation, Add and the displayed picker dose use
+this count. Swap applies at most that many currently unlogged sets, without
+adding sets or changing logged history; an omitted count retains legacy round
+mapping. A two-set regression in a three-round strength slot therefore stays
+at two sets. The coach still owns its eligibility and dose.

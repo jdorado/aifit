@@ -242,8 +242,12 @@ Rules:
 - `schema_version` is `1`; dates are `YYYY-MM-DD`; a period holds 1-31 days.
 - IDs: `day_`, `seg_`, `slot_`, `cand_`, `ex_`, `eqp_` then `[a-z0-9_]{3,120}`;
   `exercise_revision` is `rev_` plus exactly 32 lowercase hex characters.
-- IDs and `order` values are unique inside their collection; every day date is
-  inside the declared period; one exercise cannot appear twice in a day.
+- IDs and `order` values are unique inside their collection; slot IDs are also
+  unique across a day's segments, and every date is inside the declared period.
+  Alternative pools may share a canonical exercise ID when it fits both roles.
+  The generated workout selects that exercise at most once, reserves choices
+  needed by narrower slots, and Swap excludes movements already selected elsewhere.
+  Never create an alias to place the same movement in another pool.
 - A training day has at least one segment; a rest day has none.
 - Every training-day and override segment carries a short `title` (1-80
   chars) naming its focus, e.g. `"Warm-up Flow"`, `"Chest + Back"`,
@@ -251,18 +255,52 @@ Rules:
   kind label.
 - Segment `kind` is one of `warmup`, `straight_sets`, `superset`, `circuit`,
   `interval`, `mobility`, `cooldown`; `rounds` is 1-10.
-- A blueprint slot needs more candidates than `selection_count`, so one
-  approved alternative always remains.
+- Every blueprint slot has `selection_count: 1`: one training function and one
+  selected movement. Put mandatory biceps and triceps (or any other pair) in
+  separate slots of the same circuit; never select two from a mixed pool.
+- A narrow slot may have only its preferred candidate when no equivalent is
+  justified. Never pad the pool with aliases, PT/preparation, different training
+  functions, unavailable equipment or future-gated movements to meet a count.
 - `prescription.metric` is `reps` or `duration_seconds`; `target` carries
   exactly one of `reps`/`duration_seconds` as `{"min","max"}`, optional `load`
   `{"value","unit"}` with unit `kg` or `lb`, and optional `rpe` `{"min","max"}`
-  between 0 and 10. `round_targets`, when present, has exactly
-  `segment.rounds` targets. `rest_seconds` is 0-3600.
+  between 0 and 10. Optional `prescription.set_count` (1-10) gives this
+  variation its own number of sets; omit it to inherit `segment.rounds`.
+  `round_targets`, when present, has exactly that effective number of targets. `rest_seconds` is 0-3600.
 - `tempo` is optional: `eccentric_seconds`, `pause_seconds`,
   `concentric_seconds`, each 0-60.
 - `progression` is `{"kind":"none"}` or
   `{"kind":"double_progression","increase_when":{"completed_reps_at_or_above":N,"max_rpe":R},"increment":{"value":V,"unit":U},"load_range":[{"value":A,"unit":U},{"value":B,"unit":U}]}`.
 - Hard-forbidden exercises cannot appear as candidates.
+
+Before publishing a blueprint:
+
+1. Read the authored plan and relevant current constraints. Translate each
+   source slot's purpose, preferred movement, allowed alternatives, stage and
+   dose. Keep preparation/PT separate from strength work and keep future-gated
+   movements outside the pool. A broad movement label alone is not proof of fit.
+2. Resolve every candidate through `exercise list` / `exercise show`. Reuse the
+   same ID for the same movement/setup, including across days. Different tempo,
+   reps, load, spelling or word order does not make another exercise. For a
+   genuinely different setup, its display name must explain the distinction.
+   Create a missing definition before referencing its returned ID/revision.
+3. Give each alternative its own prescription, including `set_count` when its
+   dose differs from the segment. Check total duration as sets times duration;
+   never turn one easy cardio bout into four long interval rounds. No load
+   inheritance across variants. Explain in `rationale_md` how it preserves the
+   source slot's function or is an explicitly allowed lower-dose regression.
+4. Compare the complete artifact against the source before publication: correct
+   day and role, distinct alternatives, no missing gates, no extra volume, and
+   separate mandatory functions. Fit scores only rank eligible published
+   choices; they cannot establish eligibility or repair a bad pool.
+5. Read back the published blueprint and affected workout after the write. A
+   revision change makes existing workout lineage stale; reconcile through a
+   complete override of only the intended unlogged remainder when needed,
+   preserving all logged history. Do not claim success from the receipt alone.
+
+The API checks real tenant-scoped catalog revisions and rejects ambiguous
+same-name IDs before publication. It does not read your workspace plan or judge
+fitness equivalence for you.
 
 `blueprint solidify` validates, publishes, and makes the revision active;
 `blueprint draft` stores a revision without activating it.
@@ -286,7 +324,10 @@ Rules:
 ```
 
 Every slot has exactly one candidate, `selection_count` is 1, and candidate
-exercises are unique in the day. Pass `--expected-revision` only when a read or
+exercises are unique in the day. Keep the source blueprint slot and candidate
+IDs when resolving its candidates; renamed slots can disconnect the picker.
+The API preserves or recovers an unambiguous catalog-ID link, but never guesses
+between multiple eligible source roles. Pass `--expected-revision` only when a read or
 native context holds the current target workout revision; otherwise omit it and
 let the backend resolve the target atomically. Logged sets are immutable: the
 backend preserves them under their original exercise snapshots and applies the

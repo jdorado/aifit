@@ -12,7 +12,8 @@ from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from functools import wraps
 from hashlib import sha256
-from re import escape as regex_escape
+from re import escape as regex_escape, sub as regex_sub
+from unicodedata import normalize as unicode_normalize
 from typing import Any, Literal
 from uuid import uuid4
 
@@ -156,6 +157,7 @@ class ExerciseDefinitionInput(StrictModel):
 
 
 class CandidatePrescription(StrictModel):
+    set_count: int | None = Field(default=None, ge=1, le=10)
     metric: Literal["reps", "duration_seconds"]
     target: Target
     round_targets: list[Target] | None = Field(default=None, max_length=10)
@@ -240,9 +242,27 @@ class Segment(StrictModel):
         for slot in self.slots:
             for candidate in slot.candidates:
                 targets = candidate.prescription.round_targets
-                if targets is not None and len(targets) != self.rounds:
-                    raise ValueError("round_targets must contain exactly segment.rounds entries")
+                if targets is not None and len(targets) != (candidate.prescription.set_count or self.rounds):
+                    raise ValueError("round_targets must match prescription.set_count or segment.rounds when omitted")
         return self
+
+
+def _can_fill_slots(pools: list[list[str]], unavailable: set[str] | None = None) -> bool:
+    """Match each selected slot to a different exercise without greedy starvation."""
+    blocked = unavailable or set()
+    assigned: dict[str, int] = {}
+
+    def assign(slot: int, seen: set[str]) -> bool:
+        for exercise in pools[slot]:
+            if exercise in blocked or exercise in seen:
+                continue
+            seen.add(exercise)
+            if exercise not in assigned or assign(assigned[exercise], seen):
+                assigned[exercise] = slot
+                return True
+        return False
+
+    return all(assign(slot, set()) for slot in sorted(range(len(pools)), key=lambda index: len(pools[index])))
 
 
 class BlueprintDay(StrictModel):
@@ -263,9 +283,13 @@ class BlueprintDay(StrictModel):
         orders = [segment.order for segment in self.segments]
         if len(ids) != len(set(ids)) or len(orders) != len(set(orders)):
             raise ValueError("day segments need unique IDs and order")
-        exercise_ids = [candidate.exercise_id for segment in self.segments for slot in segment.slots for candidate in slot.candidates]
-        if len(exercise_ids) != len(set(exercise_ids)):
-            raise ValueError("each day candidate exercise belongs to exactly one slot")
+        slots = [slot for segment in self.segments for slot in segment.slots]
+        if len({slot.slot_id for slot in slots}) != len(slots):
+            raise ValueError("day slots need unique IDs across segments")
+        pools = [[candidate.exercise_id for candidate in slot.candidates]
+                 for slot in slots for _ in range(slot.selection_count)]
+        if not _can_fill_slots(pools):
+            raise ValueError("day slots cannot be filled without selecting an exercise twice")
         if self.kind == "training" and any(not segment.title for segment in self.segments):
             raise ValueError("training day segments need titles")
         return self
@@ -301,9 +325,9 @@ class BlueprintInput(StrictModel):
         for day in self.days:
             for segment in day.segments:
                 for slot in segment.slots:
-                    if len(slot.candidates) <= slot.selection_count:
+                    if slot.selection_count != 1:
                         raise ValueError(
-                            f"blueprint slot {slot.slot_id} needs at least one alternative beyond selection_count"
+                            f"blueprint slot {slot.slot_id} must select exactly one exercise; use separate slots for distinct functions"
                         )
         return self
 
@@ -600,6 +624,11 @@ def _transactions_unsupported(error: OperationFailure) -> bool:
     return getattr(error, "code", None) == 20 or "Transaction numbers are only allowed" in str(error)
 
 
+def _candidate_targets(candidate: dict[str, Any], rounds: int) -> list[dict[str, Any]]:
+    prescription = candidate["prescription"]
+    return prescription.get("round_targets") or [prescription["target"]] * (prescription.get("set_count") or rounds)
+
+
 class WorkoutService:
     """Canonical persistence service for end-state workout records.
 
@@ -735,6 +764,36 @@ class WorkoutService:
         await self.db.plans.insert_one(document)
         return await self._save_receipt(account_id, request_id, fingerprint, self.receipt("plan", identifier, revision, request_id))
 
+    async def _validate_blueprint_catalog(self, account_id: str, blueprint: BlueprintInput) -> None:
+        candidates = [candidate for day in blueprint.days for segment in day.segments
+                      for slot in segment.slots for candidate in slot.candidates]
+        if not candidates:
+            return
+        definitions = {(row["exercise_id"], row["revision"]): row for row in await self.db.exercises.find({
+            "account_id": account_id,
+            "exercise_id": {"$in": list({candidate.exercise_id for candidate in candidates})},
+            "revision": {"$in": list({candidate.exercise_revision for candidate in candidates})},
+        }).to_list()}
+        names: dict[str, str] = {}
+        for candidate in candidates:
+            definition = definitions.get((candidate.exercise_id, candidate.exercise_revision))
+            if definition is None:
+                raise WorkoutDomainError(
+                    "blueprint_exercise_missing",
+                    f"Candidate {candidate.candidate_id} references an unknown exercise revision: "
+                    f"{candidate.exercise_id} {candidate.exercise_revision}. Read or create its catalog definition first.", 422,
+                )
+            # This checks ambiguous display identity, not fitness equivalence.
+            # Distinct equipment/setups need distinct names; aliases reuse one ID.
+            name = regex_sub(r"[\W_]+", " ", unicode_normalize("NFKC", definition["name"]).casefold()).strip()
+            previous = names.setdefault(name, candidate.exercise_id)
+            if previous != candidate.exercise_id:
+                raise WorkoutDomainError(
+                    "blueprint_duplicate_exercise_name",
+                    f"Blueprint uses the same exercise name '{definition['name']}' for {previous} and "
+                    f"{candidate.exercise_id}. Reuse one catalog ID, or name the actual setup difference if they are distinct.", 422,
+                )
+
     @transactional_mutation
     async def draft_blueprint(self, account_id: str, input: BlueprintInput, expected_revision: str | None, request_id: str, actor: dict[str, Any], blueprint_id: str | None = None) -> dict[str, Any]:
         fingerprint = _fingerprint({"blueprint": input.model_dump(mode="json"), "expected_revision": expected_revision, "blueprint_id": blueprint_id, "actor": actor})
@@ -747,6 +806,7 @@ class WorkoutService:
                 raise WorkoutDomainError("stale_revision", "Blueprint changed. Pull it before editing.")
         elif expected_revision is not None:
             raise WorkoutDomainError("invalid_blueprint_revision", "A new blueprint cannot declare an expected revision.", 422)
+        await self._validate_blueprint_catalog(account_id, input)
         identifier, revision, timestamp = blueprint_id or new_id("bp"), new_revision(), utc_now()
         document = {"account_id": account_id, "blueprint_id": identifier, "revision": revision, "schema_version": SCHEMA_VERSION,
                     "status": "draft", "created_at": timestamp, "updated_at": timestamp, "updated_by": actor, **input.model_dump(mode="json")}
@@ -774,6 +834,7 @@ class WorkoutService:
         elif expected_revision is not None:
             raise WorkoutDomainError("invalid_blueprint_revision", "A new blueprint cannot declare an expected revision.", 422)
 
+        await self._validate_blueprint_catalog(account_id, input)
         identifier, revision, timestamp = blueprint_id or new_id("bp"), new_revision(), utc_now()
         document = {
             "account_id": account_id,
@@ -811,6 +872,11 @@ class WorkoutService:
         blueprint = await self.db.blueprints.find_one({"account_id": account_id, "blueprint_id": input.blueprint_id, "revision": input.blueprint_revision})
         if not plan or not blueprint:
             raise WorkoutDomainError("publication_input_not_found", "Plan or blueprint revision was not found.", 404)
+        try:
+            checked = BlueprintInput(**{key: blueprint[key] for key in BlueprintInput.model_fields if key in blueprint})
+        except ValueError as error:
+            raise WorkoutDomainError("invalid_blueprint", str(error), 422) from error
+        await self._validate_blueprint_catalog(account_id, checked)
         release_id, timestamp = new_id("rel"), utc_now()
         release = {"account_id": account_id, "release_id": release_id, "schema_version": SCHEMA_VERSION,
                    "plan_id": input.plan_id, "plan_revision": input.plan_revision, "blueprint_id": input.blueprint_id,
@@ -893,6 +959,10 @@ class WorkoutService:
         selected_exercises: set[str] = set()
         decisions: list[dict[str, Any]] = []
         progression_history: list[dict] | None = None
+        remaining_pools = [[candidate["exercise_id"] for candidate in slot["candidates"]]
+                           for segment in sorted(day.get("segments", []), key=lambda item: item["order"])
+                           for slot in sorted(segment["slots"], key=lambda item: item["order"])
+                           for _ in range(slot["selection_count"])]
         for segment in sorted(day.get("segments", []), key=lambda item: item["order"]):
             items: list[dict[str, Any]] = []
             for slot in sorted(segment["slots"], key=lambda item: item["order"]):
@@ -900,19 +970,25 @@ class WorkoutService:
                 if len(available) < slot["selection_count"]:
                     raise WorkoutDomainError("slot_unfillable", f"Slot {slot['slot_id']} has no unique eligible selection.")
                 for pick in range(slot["selection_count"]):
+                    remaining_pools.pop(0)
+                    eligible = [candidate for candidate in available if _can_fill_slots(
+                        remaining_pools, selected_exercises | {candidate["exercise_id"]},
+                    )]
+                    if not eligible:
+                        raise WorkoutDomainError("slot_unfillable", f"Slot {slot['slot_id']} leaves no unique selection for the remaining slots.")
                     index, probabilities = _decision_index(
                         f"{blueprint['blueprint_id']}:{blueprint['revision']}:{input.date}:{slot['slot_id']}:{pick}:{input.request_id}",
-                        available,
+                        eligible,
                         input.source,
                     )
-                    candidate = sorted(available, key=lambda item: (item["priority"], item["candidate_id"]))[index]
+                    candidate = sorted(eligible, key=lambda item: (item["priority"], item["candidate_id"]))[index]
                     available = [item for item in available if item["candidate_id"] != candidate["candidate_id"]]
                     selected_exercises.add(candidate["exercise_id"])
                     exercise = await self._candidate_exercise(account_id, candidate)
                     snapshot = {key: exercise[key] for key in ("exercise_id", "revision", "name", "movement_pattern", "primary_muscles", "secondary_muscles", "equipment_kind", "laterality", "load_basis")}
                     snapshot["exercise_revision"] = snapshot.pop("revision")
                     snapshot["equipment_profile_id"] = candidate.get("equipment_profile_id")
-                    targets = candidate["prescription"].get("round_targets") or [candidate["prescription"]["target"]] * segment["rounds"]
+                    targets = _candidate_targets(candidate, segment["rounds"])
                     policy = candidate.get("progression", {"kind": "none"})
                     if progression_history is None and policy["kind"] == "double_progression" and policy.get("phase", "build") == "build":
                         progression_history = await self._progression_history(account_id, day["date"])
@@ -948,9 +1024,9 @@ class WorkoutService:
         })
         if document:
             return document
-        # Agent-authored IDs need no prior catalog row. Synthesize display
-        # metadata from the ID only; never present the author's rationale as
-        # user-facing instructions.
+        # Compatibility for legacy records with unresolved catalog references.
+        # New blueprint drafts/publications validate these references first.
+        # Never present the author's rationale as user-facing instructions.
         exercise_id = candidate["exercise_id"]
         name = exercise_id.removeprefix("ex_").replace("_", " ").strip().title() or exercise_id
         return {
@@ -1531,7 +1607,7 @@ class WorkoutService:
                             "primary_muscles": exercise.get("primary_muscles", []),
                             "secondary_muscles": exercise.get("secondary_muscles", []),
                             "role": slot["role"], "day_title": day["title"], "section_title": segment.get("title") or "",
-                            "sets": segment["rounds"], "target_summary": " / ".join(dict.fromkeys(summaries)),
+                            "sets": len(_candidate_targets(candidate, segment["rounds"])), "target_summary": " / ".join(dict.fromkeys(summaries)),
                             "already_added": candidate["exercise_id"] in used,
                         })
         return {"workout_id": workout_id, "workout_revision": workout["revision"],
@@ -1565,7 +1641,7 @@ class WorkoutService:
         snapshot = {key: exercise[key] for key in ("exercise_id", "name", "movement_pattern", "primary_muscles", "secondary_muscles", "equipment_kind", "laterality", "load_basis")}
         snapshot.update(exercise_revision=candidate["exercise_revision"], equipment_profile_id=candidate.get("equipment_profile_id"))
         # Copy the published prescription exactly, including distinct targets per round.
-        targets = candidate["prescription"].get("round_targets") or [candidate["prescription"]["target"]] * segment["rounds"]
+        targets = _candidate_targets(candidate, segment["rounds"])
         load, _ = await self._progression_target(account_id, snapshot, candidate, targets, workout["date"], blueprint["start_date"])
         apply_progression_load = candidate["progression"]["kind"] == "double_progression" and candidate["progression"].get("phase", "build") == "build"
         sets = []
@@ -1587,6 +1663,23 @@ class WorkoutService:
         return await self._replace_or_delete_workout(
             account_id, workout_id, input.expected_revision, input.request_id, fingerprint, "exercise_added", workout,
         )
+
+    @staticmethod
+    def _blueprint_slot(day: dict[str, Any], item: dict[str, Any]) -> dict[str, Any] | None:
+        """Keep overrides attached to an unambiguous canonical alternative pool."""
+        slots = [slot for segment in day["segments"] for slot in segment["slots"]]
+        direct = [slot for slot in slots if slot["slot_id"] == item.get("slot_id")]
+        if len(direct) == 1:
+            return direct[0]
+        exercise_id = item["exercise_snapshot"]["exercise_id"]
+        exact = [slot for slot in slots if any(
+            candidate["exercise_id"] == exercise_id and candidate["candidate_id"] == item.get("candidate_id")
+            for candidate in slot["candidates"]
+        )]
+        if len(exact) == 1:
+            return exact[0]
+        matching = [slot for slot in slots if any(candidate["exercise_id"] == exercise_id for candidate in slot["candidates"])]
+        return matching[0] if len(matching) == 1 else None
 
     async def _swap_context(
         self,
@@ -1629,12 +1722,19 @@ class WorkoutService:
         day = next((item for item in blueprint["days"] if item["day_id"] == lineage.get("day_id")), None)
         if not day:
             raise WorkoutDomainError("blueprint_day_missing", "The active blueprint no longer contains this workout day.")
-        source_slot = next((slot for segment in day["segments"] for slot in segment["slots"] if slot["slot_id"] == target_item["slot_id"]), None)
+        source_slot = self._blueprint_slot(day, target_item)
         if not source_slot:
             raise WorkoutDomainError("blueprint_slot_missing", "The active blueprint no longer contains this workout slot.")
         used = {item["exercise_snapshot"]["exercise_id"] for segment in workout["segments"] for item in segment["items"]}
         candidates = [candidate for candidate in source_slot["candidates"] if candidate["exercise_id"] not in used or candidate["candidate_id"] == target_item["candidate_id"]]
         candidates = [candidate for candidate in candidates if candidate["candidate_id"] != target_item["candidate_id"]]
+        if source_slot["selection_count"] > 1:
+            # Legacy mixed pools (e.g. biceps + triceps) do not encode one
+            # function per slot. Recovering their link must not turn a curl
+            # swap into elbow-extension work. New blueprints separate roles.
+            pattern = target_item["exercise_snapshot"]["movement_pattern"]
+            candidates = [candidate for candidate in candidates
+                          if (await self._candidate_exercise(account_id, candidate))["movement_pattern"] == pattern]
         if not candidates:
             raise WorkoutDomainError("no_eligible_swap", "No eligible candidate remains in this blueprint slot.")
         return {
@@ -1668,13 +1768,15 @@ class WorkoutService:
                 "equipment_kind": exercise.get("equipment_kind") or "",
                 "priority": candidate["priority"],
                 "target_summary": self._candidate_target_summary(candidate),
+                "sets": (min(len(context["open_sets"]), candidate["prescription"]["set_count"])
+                         if candidate["prescription"].get("set_count") is not None else len(context["open_sets"])),
                 "rest_seconds": candidate.get("prescription", {}).get("rest_seconds", 0),
             })
         return {
             "workout_id": workout["workout_id"],
             "workout_revision": workout["revision"],
             "exercise_instance_id": instance_id,
-            "slot_id": target_item["slot_id"],
+            "slot_id": context["source_slot"]["slot_id"],
             "current_candidate_id": target_item["candidate_id"],
             "current_exercise_name": target_item["exercise_snapshot"].get("name", ""),
             "blueprint_id": blueprint["blueprint_id"],
@@ -1725,12 +1827,17 @@ class WorkoutService:
         snapshot = {key: exercise[key] for key in ("exercise_id", "revision", "name", "movement_pattern", "primary_muscles", "secondary_muscles", "equipment_kind", "laterality", "load_basis")}
         snapshot["exercise_revision"] = snapshot.pop("revision")
         snapshot["equipment_profile_id"] = candidate.get("equipment_profile_id")
-        targets = candidate["prescription"].get("round_targets") or [candidate["prescription"]["target"]] * target_segment["rounds"]
+        targets = _candidate_targets(candidate, target_segment["rounds"])
         load, load_decision = await self._progression_target(account_id, snapshot, candidate, targets, workout["date"], active_blueprint["start_date"])
         new_sets = []
-        for set_row in open_sets:
+        # An explicit alternative dose can reduce the remainder, never add work
+        # or rewrite logged sets. Legacy prescriptions retain their round mapping.
+        explicit_count = candidate["prescription"].get("set_count")
+        remaining = open_sets[:len(targets)] if explicit_count is not None else open_sets
+        for index, set_row in enumerate(remaining):
             round_number = set_row.get("round", 1)
-            target = dict(targets[min(max(round_number, 1), len(targets)) - 1])
+            target_index = index if explicit_count is not None else min(max(round_number, 1), len(targets)) - 1
+            target = dict(targets[target_index])
             new_sets.append({"set_id": new_id("set"), "kind": set_row.get("kind", "work"),
                              "target": {**target, **({"load": load} if load else {})}, "actual": None, "round": round_number})
         if logged_sets:
@@ -1738,7 +1845,7 @@ class WorkoutService:
             # snapshot, target and actual, and the swap continues under a new
             # exercise instance for the sets that are still open.
             target_item["sets"] = logged_sets
-            replacement = {"exercise_instance_id": new_id("wex"), "slot_id": target_item["slot_id"], "candidate_id": candidate["candidate_id"],
+            replacement = {"exercise_instance_id": new_id("wex"), "slot_id": source_slot["slot_id"], "candidate_id": candidate["candidate_id"],
                            "order": target_item["order"] + 1, "exercise_snapshot": snapshot, "sets": new_sets, "cues_md": self._cues(candidate, exercise),
                            "progression_context": {**progression_context(candidate, len(targets), active_blueprint["start_date"], load), "partial": True}}
             if target_item.get("source_blueprint"):
@@ -1751,7 +1858,7 @@ class WorkoutService:
             # Feedback describes the substituted exercise; a different
             # exercise must not inherit it.
             target_item.pop("notes", None)
-            target_item.update({"candidate_id": candidate["candidate_id"], "exercise_snapshot": snapshot, "cues_md": self._cues(candidate, exercise),
+            target_item.update({"slot_id": source_slot["slot_id"], "candidate_id": candidate["candidate_id"], "exercise_snapshot": snapshot, "cues_md": self._cues(candidate, exercise),
                                 "sets": new_sets, "progression_context": progression_context(candidate, len(targets), active_blueprint["start_date"], load)})
         workout["status"] = self._workout_status(workout)
         workout["revision"], workout["updated_at"] = new_revision(), utc_now()
@@ -1845,6 +1952,16 @@ class WorkoutService:
                             and sum(item.get("slot_id") == old_slot_id for item in old_open_items) == 1
                             and not any(item is not new_item and item.get("slot_id") == old_slot_id for item in new_items)):
                         new_item["slot_id"] = old_slot_id
+        if blueprint_day:
+            for segment in materialized["segments"]:
+                for item in segment["items"]:
+                    source_slot = self._blueprint_slot(blueprint_day, item)
+                    if source_slot is not None:
+                        item["slot_id"] = source_slot["slot_id"]
+                        source_candidate = next((candidate for candidate in source_slot["candidates"]
+                                                 if candidate["exercise_id"] == item["exercise_snapshot"]["exercise_id"]), None)
+                        if source_candidate is not None:
+                            item["candidate_id"] = source_candidate["candidate_id"]
         if preserved_segments:
             for segment in materialized["segments"]:
                 for item in segment["items"]:

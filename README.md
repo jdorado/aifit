@@ -106,3 +106,10 @@ trainee's saved language when available.
 ## License
 
 This project is licensed under the MIT License; see [`LICENSE`](LICENSE).
+
+Blueprint publication validates catalog references and distinct display names.
+Each slot selects one functional exercise; narrow slots can have no alternative.
+The coach maps source-plan eligibility to that pool, and optional
+`prescription.set_count` preserves each alternative's dose across generation,
+Add and Swap. Legacy records remain readable; new publication cannot synthesize
+missing catalog definitions or pad alternatives with identical names.

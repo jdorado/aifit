@@ -53,7 +53,9 @@ Artifacts (full typed schema and rules are in the installed aifit skill):
     rest_after_round_seconds,slots[{slot_id,order,role,selection_count,candidates[
     {candidate_id,exercise_id,exercise_revision,priority,rationale_md,
     equipment_profile_id,prescription{metric,target{reps|duration_seconds,load,rpe},
-    rest_seconds,tempo},progression}]}]}]}]
+    set_count?,round_targets?,rest_seconds,tempo},progression}]}]}]}]
+  Each slot selects one movement. Alternatives are optional and must preserve
+  its plan-defined purpose and eligibility. Use set_count for a distinct dose.
   Every training-day and override segment needs a short title (1-80 chars,
   e.g. "Chest + Back", "Warm-up Flow") naming its focus.
   override: date, title, reason_md, segments (every slot exactly one candidate)
