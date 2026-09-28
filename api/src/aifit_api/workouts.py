@@ -110,7 +110,7 @@ class Tempo(StrictModel):
 
 class ProgressionWhen(StrictModel):
     completed_reps_at_or_above: int = Field(ge=0, le=10_000)
-    max_rpe: float = Field(ge=0, le=10)
+    max_rpe: float | None = Field(default=None, ge=0, le=10)
 
 
 class Progression(StrictModel):
@@ -1741,6 +1741,7 @@ class WorkoutService:
             "workout": workout,
             "blueprint": blueprint,
             "source_slot": source_slot,
+            "source_day_id": day["day_id"],
             "target_item": target_item,
             "target_segment": target_segment,
             "logged_sets": logged_sets,
@@ -1766,6 +1767,9 @@ class WorkoutService:
                 "exercise_id": candidate["exercise_id"],
                 "name": exercise.get("name") or candidate["exercise_id"],
                 "equipment_kind": exercise.get("equipment_kind") or "",
+                "primary_muscles": exercise.get("primary_muscles", []),
+                "secondary_muscles": exercise.get("secondary_muscles", []),
+                "movement_pattern": exercise.get("movement_pattern", ""),
                 "priority": candidate["priority"],
                 "target_summary": self._candidate_target_summary(candidate),
                 "sets": (min(len(context["open_sets"]), candidate["prescription"]["set_count"])
@@ -1777,6 +1781,7 @@ class WorkoutService:
             "workout_revision": workout["revision"],
             "exercise_instance_id": instance_id,
             "slot_id": context["source_slot"]["slot_id"],
+            "day_id": context["source_day_id"],
             "current_candidate_id": target_item["candidate_id"],
             "current_exercise_name": target_item["exercise_snapshot"].get("name", ""),
             "blueprint_id": blueprint["blueprint_id"],

@@ -434,27 +434,43 @@ materialized date horizon; the agent owns publishing subsequent days.
 Double progression requires reps, a single load across the work sets, a positive
 equipment increment, targets within the load range, and a rep threshold at least
 as high as every prescribed rep-range maximum. Total, per-hand, per-side and
-machine-stack loads are supported; machines/cables need `equipment_profile_id`.
+machine-stack loads are supported. Use `equipment_profile_id` when known;
+history with no profile ID can match the same exercise with no profile ID.
 Other load bases remain coach-managed. No partial final increment is invented
-at the load ceiling. Every qualifying work set must be completed with recorded
-RPE at or below the threshold. Missing RPE is unknown, never an effortless set.
+at the load ceiling. Every qualifying work set must reach the rep threshold.
+`max_rpe` is optional and only checks effort when it was actually recorded.
+The user logs weight and reps; do not ask for RPE to unlock progression.
 Skipped, removed, partial-swapped and partially overridden exposures cannot earn
 a full-session increase. Changed equipment, rest or tempo resets comparability.
-Do not infer missing effort or technique from the planned values.
+Legacy history without rest/tempo metadata remains usable; explicitly different
+rest, tempo or equipment still separates comparisons. Do not invent effort or
+technique measurements. Infer likely fatigue and recovery from combined history,
+rep drop-off, frequency, load changes and volunteered feedback, identifying these
+as coaching judgments. Use the user's context when choosing or revising the path.
 
 The response includes `exercises` (policy, prescribed load, readiness, next load,
 qualifying sessions, latest actuals, trend and review reasons) and `muscles`
 (comparable/improving exercise setups and separate direct/indirect sets). Trends
 compare complete work with the same set count and compatible recorded execution.
 More reps at the same load, or a higher load with at least the same reps on every
-set, can show improvement; recorded effort must be no higher on any set. A load
+set, shows recorded performance improvement. A load
 increase with fewer reps is an unresolved tradeoff, not a fabricated strength score.
-Old records without execution metadata remain visible as history, with
-readiness/trend unconfirmed. No fake historical effort or automatic migration.
+`comparison` also compares logged set positions with the last compatible complete
+session, with `partial` marking work in progress. `previous` is the previous
+complete session. Keep explanations brief: one observation and one next step.
+For example, 125 kg for 10/12/12 holds 125 while building to 12/12/12; it does not
+reset to an older 120 kg starting prescription. A deliberate lighter day needs
+an explicit phase and explanation. No fake historical effort or age scores.
 
 Review triggers only expose evidence. Use your own profile, plan and conversation
 to decide the response, then publish through the existing revision-guarded
-blueprint/override commands. Keep logged sets immutable. After publication and
+blueprint/override commands. For a target correction in an existing workout use
+`aifit workout set-target WORKOUT_ID SET_ID --input - --expected-revision REV --request-id KEY`
+with `{"target":{"reps":{"min":8,"max":12},"load":{"value":125,"unit":"kg"}},"apply_to_remaining":true}`.
+Copy the current target and change only the intended fields. This updates the
+chosen unlogged set and, optionally, later unlogged sets of that exercise.
+It never edits actuals or the blueprint; use the blueprint for lasting policy changes.
+Keep logged sets immutable. After publication and
 generation, read back both the workout and its progression. The app never calls
 a model while the user edits a weight. `age_comparison` remains unavailable until
 a suitable reference test is explicitly supported; never invent a percentile or

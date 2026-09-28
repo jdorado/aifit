@@ -10,7 +10,7 @@ import AddExerciseSheet from '../components/workout/AddExerciseSheet'
 import type { ExerciseRepertoire, RepertoireCandidate } from '../utils/exerciseRepertoire'
 import ExerciseSetList from '../components/workout/ExerciseSetList'
 import { ProgressionFeedback } from '../components/workout/ProgressionFeedback'
-import { previewLoad, type WorkoutProgression } from '../utils/progression'
+import type { WorkoutProgression } from '../utils/progression'
 import VideoGallery from '../components/workout/VideoGallery'
 import WeekStrip from '../components/workout/WeekStrip'
 import WorkoutMiniBar from '../components/workout/WorkoutMiniBar'
@@ -105,10 +105,9 @@ type WorkoutViewProps = {
   onStartEditingSet: (exerciseId: string, index: number) => void
   onSaveEditingSet: () => void
   onCancelEditingSet: () => void
-  onUpdateSetEffort: (exerciseId: string, index: number, rpe: number | undefined) => void
   onUpdateSetField: (exerciseId: string, index: number, field: 'weight' | 'metric', value: string, propagate?: boolean) => void
   onCommitSetTarget: (exerciseId: string, index: number, field: 'weight' | 'metric') => void
-  onLoadExerciseRepertoire: () => Promise<ExerciseRepertoire>
+  onLoadExerciseRepertoire: (rankFit?: boolean, signal?: AbortSignal) => Promise<ExerciseRepertoire>
   onAddExercise: (candidate: RepertoireCandidate, repertoire: ExerciseRepertoire) => Promise<boolean>
   onAddSet: (exerciseId: string) => void
   onRemoveSet: (exerciseId: string, index: number) => void
@@ -126,6 +125,7 @@ type WorkoutViewProps = {
   onCoachListen: (exerciseId: string) => Promise<Blob>
   swapOpen: boolean
   swapLoading: boolean
+  swapFitLoading: boolean
   swappingCandidateId: string | null
   swapError: string | null
   swapCandidates: SwapCandidate[]
@@ -198,7 +198,6 @@ const WorkoutView: FC<WorkoutViewProps> = ({
   onStartEditingSet,
   onSaveEditingSet,
   onCancelEditingSet,
-  onUpdateSetEffort,
   onUpdateSetField,
   onCommitSetTarget,
   onLoadExerciseRepertoire,
@@ -213,6 +212,7 @@ const WorkoutView: FC<WorkoutViewProps> = ({
   onCoachListen,
   swapOpen,
   swapLoading,
+  swapFitLoading,
   swappingCandidateId,
   swapError,
   swapCandidates,
@@ -229,11 +229,21 @@ const WorkoutView: FC<WorkoutViewProps> = ({
   const { t, language } = useI18n()
   const [audioPanelTarget, setAudioPanelTarget] = useState<HTMLDivElement | null>(null)
   const [addExerciseOpen, setAddExerciseOpen] = useState(false)
+  const swapFromChatRef = useRef(false)
+
+  const openSwap = (fromChat: boolean) => {
+    if (!activeExercise) return
+    swapFromChatRef.current = fromChat
+    setHistoryOpen(false)
+    setCoachChatOpen(false)
+    void onOpenSwap(activeExercise.id).then((sentToCoach) => {
+      if (sentToCoach) setCoachChatOpen(true)
+    })
+  }
   const [planNotesOpen, setPlanNotesOpen] = useState(false)
   useEffect(() => { setAddExerciseOpen(false) }, [selectedDateId, actAsLinkId, active])
   const progressionKey = `${actAsLinkId ?? 'self'}:${workoutId ?? ''}:${workoutRevision ?? ''}`
   const [progressionState, setProgressionState] = useState<{ key: string; data: WorkoutProgression | null; error: boolean } | null>(null)
-  const [progressionRetry, setProgressionRetry] = useState(0)
   const progression = progressionState?.key === progressionKey ? progressionState.data : null
   useEffect(() => {
     if (!active || !workoutId) return
@@ -253,7 +263,7 @@ const WorkoutView: FC<WorkoutViewProps> = ({
       }
     })()
     return () => controller.abort()
-  }, [active, workoutId, progressionKey, actAsLinkId, apiBaseUrl, getAuthHeaders, progressionRetry])
+  }, [active, workoutId, progressionKey, actAsLinkId, apiBaseUrl, getAuthHeaders])
   const [coachChatOpen, setCoachChatOpen] = useState(false)
   const [coachDraft, setCoachDraft] = useState('')
   const [historyOpen, setHistoryOpen] = useState(false)
@@ -498,6 +508,12 @@ const WorkoutView: FC<WorkoutViewProps> = ({
 
     const progress = progression?.exercises.find(item => item.exercise_instance_id === activeExercise.id)
     const selectedWeight = stateList[nextIndex]?.weight || activeExercise.sets[nextIndex]?.targetWeight || ''
+    const progressFeedback = progress && activeExercise.metric === 'reps' ? <ProgressionFeedback
+      summary={progress} selectedWeight={String(selectedWeight)}
+      onReview={coachChatEnabled ? () => {
+        setCoachDraft(t('progression.reviewPrompt'))
+        setCoachChatOpen(true)
+      } : undefined} /> : null
     const hasNoSets = activeExercise.sets.length === 0
     const isCircuitMove = Boolean(activeCircuit)
     const setLabel = isCircuitMove ? t('workout.roundLabel') : t('workout.setLabel')
@@ -542,17 +558,10 @@ const WorkoutView: FC<WorkoutViewProps> = ({
             </div>
           </div>
         ) : null}
-        {progress ? <ProgressionFeedback summary={progress}
-          onReview={coachChatEnabled ? () => {
-            setCoachDraft(t('progression.reviewPrompt'))
-            setCoachChatOpen(true)
-          } : undefined} /> : workoutId && activeExercise.metric === 'reps' && !progression ?
-          <p className="progression-muted">{t(progressionState?.key === progressionKey && progressionState.error ? 'progression.loadError' : 'progression.loading')}
-            {progressionState?.key === progressionKey && progressionState.error ? <button type="button" onClick={() => setProgressionRetry(value => value + 1)}>{t('common.retry')}</button> : null}
-          </p> : null}
+        {nextIndex === -1 ? progressFeedback : null}
         <ExerciseSetList
           exercise={activeExercise}
-          selectedLoadFeedback={progress && previewLoad(String(selectedWeight), progress) ? t(`progression.${previewLoad(String(selectedWeight), progress)}`) : undefined}
+          progressionFeedback={progressFeedback}
           setLabel={setLabel}
           stateList={stateList}
           nextIndex={nextIndex}
@@ -567,7 +576,6 @@ const WorkoutView: FC<WorkoutViewProps> = ({
           onStartEditingSet={onStartEditingSet}
           onSaveEditingSet={onSaveEditingSet}
           onCancelEditingSet={onCancelEditingSet}
-          onUpdateSetEffort={onUpdateSetEffort}
           onUpdateSetField={onUpdateSetField}
           onCommitSetTarget={onCommitSetTarget}
           onAddSet={() => onAddSet(activeExercise.id)}
@@ -660,7 +668,7 @@ const WorkoutView: FC<WorkoutViewProps> = ({
       {!activeEntryId ? (
         <div className="workout-day-actions">
           {canEditPlan && canLogDay && !loading ? (
-            <button type="button" className="workout-add-exercise" onClick={() => setAddExerciseOpen(true)}>
+            <button type="button" className="workout-add-exercise" disabled={savePending || saveError} onClick={() => setAddExerciseOpen(true)}>
               <span className="workout-day-action-icon" aria-hidden="true">＋</span>
               <span>{t('workout.addExercise')}</span>
             </button>
@@ -757,6 +765,19 @@ const WorkoutView: FC<WorkoutViewProps> = ({
                   </svg>
                 </button>
               ) : null}
+              <button
+                type="button"
+                className={`detail-history-btn${swapOpen ? ' active' : ''}`}
+                aria-label={t('workout.swapTitle')}
+                title={t('workout.swapTitle')}
+                aria-expanded={swapOpen}
+                disabled={!canEditPlan || savePending || saveError || !activeExercise.sets.some((_, index) => !setLogs[activeExercise.id]?.[index]?.done)}
+                onClick={() => openSwap(false)}
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path d="M4 7h15m-4-4 4 4-4 4M20 17H5m4-4-4 4 4 4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </button>
               <CoachingAudio
                 key={activeExercise.id}
                 disabled={!coachChatEnabled || coachMessages.some((message) => message.thinking)}
@@ -853,14 +874,7 @@ const WorkoutView: FC<WorkoutViewProps> = ({
             onQuickPrompt={(message) => {
               if (activeExercise) onCoachSend(activeExercise.id, message)
             }}
-            onSwap={() => {
-              if (activeExercise) {
-                setCoachChatOpen(false)
-                void onOpenSwap(activeExercise.id).then((sentToCoach) => {
-                  if (sentToCoach) setCoachChatOpen(true)
-                })
-              }
-            }}
+            onSwap={canEditPlan && !savePending && !saveError && activeExercise.sets.some((_, index) => !setLogs[activeExercise.id]?.[index]?.done) ? () => openSwap(true) : undefined}
           />
         ) : null}
 
@@ -868,18 +882,19 @@ const WorkoutView: FC<WorkoutViewProps> = ({
           <SwapCandidateSheet
             open={swapOpen}
             loading={swapLoading}
+            fitLoading={swapFitLoading}
             swappingId={swappingCandidateId}
             error={swapError}
             exerciseName={activeExercise.name}
             candidates={swapCandidates}
             onSelect={(candidate) => {
               void onSelectSwapCandidate(candidate).then((swapped) => {
-                if (swapped) setCoachChatOpen(true)
+                if (swapped) setCoachChatOpen(swapFromChatRef.current)
               })
             }}
             onClose={() => {
               onCloseSwap()
-              setCoachChatOpen(true)
+              setCoachChatOpen(swapFromChatRef.current)
             }}
           />
         ) : null}

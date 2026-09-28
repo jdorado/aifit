@@ -1,3 +1,5 @@
+import type { ExerciseFit } from './exerciseFit'
+
 export type RepertoireCandidate = {
   day_id: string
   slot_id: string
@@ -13,6 +15,7 @@ export type RepertoireCandidate = {
   sets: number
   target_summary: string
   already_added: boolean
+  fit?: ExerciseFit
 }
 
 export type ExerciseRepertoire = {

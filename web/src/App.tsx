@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { overlayFitScores } from './utils/exerciseFit'
 import { usePrivy } from '@privy-io/react-auth'
 import { marked } from 'marked'
 import { formatDurationForDisplay, normalizeWorkoutTargetText } from './utils/workoutDisplay'
@@ -39,7 +40,6 @@ const MAIN_CHAT_HISTORY_LIMIT = 40
 const BACKEND_HEALTH_STALE_MS = 4 * 60 * 1000
 const BACKEND_HEALTH_PING_TIMEOUT_MS = 12 * 1000
 const CHAT_JOB_POLL_MS = 2500
-const CHAT_JOB_MAX_WAIT_MS = 8 * 60 * 1000
 
 type EzPreset = {
   id: string
@@ -991,6 +991,8 @@ const App = () => {
   const [coachMessagesByScope, setCoachMessagesByScope] = useState<Record<string, ChatMessage[]>>({})
   const [swapOpen, setSwapOpen] = useState(false)
   const [swapLoading, setSwapLoading] = useState(false)
+  const [swapFitLoading, setSwapFitLoading] = useState(false)
+  const swapRequestRef = useRef<AbortController | null>(null)
   const [swapError, setSwapError] = useState<string | null>(null)
   const [swapCandidates, setSwapCandidates] = useState<SwapCandidate[]>([])
   const [swappingCandidateId, setSwappingCandidateId] = useState<string | null>(null)
@@ -2523,63 +2525,76 @@ const App = () => {
   }, [addMessage, removeMessage, updateMessage])
 
   const fetchChatJobResult = useCallback(async (payload: ChatRequestPayload): Promise<ChatResponsePayload> => {
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      ...(await getPrivyAuthHeaders()),
+    // A lost admission response does not mean the run failed to start. Ez
+    // deduplicates the unchanged request_id; after admission, retry only GET.
+    const request = async (url: string, init?: RequestInit): Promise<ChatJobResponsePayload> => {
+      let retryDelay = CHAT_JOB_POLL_MS
+      while (true) {
+        const headers = await getPrivyAuthHeaders()
+        const controller = new AbortController()
+        const timeout = window.setTimeout(() => controller.abort(), 45_000)
+        try {
+          const response = await apiFetch(url, {
+            ...init,
+            headers: { ...init?.headers, ...headers },
+            signal: controller.signal,
+          })
+          if (![408, 429, 500, 502, 503, 504].includes(response.status)) {
+            if (init?.method === 'POST' && (response.status === 404 || response.status === 405)) {
+              throw new Error('Async chat endpoint unavailable. Restart the backend so /chat/async is available.')
+            }
+            if (!response.ok) {
+              throw readApiError(await response.json().catch(() => null), response.status, 'Chat request failed.')
+            }
+            // Reading the body can also fail after the server has accepted it.
+            return await response.json() as ChatJobResponsePayload
+          }
+        } catch (error) {
+          if (!(error instanceof TypeError) && !(error instanceof DOMException && ['AbortError', 'NetworkError'].includes(error.name))) {
+            throw error
+          }
+        } finally {
+          window.clearTimeout(timeout)
+        }
+        // Retry individual network requests without imposing a deadline on
+        // the agent's work. Back off while the API or connection recovers.
+        await new Promise((resolve) => window.setTimeout(resolve, retryDelay))
+        retryDelay = Math.min(retryDelay * 2, 10_000)
+      }
     }
 
-    const enqueueResponse = await apiFetch(`${API_BASE_URL}/chat/async`, {
+    const queued = await request(`${API_BASE_URL}/chat/async`, {
       method: 'POST',
-      headers,
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     })
 
-    if (enqueueResponse.status === 404 || enqueueResponse.status === 405) {
-      throw new Error('Async chat endpoint unavailable. Restart the backend so /chat/async is available.')
-    }
-    if (!enqueueResponse.ok) {
-      throw readApiError(await enqueueResponse.json().catch(() => null), enqueueResponse.status, 'Chat could not start.')
-    }
-
-    const queued = (await enqueueResponse.json()) as ChatJobResponsePayload
     const jobId = typeof queued.job_id === 'string' ? queued.job_id : ''
     if (!jobId) return queued
     if (queued.status === 'complete') return queued
     if (queued.status === 'failed') {
       throw new Error(typeof queued.error === 'string' ? queued.error : 'Chat job failed')
     }
+    if (queued.status === 'cancelled') throw new Error('Chat request was cancelled')
 
     const params = new URLSearchParams({
       user_id: payload.user_id,
       ...(payload.act_as_link_id ? { act_as_link_id: payload.act_as_link_id } : {}),
     })
 
-    const startedAt = Date.now()
-    while (Date.now() - startedAt < CHAT_JOB_MAX_WAIT_MS) {
+    while (true) {
       await new Promise((resolve) => window.setTimeout(resolve, CHAT_JOB_POLL_MS))
 
-      // Chat jobs can outlive the short-lived Privy token used to enqueue
-      // them. Do not reuse the initial headers or a completed reply becomes
-      // invisible to the user when its final poll is rejected with 401.
-      const pollHeaders = await getPrivyAuthHeaders()
-      const pollResponse = await apiFetch(
-        `${API_BASE_URL}/chat/jobs/${encodeURIComponent(jobId)}?${params.toString()}`,
-        { headers: pollHeaders }
+      const statusData = await request(
+        `${API_BASE_URL}/chat/jobs/${encodeURIComponent(jobId)}?${params.toString()}`
       )
 
-      if (!pollResponse.ok) {
-        throw new Error(`Chat job poll failed (${pollResponse.status})`)
-      }
-
-      const statusData = (await pollResponse.json()) as ChatJobResponsePayload
       if (statusData.status === 'complete') return statusData
       if (statusData.status === 'failed') {
         throw new Error(typeof statusData.error === 'string' ? statusData.error : 'Chat job failed')
       }
       if (statusData.status === 'cancelled') throw new Error('Chat request was cancelled')
     }
-
-    throw new Error('Chat job timed out')
   }, [getPrivyAuthHeaders])
 
   const fetchWorkoutSessionsByDates = useCallback(async (dateIds: string[]): Promise<WorkoutSession[]> => {
@@ -3289,9 +3304,10 @@ const App = () => {
           act_as_link_id: coachActAsLinkId,
         })
         await updateCoachMessage(scopeId, statusId, typeof result.reply === 'string' ? result.reply : String(result.reply ?? ''))
-        await refreshVisibleWorkoutSessions()
+        await refreshVisibleWorkoutSessions().catch(() => undefined)
       } catch (error) {
-        await updateCoachMessage(scopeId, statusId, error instanceof Error ? error.message : t('messages.networkError'))
+        removeCoachMessage(scopeId, statusId)
+        await addCoachMessage(scopeId, error instanceof Error ? error.message : t('messages.networkError'), 'ai')
       }
       return
     }
@@ -3333,6 +3349,7 @@ const App = () => {
     fetchChatJobResult,
     fetchChatReply,
     refreshVisibleWorkoutSessions,
+    removeCoachMessage,
     removeMessage,
     selectedDay?.date,
     selectedModelLabel,
@@ -3667,6 +3684,9 @@ const App = () => {
   }, [handleCoachSend, t, currentUserId, profile.language, coachActAsLinkId, getPrivyAuthHeaders])
 
   const handleCloseSwap = useCallback(() => {
+    swapRequestRef.current?.abort()
+    swapRequestRef.current = null
+    setSwapFitLoading(false)
     swapExerciseIdRef.current = null
     swapResponseRef.current = null
     setSwapOpen(false)
@@ -3676,11 +3696,20 @@ const App = () => {
     setSwappingCandidateId(null)
   }, [])
 
+  useEffect(() => {
+    handleCloseSwap()
+    return () => { swapRequestRef.current?.abort() }
+  }, [handleCloseSwap, selectedDay?.date, coachActAsLinkId, currentUserId, activeEntryId])
+
   const handleOpenSwap = useCallback(async (exerciseId: string): Promise<boolean> => {
     if (!canQuerySavedWorkoutSessions || !coachCanEditPrograms || !isBackendHealthy) return false
     const targetDate = selectedDay?.date ?? todayId
     const workoutId = workoutIdByOwnerDateRef.current[`${coachActAsOwnerId ?? currentUserId}:${targetDate}`]
     if (!workoutId) return false
+    swapRequestRef.current?.abort()
+    const controller = new AbortController()
+    swapRequestRef.current = controller
+    setSwapFitLoading(false)
     swapExerciseIdRef.current = exerciseId
     swapResponseRef.current = null
     setSwapOpen(true)
@@ -3696,17 +3725,35 @@ const App = () => {
         workoutId,
         exerciseInstanceId: exerciseId,
         actAsLinkId: coachActAsLinkId,
+        signal: controller.signal,
       })
-      if (swapExerciseIdRef.current !== exerciseId) return false
+      if (controller.signal.aborted) return false
       swapResponseRef.current = result
       setSwapCandidates(result.candidates)
+      setSwapLoading(false)
       if (result.candidates.length === 0 && coachChatEnabled) {
         handleCloseSwap()
         void handleCoachSend(exerciseId, t('workout.swapCoachPrompt'))
         return true
       }
+      if (result.candidates.length) {
+        setSwapFitLoading(true)
+        void fetchSwapCandidates({
+          apiBaseUrl: API_BASE_URL, getHeaders: async () => headers, workoutId,
+          exerciseInstanceId: exerciseId, actAsLinkId: coachActAsLinkId,
+          rankFit: true, signal: controller.signal,
+        }).then((rated) => {
+          if (controller.signal.aborted) return
+          const candidates = overlayFitScores(result, rated)
+          if (candidates) setSwapCandidates(candidates)
+        }).catch(() => {
+          // Keep the original choices available if optional scoring fails.
+        }).finally(() => {
+          if (!controller.signal.aborted) setSwapFitLoading(false)
+        })
+      }
     } catch (error) {
-      if (swapExerciseIdRef.current !== exerciseId) return false
+      if (controller.signal.aborted) return false
       const code = error instanceof SwapCandidatesError ? error.code : null
       if (needsCoachSwap(code) && coachChatEnabled) {
         handleCloseSwap()
@@ -3715,7 +3762,7 @@ const App = () => {
       }
       setSwapError(t(`workout.${swapErrorKey(code)}`))
     } finally {
-      if (swapExerciseIdRef.current === exerciseId) setSwapLoading(false)
+      if (!controller.signal.aborted) setSwapLoading(false)
     }
     return false
   }, [
@@ -3737,6 +3784,8 @@ const App = () => {
   const handleSelectSwapCandidate = useCallback(async (candidate: SwapCandidate): Promise<boolean> => {
     const response = swapResponseRef.current
     if (!response || swappingCandidateId) return false
+    swapRequestRef.current?.abort()
+    setSwapFitLoading(false)
     setSwappingCandidateId(candidate.candidate_id)
     try {
       const headers = { 'Content-Type': 'application/json', ...await getPrivyAuthHeaders() }
@@ -3747,7 +3796,7 @@ const App = () => {
         headers,
         body: JSON.stringify({
           source: 'jev',
-          reason: `Picked ${candidate.name} from the MiniChat alternatives.`,
+          reason: `Picked ${candidate.name} from the plan alternatives.`,
           target_candidate_id: candidate.candidate_id,
           expected_revision: response.workout_revision,
           expected_blueprint_revision: response.blueprint_revision,
@@ -3911,12 +3960,12 @@ const App = () => {
     todayId,
   ])
 
-  const loadExerciseRepertoire = useCallback(async (): Promise<ExerciseRepertoire> => {
+  const loadExerciseRepertoire = useCallback(async (rankFit = false, signal?: AbortSignal): Promise<ExerciseRepertoire> => {
     const context = requireEditContext()
     if (!context) throw new Error(t('workout.addExerciseUnavailable'))
     const response = await apiFetch(
-      withCoachActAs(`${API_BASE_URL}/v1/workouts/${encodeURIComponent(context.workoutId)}/exercise-repertoire`),
-      { headers: await getPrivyAuthHeaders() },
+      withCoachActAs(`${API_BASE_URL}/v1/workouts/${encodeURIComponent(context.workoutId)}/exercise-repertoire?rank_fit=${rankFit}`),
+      { headers: await getPrivyAuthHeaders(), signal },
     )
     if (!response.ok) {
       const error = readApiError(await response.json().catch(() => null), response.status, t('workout.addExerciseFailed'))
@@ -4860,13 +4909,6 @@ const App = () => {
             onLogSet={logNextSet}
             onCompleteExercise={(exerciseId) => { void completeExercise(exerciseId) }}
             onUnlogSet={unlogSet}
-            onUpdateSetEffort={(exerciseId, index, rpe) => {
-              if (!canLogSelectedDay || logPendingRef.current) return
-              const setItem = setLogsRef.current[exerciseId]?.[index]
-              if (!setItem || (setItem.done && (editingSet?.exerciseId !== exerciseId || editingSet.index !== index))) return
-              setItem.rpe = rpe
-              bumpData()
-            }}
             onStartEditingSet={(exerciseId, index) => {
               const stateList = setLogsRef.current[exerciseId]
               const setItem = stateList?.[index]
@@ -4936,6 +4978,7 @@ const App = () => {
             onCoachListen={handleCoachListen}
             swapOpen={swapOpen}
             swapLoading={swapLoading}
+            swapFitLoading={swapFitLoading}
             swappingCandidateId={swappingCandidateId}
             swapError={swapError}
             swapCandidates={swapCandidates}

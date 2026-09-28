@@ -1,3 +1,5 @@
+import { readExerciseFit, type ExerciseFit } from './exerciseFit'
+
 export type SwapCandidate = {
   candidate_id: string
   exercise_id: string
@@ -7,6 +9,7 @@ export type SwapCandidate = {
   target_summary: string
   sets?: number
   rest_seconds: number
+  fit?: ExerciseFit
 }
 
 export type SwapCandidates = {
@@ -74,6 +77,8 @@ type SwapCandidatesFetch = {
   workoutId: string
   exerciseInstanceId: string
   actAsLinkId?: string | null
+  rankFit?: boolean
+  signal?: AbortSignal
 }
 
 const asRecord = (value: unknown): Record<string, unknown> | null => (
@@ -104,6 +109,7 @@ const normalizeCandidate = (value: unknown): SwapCandidate | null => {
     target_summary: asString(row.target_summary) ?? '',
     sets: typeof row.sets === 'number' && Number.isInteger(row.sets) && row.sets > 0 ? row.sets : undefined,
     rest_seconds: restSeconds,
+    fit: readExerciseFit(row.fit),
   }
 }
 
@@ -113,13 +119,15 @@ export const fetchSwapCandidates = async ({
   workoutId,
   exerciseInstanceId,
   actAsLinkId = null,
+  rankFit = false,
+  signal,
 }: SwapCandidatesFetch): Promise<SwapCandidates> => {
-  const params = new URLSearchParams()
+  const params = new URLSearchParams({ rank_fit: String(rankFit) })
   if (actAsLinkId) params.set('act_as_link_id', actAsLinkId)
   const query = params.toString()
   const response = await fetch(
     `${apiBaseUrl}/v1/workouts/${encodeURIComponent(workoutId)}/exercises/${encodeURIComponent(exerciseInstanceId)}/swap-candidates${query ? `?${query}` : ''}`,
-    { headers: await getHeaders() },
+    { headers: await getHeaders(), signal },
   )
   if (!response.ok) {
     throw readApiError(await response.json().catch(() => null), response.status, 'Failed to load alternatives')

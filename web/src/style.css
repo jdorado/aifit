@@ -2263,12 +2263,12 @@ p {
 
 .coach-chat-input {
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   gap: 8px;
   margin: 0 12px max(10px, var(--chat-safe-bottom));
   min-height: 52px;
   padding: 6px 8px;
-  border-radius: 999px;
+  border-radius: 18px;
   border: 1px solid var(--glass-border);
   background: rgba(255, 255, 255, 0.03);
   flex-shrink: 0;
@@ -2276,6 +2276,8 @@ p {
 
 .coach-chat-input textarea {
   flex: 1;
+  min-width: 0;
+  min-height: 40px;
   border: none;
   background: transparent;
   color: var(--ink-primary);
@@ -2290,10 +2292,13 @@ p {
 }
 
 .coach-chat-input button {
+  flex: 0 0 auto;
+  min-width: 52px;
+  height: 40px;
   border: none;
   background: var(--brand-primary);
   color: white;
-  padding: 8px 14px;
+  padding: 0 14px;
   border-radius: 999px;
   font-size: calc(12px * var(--font-scale));
   font-weight: 600;
@@ -8393,7 +8398,7 @@ body:has(.view[data-view="workout"] .workout-detail.active) {
 .view[data-view="workout"] .coach-chat-input {
   min-height: 52px;
   border: 0;
-  border-radius: 999px;
+  border-radius: 18px;
   background: #ffffff;
 }
 
@@ -11115,25 +11120,23 @@ body:has(.landing) {
   opacity: 0.55;
   cursor: default;
 }
-/* Coaching feedback stays beside the existing set controls. */
-.progression-feedback {
-  margin: 16px 0;
-  padding: 14px 16px;
-  border-radius: var(--radius-sm);
-  background: var(--bg-subtle);
-  border: 1px solid var(--glass-border);
-  color: var(--ink-primary);
-  font-size: 0.85rem;
-}
-.progression-heading { display: flex; flex-wrap: wrap; gap: 6px 16px; justify-content: space-between; }
-.progression-heading span, .progression-muted { color: var(--ink-secondary); }
-.progression-feedback p, .muscle-progress p { margin: 8px 0; }
-.progression-feedback summary, .muscle-progress summary { cursor: pointer; padding: 8px 0; }
-.progression-preview { color: var(--brand-primary); font-size: 0.85rem; line-height: 1.5; margin: 12px 0 0; }
-.progression-review { margin-top: 10px; padding: 10px 14px; min-height: 44px; border: 1px solid var(--glass-border); border-radius: 10px; color: var(--ink-primary); background: var(--glass-surface); }
-.set-effort { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding-top: 12px; color: var(--ink-secondary); font-size: 0.8rem; }
-.set-effort select { max-width: 100%; min-height: 44px; padding: 8px; border: 1px solid var(--glass-border); border-radius: 10px; color: var(--ink-primary); background: var(--bg-subtle); font: inherit; font-size: 16px; }
-.set-row.edit .set-effort { width: 100%; }
+/* One traffic-light indicator beside the active set; detail stays collapsed. */
+.progression-strip { --signal: #64748b; margin: 10px 0 14px; border-left: 3px solid var(--signal); border-radius: 7px; background: color-mix(in srgb, var(--signal) 6%, transparent); color: var(--ink-primary); }
+.progression-strip[data-tone="green"] { --signal: #16834b; }
+.progression-strip[data-tone="amber"] { --signal: #aa6a08; }
+.progression-strip[data-tone="red"] { --signal: #c24040; }
+.progression-strip > summary { display: flex; align-items: center; gap: 10px; padding: 9px 10px; cursor: pointer; list-style: none; min-height: 44px; }
+.progression-strip > summary::-webkit-details-marker { display: none; }
+.progression-signal { color: var(--signal); font-size: 22px; font-weight: 700; }
+.progression-strip-copy { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.progression-strip-copy strong { color: var(--signal); font-size: 13px; }
+.progression-strip-copy small { font-size: 11px; color: var(--ink-secondary); overflow-wrap: anywhere; }
+.progression-chevron { color: var(--ink-secondary); }
+.progression-strip[open] .progression-chevron { transform: rotate(180deg); }
+.progression-detail { padding: 0 12px 10px 38px; font-size: 12px; line-height: 1.5; }
+.progression-detail p { margin: 0 0 6px; }
+.progression-review { min-height: 36px; padding: 4px 0; border: 0; color: var(--aifit-blue, #2452d9); background: transparent; font: inherit; cursor: pointer; }
+.progression-muted { color: var(--ink-secondary); }
 .muscle-progress { font-size: 0.85rem; }
 .muscle-progress-row { padding: 12px 0; border-bottom: 1px solid var(--glass-border); }
 .muscle-progress-row h3 { margin: 0 0 8px; text-transform: capitalize; font-size: 1rem; }
@@ -11157,3 +11160,19 @@ body:has(.landing) {
   color: inherit;
   text-decoration: underline;
 }
+
+/* Compact fit ratings reuse the exercise picker cards. */
+.exercise-fit-hint { margin: 0 0 4px; color: #64748b; font-size: 12px; line-height: 1.5; }
+.exercise-fit { --fit-color: #64748b; display: grid; gap: 6px; margin: 3px 0; }
+.exercise-fit[data-level="strong"] { --fit-color: #16834b; }
+.exercise-fit[data-level="good"] { --fit-color: var(--aifit-purple); }
+.exercise-fit[data-level="low"] { --fit-color: #936217; }
+.exercise-fit-heading { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; font-size: 12px; }
+.exercise-fit-heading strong { color: var(--fit-color); font-size: 13px; }
+.exercise-fit-heading small { color: #64748b; font-size: 11px; }
+.exercise-fit-meter { display: block; height: 3px; background: #e8edf3; border-radius: 8px; overflow: hidden; }
+.exercise-fit-meter > span { display: block; height: 100%; background: var(--fit-color); border-radius: inherit; }
+.exercise-fit-factors { display: flex; flex-wrap: wrap; gap: 4px 12px; color: #64748b; font-size: 11px; }
+.exercise-fit-factors b { color: var(--aifit-ink); font-weight: 600; }
+.view[data-view="workout"] .detail-history-btn:disabled { opacity: .45; cursor: default; }
+@media (max-width: 380px) { .detail-header-actions { gap: 4px; } }

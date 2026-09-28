@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState, type FC } from 'react'
 import { createPortal } from 'react-dom'
 import { useI18n } from '../../i18n'
+import { overlayFitScores } from '../../utils/exerciseFit'
+import ExerciseFitRating from './ExerciseFitRating'
 import type { ExerciseRepertoire, RepertoireCandidate } from '../../utils/exerciseRepertoire'
 
 type Props = {
-  onLoad: () => Promise<ExerciseRepertoire>
+  onLoad: (rankFit?: boolean, signal?: AbortSignal) => Promise<ExerciseRepertoire>
   onAdd: (candidate: RepertoireCandidate, repertoire: ExerciseRepertoire) => Promise<boolean>
   onClose: () => void
 }
@@ -21,6 +23,8 @@ const AddExerciseSheet: FC<Props> = ({ onLoad, onAdd, onClose }) => {
   const [repertoire, setRepertoire] = useState<ExerciseRepertoire | null>(null)
   const [query, setQuery] = useState('')
   const [loading, setLoading] = useState(true)
+  const [fitLoading, setFitLoading] = useState(false)
+  const requestRef = useRef<AbortController | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [addingId, setAddingId] = useState<string | null>(null)
   const [loadAttempt, setLoadAttempt] = useState(0)
@@ -38,22 +42,45 @@ const AddExerciseSheet: FC<Props> = ({ onLoad, onAdd, onClose }) => {
   }, [])
 
   useEffect(() => {
-    let cancelled = false
+    const controller = new AbortController()
+    requestRef.current = controller
+    const load = loadRef.current
     setLoading(true)
+    setFitLoading(false)
     setError(null)
-    loadRef.current().then((result) => {
-      if (!cancelled) setRepertoire(result)
-    }).catch((reason: unknown) => {
-      if (!cancelled) setError(reason instanceof Error ? reason.message : t('workout.addExerciseFailed'))
-    }).finally(() => {
-      if (!cancelled) setLoading(false)
-    })
-    return () => { cancelled = true }
+    void (async () => {
+      try {
+        const result = await load(false, controller.signal)
+        if (controller.signal.aborted) return
+        setRepertoire(result)
+        setLoading(false)
+        if (!result.candidates.some((candidate) => !candidate.already_added)) return
+        setFitLoading(true)
+        try {
+          const rated = await load(true, controller.signal)
+          if (controller.signal.aborted || busyRef.current) return
+          const candidates = overlayFitScores(result, rated)
+          if (candidates) setRepertoire({ ...result, candidates })
+        } catch {
+          // Ratings are optional; the already-rendered list stays usable.
+        } finally {
+          if (!controller.signal.aborted) setFitLoading(false)
+        }
+      } catch (reason) {
+        if (!controller.signal.aborted) {
+          setError(reason instanceof Error ? reason.message : t('workout.addExerciseFailed'))
+          setLoading(false)
+        }
+      }
+    })()
+    return () => { controller.abort() }
   }, [loadAttempt, t])
 
   const add = async (candidate: RepertoireCandidate) => {
     if (!repertoire || busyRef.current || candidate.already_added) return
     busyRef.current = true
+    requestRef.current?.abort()
+    setFitLoading(false)
     setAddingId(candidate.exercise_id)
     setError(null)
     try {
@@ -106,14 +133,16 @@ const AddExerciseSheet: FC<Props> = ({ onLoad, onAdd, onClose }) => {
         ) : null}
         {!loading && !error ? (
           <div className="exercise-history-list">
+            <p className="exercise-fit-hint" role="status">{t(fitLoading ? 'workout.fitLoading' : repertoire?.candidates.some((candidate) => candidate.fit) ? 'workout.fitHint' : 'workout.fitUnavailable')}</p>
             {candidates.map((candidate) => (
               <button key={candidate.exercise_id} type="button" className="exercise-history-row"
                 disabled={candidate.already_added || addingId !== null} onClick={() => void add(candidate)}
-                aria-label={candidate.already_added ? `${candidate.name}: ${t('workout.addExerciseAlreadyAdded')}` : t('workout.addExerciseSelect', { name: candidate.name })}>
+                aria-label={candidate.already_added ? `${candidate.name}: ${t('workout.addExerciseAlreadyAdded')}` : `${t('workout.addExerciseSelect', { name: candidate.name })}${candidate.fit ? ` · ${t('workout.fitScore', { score: candidate.fit.score })}` : ''}`}>
                 <span className="exercise-history-row-head">
                   <strong>{candidate.name}</strong>
                   <span>{candidate.already_added ? t('workout.addExerciseAlreadyAdded') : addingId === candidate.exercise_id ? t('workout.addExerciseSaving') : '+'}</span>
                 </span>
+                {candidate.fit ? <ExerciseFitRating fit={candidate.fit} /> : null}
                 <span className="exercise-history-metrics">
                   <span>{t('workout.addExerciseSets', { count: candidate.sets })} · {candidate.target_summary}</span>
                   {candidate.equipment_kind ? <span>{candidate.equipment_kind.replace(/_/g, ' ')}</span> : null}
