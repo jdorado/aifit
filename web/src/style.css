@@ -9855,17 +9855,22 @@ body:has(.view[data-view="profile"].active) {
 
   .coach-chat--portaled .coach-chat-input {
     align-items: flex-end;
-    border-radius: 18px;
-    background: #ffffff;
+    margin: 0;
+    padding: 10px 12px max(10px, var(--chat-safe-bottom));
     border: 0;
-    box-shadow: 0 1px 0 rgba(7, 26, 53, 0.04), 0 10px 24px rgba(7, 26, 53, 0.06);
+    border-top: 1px solid rgba(7, 26, 53, 0.08);
+    border-radius: 0;
+    background: #f8fbff;
+    box-shadow: none;
   }
 
   .coach-chat--portaled .coach-chat-input textarea {
     max-height: 112px;
-    border: 0;
-    border-radius: 0;
-    background: transparent;
+    min-height: 44px;
+    padding: 10px 12px;
+    border: 1px solid #dce5f2;
+    border-radius: 12px;
+    background: #ffffff;
     box-shadow: none;
     outline: none;
     font-size: max(16px, calc(16px * var(--font-scale)));
@@ -9876,7 +9881,7 @@ body:has(.view[data-view="profile"].active) {
   }
 
   .coach-chat--portaled .coach-chat-input textarea:focus {
-    border: 0;
+    border-color: var(--aifit-purple);
     box-shadow: none;
     outline: none;
   }

@@ -175,6 +175,49 @@ async def test_remove_set_keeps_the_instance_when_its_last_set_is_removed():
 
 
 @pytest.mark.asyncio
+async def test_add_set_restores_first_set_after_all_sets_were_removed():
+    database = FakeDatabase()
+    service, workout = await generated_day(database)
+    item = workout["segments"][0]["items"][0]
+    instance_id = item["exercise_instance_id"]
+    last_target = item["sets"][-1]["target"]
+    for index, set_row in enumerate(item["sets"], start=1):
+        workout = (await service.remove_set(
+            "acc_one", workout["workout_id"], set_row["set_id"],
+            SetRemoveInput(expected_revision=workout["revision"], request_id=f"empty-{index}"),
+        ))["workout"]
+
+    restored = (await service.add_set(
+        "acc_one", workout["workout_id"], instance_id,
+        SetAddInput(expected_revision=workout["revision"], request_id="restore-001"),
+    ))["workout"]
+    first_set = restored["segments"][0]["items"][0]["sets"][0]
+    assert first_set["target"] == last_target
+    assert first_set["round"] == 1
+    assert first_set["actual"] is None
+
+    # Workouts emptied before the template was stored still have their
+    # materialized prescription and can recover without a new blueprint.
+    workout = (await service.remove_set(
+        "acc_one", workout["workout_id"], first_set["set_id"],
+        SetRemoveInput(expected_revision=restored["revision"], request_id="empty-again"),
+    ))["workout"]
+    database.documents["workouts"][0]["segments"][0]["items"][0].pop("last_set_template")
+    recovered = (await service.add_set(
+        "acc_one", workout["workout_id"], instance_id,
+        SetAddInput(expected_revision=workout["revision"], request_id="restore-legacy-empty"),
+    ))["workout"]
+    recovered_item = recovered["segments"][0]["items"][0]
+    context = recovered_item["progression_context"]
+    prescription = context["prescription"]
+    expected_target = dict((prescription.get("round_targets") or [prescription["target"]])[0])
+    if context.get("prescribed_load"):
+        expected_target["load"] = context["prescribed_load"]
+    assert recovered_item["sets"][0]["round"] == 1
+    assert recovered_item["sets"][0]["target"] == expected_target
+
+
+@pytest.mark.asyncio
 async def test_remove_set_rejects_a_logged_set():
     database = FakeDatabase()
     service, workout = await generated_day(database)

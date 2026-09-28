@@ -81,6 +81,16 @@ async function main() {
   assert.equal(h.busy, false)
 
   h = harness()
+  h.exercise.sets.length = 0
+  h.states.length = 0
+  task = h.handleAddSet('ex_one')
+  assert.equal(h.exercise.sets.length, 0, 'an empty exercise waits for the canonical target')
+  await h.reply()
+  await task
+  assert.equal(h.calls.length, 1, 'Add set still reaches the API with no local source set')
+  assert.equal(h.applied.length, 1, 'the canonical first set is applied from the receipt')
+
+  h = harness()
   const savingTarget = h.enqueue(context.workoutId, context.targetDate, context.ownerKey, '/sets/s1/target', 'PATCH', {}, () => {})
   task = h.handleAddSet('ex_one')
   assert.equal(h.exercise.sets.length, 3, 'add previews immediately even while the blur save is pending')

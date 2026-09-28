@@ -3994,7 +3994,7 @@ const App = () => {
     const exercise = getExercise(exerciseId)
     const stateList = setLogsRef.current[exerciseId]
     const source = exercise && ([...exercise.sets].reverse().find((set) => !set.isWarmup) ?? exercise.sets[exercise.sets.length - 1])
-    if (!exercise || !source || !stateList) return
+    if (!exercise || !stateList) return
     await runStructuralMutation(
       context.workoutId,
       `/exercises/${encodeURIComponent(exerciseId)}/sets`,
@@ -4002,7 +4002,7 @@ const App = () => {
       { expected_revision: context.revision, request_id: crypto.randomUUID() },
       context.targetDate,
       context.ownerKey,
-      () => {
+      source ? () => {
         const previousSets = [...exercise.sets]
         const previousStates = [...stateList]
         const lastActual = [...stateList].reverse().find((set) => set.done && !set.skipped)
@@ -4019,7 +4019,7 @@ const App = () => {
           updateExerciseSummary(exercise)
           bumpData()
         }
-      },
+      } : undefined,
     )
   }, [bumpData, getExercise, requireEditContext, runStructuralMutation])
 

@@ -1286,10 +1286,26 @@ class WorkoutService:
         if source is None and item["sets"]:
             source = item["sets"][-1]
         if source is None:
+            source = item.get("last_set_template")
+        if source is None:
+            # Older workouts may already have zero sets. Their materialized
+            # progression context retains the exact published prescription.
+            context = item.get("progression_context") or {}
+            prescription = context.get("prescription") or {}
+            targets = prescription.get("round_targets") or []
+            target = targets[0] if targets else prescription.get("target")
+            if target:
+                target = deepcopy(target)
+                if context.get("prescribed_load"):
+                    target["load"] = deepcopy(context["prescribed_load"])
+                source = {"kind": "work", "target": target}
+        if source is None:
             raise WorkoutDomainError("set_source_missing", "This exercise has no set left to copy a target from.")
         new_set: dict[str, Any] = {"set_id": new_id("set"), "kind": source.get("kind", "work"),
                                   "target": deepcopy(source["target"]), "actual": None}
-        if source.get("round") is not None:
+        if not item["sets"]:
+            new_set["round"] = 1
+        elif source.get("round") is not None:
             new_set["round"] = source["round"] + 1
         item["sets"].append(new_set)
         workout["status"] = self._workout_status(workout)
@@ -1314,6 +1330,8 @@ class WorkoutService:
         item, set_row = self._find_set(workout, set_id)
         if set_row.get("actual") is not None:
             raise WorkoutDomainError("set_is_logged", "This set is logged and cannot be removed. Unlog it first.")
+        if len(item["sets"]) == 1:
+            item["last_set_template"] = {key: deepcopy(set_row[key]) for key in ("kind", "target", "round") if key in set_row}
         item["sets"].remove(set_row)
         workout["status"] = self._workout_status(workout)
         workout["revision"], workout["updated_at"] = new_revision(), utc_now()
