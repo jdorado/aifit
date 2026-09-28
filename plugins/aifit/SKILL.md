@@ -242,8 +242,12 @@ Rules:
 - `schema_version` is `1`; dates are `YYYY-MM-DD`; a period holds 1-31 days.
 - IDs: `day_`, `seg_`, `slot_`, `cand_`, `ex_`, `eqp_` then `[a-z0-9_]{3,120}`;
   `exercise_revision` is `rev_` plus exactly 32 lowercase hex characters.
-- IDs and `order` values are unique inside their collection; every day date is
-  inside the declared period; one exercise cannot appear twice in a day.
+- IDs and `order` values are unique inside their collection; slot IDs are also
+  unique across a day's segments, and every date is inside the declared period.
+  Alternative pools may share a canonical exercise ID when it fits both roles.
+  The generated workout selects that exercise at most once, reserves choices
+  needed by narrower slots, and Swap excludes movements already selected elsewhere.
+  Never create an alias to place the same movement in another pool.
 - A training day has at least one segment; a rest day has none.
 - Every training-day and override segment carries a short `title` (1-80
   chars) naming its focus, e.g. `"Warm-up Flow"`, `"Chest + Back"`,
@@ -320,7 +324,10 @@ fitness equivalence for you.
 ```
 
 Every slot has exactly one candidate, `selection_count` is 1, and candidate
-exercises are unique in the day. Pass `--expected-revision` only when a read or
+exercises are unique in the day. Keep the source blueprint slot and candidate
+IDs when resolving its candidates; renamed slots can disconnect the picker.
+The API preserves or recovers an unambiguous catalog-ID link, but never guesses
+between multiple eligible source roles. Pass `--expected-revision` only when a read or
 native context holds the current target workout revision; otherwise omit it and
 let the backend resolve the target atomically. Logged sets are immutable: the
 backend preserves them under their original exercise snapshots and applies the

@@ -3,11 +3,120 @@ from copy import deepcopy
 import pytest
 
 from aifit_api.workouts import (
-    BlueprintInput, ExerciseAddInput, GenerateInput, SwapInput, WorkoutDomainError, WorkoutService,
+    BlueprintInput, ExerciseAddInput, GenerateInput, SwapInput, WorkoutDomainError, WorkoutOverrideInput, WorkoutService,
 )
 from test_workout_contract import blueprint
 from test_workout_partial_progress import log_set_at
 from test_workout_transactions import FakeDatabase
+
+
+@pytest.mark.asyncio
+async def test_override_and_legacy_slot_aliases_keep_the_canonical_alternatives():
+    db = FakeDatabase()
+    service = WorkoutService(db)
+    plan = blueprint()
+    await service.solidify_blueprint("acc_one", BlueprintInput(**plan), None, "publish", {})
+    workout = (await service.generate("acc_one", GenerateInput(date="2026-09-21", request_id="generate")))["workout"]
+    # Reproduce an old resolved-day override that renamed the slot and its
+    # candidate while retaining the same canonical exercise.
+    stored = db.documents["workouts"][0]["segments"][0]["items"][0]
+    stored.update(slot_id="slot_override_alias", candidate_id="cand_override_alias")
+    choices = await service.swap_candidates("acc_one", workout["workout_id"], stored["exercise_instance_id"])
+    assert choices["slot_id"] == "slot_pull"
+    assert [choice["candidate_id"] for choice in choices["candidates"]] == ["cand_row_cable"]
+
+    workout, _ = await log_set_at(service, workout, 0, "log")
+    logged = deepcopy(workout["segments"][0]["items"][0]["sets"][0])
+    segment = deepcopy(plan["days"][0]["segments"][0])
+    segment["rounds"] = 2
+    slot = segment["slots"][0]
+    slot.update(slot_id="slot_override_new", candidates=slot["candidates"][:1])
+    slot["candidates"][0]["candidate_id"] = "cand_override_new"
+    saved = (await service.override("acc_one", WorkoutOverrideInput(
+        date="2026-09-21", title="Same movement, adjusted remainder", reason_md="Adjust remaining dose",
+        expected_revision=workout["revision"], request_id="override", segments=[segment],
+    ), {}))["workout"]
+    assert saved["segments"][0]["items"][0]["sets"] == [logged]
+    remaining = saved["segments"][-1]["items"][0]
+    assert (remaining["slot_id"], remaining["candidate_id"]) == ("slot_pull", "cand_row")
+    assert len(remaining["sets"]) == 2
+    choices = await service.swap_candidates("acc_one", saved["workout_id"], remaining["exercise_instance_id"])
+    assert [choice["candidate_id"] for choice in choices["candidates"]] == ["cand_row_cable"]
+
+    # An unlinked exercise shared by multiple pools is ambiguous: do not
+    # silently choose one role's alternatives. The declared slot resolves it.
+    other = deepcopy(plan["days"][0]["segments"][0]["slots"][0])
+    other["slot_id"] = "slot_other"
+    plan["days"][0]["segments"][0]["slots"].append(other)
+    unlinked = {**remaining, "slot_id": "slot_unknown", "candidate_id": "cand_unknown"}
+    assert service._blueprint_slot(plan["days"][0], unlinked) is None
+    assert service._blueprint_slot(plan["days"][0], remaining)["slot_id"] == "slot_pull"
+
+
+@pytest.mark.asyncio
+async def test_recovered_legacy_mixed_pool_keeps_the_current_movement_function():
+    db = FakeDatabase()
+    plan = blueprint()
+    slot = plan["days"][0]["segments"][0]["slots"][0]
+    different_role = deepcopy(slot["candidates"][1])
+    different_role.update(candidate_id="cand_press", exercise_id="ex_triceps_pressdown")
+    slot["candidates"].append(different_role)
+    db.seed_blueprint_catalog(plan)
+    next(row for row in db.documents["exercises"] if row["exercise_id"] == "ex_triceps_pressdown")["movement_pattern"] = "elbow_extension"
+    service = WorkoutService(db)
+    await service.solidify_blueprint("acc_one", BlueprintInput(**plan), None, "publish", {})
+    workout = (await service.generate("acc_one", GenerateInput(date="2026-09-21", request_id="generate")))["workout"]
+    # Simulate a previously published mixed-function pool and a renamed slot.
+    db.documents["blueprints"][0]["days"][0]["segments"][0]["slots"][0]["selection_count"] = 2
+    item = db.documents["workouts"][0]["segments"][0]["items"][0]
+    item["slot_id"] = "slot_override_alias"
+    choices = await service.swap_candidates("acc_one", workout["workout_id"], item["exercise_instance_id"])
+    assert [choice["candidate_id"] for choice in choices["candidates"]] == ["cand_row_cable"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["default", "jev"])
+async def test_shared_alternative_pools_reserve_narrow_slots_and_exclude_used_swaps(source):
+    plan = blueprint()
+    segment = plan["days"][0]["segments"][0]
+    broad = segment["slots"][0]
+    third = deepcopy(broad["candidates"][1])
+    third.update(candidate_id="cand_row_dumbbell", exercise_id="ex_chest_supported_row_dumbbell", priority=3)
+    broad["candidates"].append(third)
+    narrow = deepcopy(broad)
+    narrow.update(slot_id="slot_narrow", order=2, candidates=deepcopy(broad["candidates"][:1]))
+    segment["slots"].append(narrow)
+    db = FakeDatabase()
+    db.seed_blueprint_catalog(plan)
+    service = WorkoutService(db)
+    await service.solidify_blueprint("acc_one", BlueprintInput(**plan), None, "publish", {})
+    workout = (await service.generate("acc_one", GenerateInput(
+        date="2026-09-21", source=source, request_id="generate",
+    )))["workout"]
+    first, second = workout["segments"][0]["items"]
+    assert second["exercise_snapshot"]["exercise_id"] == "ex_chest_supported_row_machine"
+    assert first["exercise_snapshot"]["exercise_id"] != second["exercise_snapshot"]["exercise_id"]
+    choices = await service.swap_candidates("acc_one", workout["workout_id"], first["exercise_instance_id"])
+    assert len(choices["candidates"]) == 1
+    alternative = choices["candidates"][0]
+    assert alternative["exercise_id"] not in {item["exercise_snapshot"]["exercise_id"] for item in (first, second)}
+    saved = (await service.swap("acc_one", workout["workout_id"], first["exercise_instance_id"], SwapInput(
+        expected_revision=workout["revision"], expected_blueprint_revision=choices["blueprint_revision"],
+        target_candidate_id=alternative["candidate_id"], reason="Use the remaining alternative", request_id="swap",
+    )))["workout"]
+    assert saved["segments"][0]["items"][1] == second
+    assert len({item["exercise_snapshot"]["exercise_id"] for item in saved["segments"][0]["items"]}) == 2
+
+    # Overlapping pools are valid; two required slots with only one shared
+    # movement are not. Ambiguous slot IDs remain invalid across segments.
+    broad["candidates"] = broad["candidates"][:1]
+    with pytest.raises(ValueError, match="without selecting an exercise twice"):
+        BlueprintInput(**plan)
+    other_segment = deepcopy(segment)
+    other_segment.update(segment_id="seg_other", order=2)
+    plan["days"][0]["segments"].append(other_segment)
+    with pytest.raises(ValueError, match="unique IDs across segments"):
+        BlueprintInput(**plan)
 
 
 @pytest.mark.asyncio
