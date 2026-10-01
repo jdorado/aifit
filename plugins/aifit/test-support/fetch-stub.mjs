@@ -9,7 +9,7 @@ globalThis.fetch = async (url, options = {}) => {
     headers: options.headers,
     body: options.body ? JSON.parse(options.body) : null,
   }));
-  return new Response(JSON.stringify({ status: 'saved', request_id: 'stub-request' }), {
+  return new Response(JSON.stringify(String(url).endsWith('/identity') ? {account_id:'acc_test',tenant_id:'ten_test',permissions:['aifit:read','aifit:write']} : { status: 'saved', request_id: 'stub-request' }), {
     status: 200,
     headers: { 'content-type': 'application/json' },
   });

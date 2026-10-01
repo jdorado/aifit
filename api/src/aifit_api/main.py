@@ -18,12 +18,10 @@ from pymongo import ASCENDING, AsyncMongoClient, ReturnDocument
 from .auth import (
     AgentCapability,
     Identity,
-    mint_agent_capability,
     require_agent_capability,
     require_agent_request,
     require_identity,
 )
-from . import telegram_admit
 from . import videos
 from .exercise_fit import rank_candidates
 from .coach_links import (
@@ -102,27 +100,7 @@ MAX_INBOX_PAGES = 10
 MAX_INBOX_RUNS = 500
 MAX_MESSAGES_PER_RUN = 200
 MAX_MESSAGE_TEXT = 64_000
-AGENT_API_BASE_URL = os.getenv("AIFIT_AGENT_API_BASE_URL", "").rstrip("/")
-
 logger = logging.getLogger("aifit.api")
-if not AGENT_API_BASE_URL:
-    logger.warning(
-        "AIFIT_AGENT_API_BASE_URL is not configured; chat runs are admitted "
-        "without AIFit plugin context and every agent write refuses with "
-        "'no scoped application context'.")
-
-
-def agent_api_base_url() -> str | None:
-    """Accept only an operator-supplied HTTP(S) origin without userinfo."""
-    value = AGENT_API_BASE_URL.strip()
-    if not value or any(character.isspace() for character in value):
-        return None
-    parsed = urlparse(value)
-    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-        return None
-    if parsed.username or parsed.password or parsed.query or parsed.fragment:
-        return None
-    return value
 
 
 def workouts() -> WorkoutService:
@@ -146,18 +124,12 @@ def require_agent_permission(capability: AgentCapability, permission: str) -> No
         raise HTTPException(403, "This agent run does not have the required AIFit permission.")
 
 
-def agent_run_context(account: dict[str, Any], request_id: str) -> dict[str, Any] | None:
-    """Opaque data for the AIFit Ez plugin; never sent to or stored by the browser."""
-    api_base_url = agent_api_base_url()
-    if not api_base_url:
-        return None
-    return {"plugins": {"aifit": {
-        "api_base_url": api_base_url,
-        "capability": mint_agent_capability(
-            account_id=account["account_id"], tenant_id=account["tenant_id"], job_id=request_id,
-            permissions={AGENT_READ, AGENT_WRITE},
-        ),
-    }}}
+
+@app.get("/v1/agent/identity")
+async def agent_identity(capability: AgentCapability = Depends(require_agent_capability)) -> dict:
+    require_agent_permission(capability, AGENT_READ)
+    return {"account_id": capability.account_id, "tenant_id": capability.tenant_id,
+            "permissions": sorted(capability.permissions)}
 
 
 OWNER_CHAT_SCOPE = "owner-chat"
@@ -439,30 +411,13 @@ def public_turn_from_snapshot(run_id: str, request_id: str, snapshot: dict) -> d
     return result
 
 
-_telegram_admit_task: asyncio.Task | None = None
-_telegram_admit_stop: asyncio.Event | None = None
-
-
 @app.on_event("startup")
 async def indexes() -> None:
     await db.accounts.create_index([("privy_subject", ASCENDING)], unique=True)
     await db.accounts.create_index([("account_id", ASCENDING)], unique=True)
+    await db.accounts.create_index([("agent_plugin_token_hash", ASCENDING)], unique=True, sparse=True)
     await workouts().ensure_indexes()
     await coach_links().ensure_indexes()
-    global _telegram_admit_task, _telegram_admit_stop
-    if telegram_admit.admit_enabled() and _telegram_admit_task is None:
-        _telegram_admit_stop = asyncio.Event()
-        _telegram_admit_task = asyncio.create_task(telegram_admit.run_forever(_telegram_admit_stop))
-
-
-@app.on_event("shutdown")
-async def stop_background() -> None:
-    global _telegram_admit_task, _telegram_admit_stop
-    if _telegram_admit_stop is not None:
-        _telegram_admit_stop.set()
-    if _telegram_admit_task is not None:
-        await asyncio.gather(_telegram_admit_task, return_exceptions=True)
-    _telegram_admit_task, _telegram_admit_stop = None, None
 
 
 @app.get("/health")
@@ -647,9 +602,6 @@ async def enqueue_chat(body: ChatInput, identity: Identity = Depends(require_ide
     if body.scope == OWNER_CHAT_SCOPE and not body.act_as_link_id:
         admission["followOwner"] = True
     context = dict(references)
-    plugin_context = agent_run_context(account, request_id)
-    if plugin_context:
-        context.update(plugin_context)
     if context:
         admission["context"] = context
     run = await ez_call(binding, "POST", "/v1/runs", admission)

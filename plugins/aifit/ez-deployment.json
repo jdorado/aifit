@@ -1,16 +1,33 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "services": {
     "aifit": {
       "buildTarget": "runtime",
-      "healthcheck": ["node", "--version"],
-      "command": ["tail", "-f", "/dev/null"]
+      "healthcheck": [
+        "node",
+        "--version"
+      ],
+      "command": [
+        "tail",
+        "-f",
+        "/dev/null"
+      ],
+      "volumes": {
+        "state": "/state"
+      },
+      "environment": {
+        "AIFIT_CONFIG_FILE": "/state/connection.json"
+      },
+      "memoryMiB": 128
     }
   },
   "commands": {
     "aifit": {
       "service": "aifit",
-      "argv": ["node", "/app/bin/aifit.mjs"],
+      "argv": [
+        "node",
+        "/app/bin/aifit.mjs"
+      ],
       "suffix": []
     }
   },

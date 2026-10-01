@@ -45,7 +45,6 @@ async def test_enqueue_sends_untouched_text_and_slim_scope_only(monkeypatch, ide
         "account_id": "acc_1", "tenant_id": "ten_1",
     }))
     monkeypatch.setattr(main, "verified_binding", lambda *_args: async_value({"bindingId": "binding_1"}))
-    monkeypatch.setattr(main, "agent_run_context", lambda _account, _job: {"plugins": {"aifit": {"cap": "c"}}})
     submitted = []
 
     async def ez_call(_binding, method, path, body=None):
@@ -72,7 +71,7 @@ async def test_enqueue_sends_untouched_text_and_slim_scope_only(monkeypatch, ide
     assert admission["context"]["exerciseId"] == "wex_1"
     assert admission["context"]["expectedRevision"] == "rev_0123456789abcdef0123456789abcdef"
     assert "aifit" not in admission["context"]
-    assert admission["context"]["plugins"] == {"aifit": {"cap": "c"}}
+    assert "plugins" not in admission["context"]
     assert result["job_id"] == "run_1"
     assert result["request_id"] == str(request_id)
     assert [message["id"] for message in result["messages"]] == ["msg_1", "msg_2"]
@@ -487,8 +486,6 @@ async def test_enqueue_with_act_as_link_runs_the_turn_in_the_trainee_agent(monke
     monkeypatch.setattr(main, "coach_links", lambda: link_service())
     trainee_db(monkeypatch)
     monkeypatch.setattr(main, "verified_binding", lambda *_args: async_value({"bindingId": "binding_trainee"}))
-    monkeypatch.setattr(main, "agent_run_context",
-                        lambda account, _job: {"plugins": {"aifit": {"for": account["account_id"]}}})
     seen = {}
 
     async def ez_call(binding, method, path, body=None):
@@ -506,7 +503,7 @@ async def test_enqueue_with_act_as_link_runs_the_turn_in_the_trainee_agent(monke
 
     assert seen["binding"] == {"bindingId": "binding_trainee"}
     assert seen["admission"]["text"] == "how did the set go?"
-    assert seen["admission"]["context"]["plugins"] == {"aifit": {"for": "acc_trainee"}}
+    assert seen["admission"]["context"] == {"scopeId": "coach:session:wex_9"}
     assert result["job_id"] == "run_trainee"
     assert result["messages"][0]["text"] == "hi trainee"
 

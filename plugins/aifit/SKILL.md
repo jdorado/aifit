@@ -18,6 +18,14 @@ and its evidence. Choose the progression path and review horizon with your own
 judgment, then publish explicit parameters in the blueprint. The app calculates
 those parameters; it does not make the coaching decision or infer muscle growth.
 
+## Connection
+
+`aifit doctor --json` reads the installed tenant identity and access. Every
+channel uses this same installation binding. No app turn or workout view is
+required for a dated read. Credentials are operator-owned private plugin state;
+never request, read or repeat their values. If doctor fails, report an access
+problem; opening the app does not fix it.
+
 ## Reads
 
 ```sh

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,13 +10,17 @@ const pluginRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const cliPath = join(pluginRoot, 'bin', 'aifit.mjs');
 const fetchStubPath = join(pluginRoot, 'test-support', 'fetch-stub.mjs');
 
-function runCli(args, { context = null, fetchOutput = '', input = '' } = {}) {
-  return new Promise((resolve, reject) => {
+async function runCli(args, { context = null, fetchOutput = '', input = '', configFile, mode = 0o600 } = {}) {
+  const directory = configFile ? null : await mkdtemp(join(tmpdir(), 'aifit-plugin-connection-'));
+  const connectionFile = configFile || join(directory, 'connection.json');
+  if (context) await writeFile(connectionFile, JSON.stringify({ ...context, account_id: 'acc_test', tenant_id: 'ten_test' }), { mode });
+  try { return await new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [cliPath, ...args], {
       cwd: pluginRoot,
       env: {
         ...process.env,
-        EZ_PLUGIN_CONTEXT: context === null ? '' : JSON.stringify(context),
+        AIFIT_CONFIG_FILE: connectionFile,
+        EZ_PLUGIN_CONTEXT: JSON.stringify({api_base_url:'https://wrong-tenant.test',capability:'wrong'}),
         AIFIT_TEST_FETCH_OUTPUT: fetchOutput,
         NODE_OPTIONS: [process.env.NODE_OPTIONS, `--import=${fetchStubPath}`]
           .filter(Boolean)
@@ -30,7 +34,7 @@ function runCli(args, { context = null, fetchOutput = '', input = '' } = {}) {
     child.on('error', reject);
     child.on('close', (code, signal) => resolve({ code, signal, stdout, stderr }));
     child.stdin.end(input);
-  });
+  }); } finally { if (directory) await rm(directory, { recursive: true, force: true }); }
 }
 
 async function fetchRequest(outputPath) {
@@ -56,7 +60,7 @@ async function withFetchOutput(callback) {
   }
 }
 
-const scopedContext = { api_base_url: 'https://aifit.test', capability: 'capability-test' };
+const scopedContext = { api_base_url: 'https://aifit.test', capability: 'aifit_plugin_' + 'test'.repeat(16) };
 
 test('help exposes the canonical reads and the full write surface', async () => {
   const result = await runCli(['--help']);
@@ -109,12 +113,12 @@ test('help and skill carry the artifact schema the agent must author', async () 
   }
 });
 
-test('a command without Ez-scoped context fails before any API call', async () => {
+test('a command without an installed connection fails before any API call', async () => {
   const result = await runCli(['profile', 'show']);
   const payload = errorPayload(result);
 
   assert.equal(payload.error.code, 'cli_error');
-  assert.match(payload.error.message, /scoped application context/);
+  assert.match(payload.error.message, /not configured/);
 });
 
 test('reads transport only the capability, path, and query', async () => {
@@ -126,7 +130,7 @@ test('reads transport only the capability, path, and query', async () => {
     assert.deepEqual(await fetchRequest(fetchOutput), {
       url: 'https://aifit.test/v1/agent/exercises/ex_bench_press?revision=rev_test',
       method: 'GET',
-      headers: { authorization: 'Bearer capability-test' },
+      headers: { authorization: `Bearer ${scopedContext.capability}` },
       body: null,
     });
 
@@ -137,7 +141,7 @@ test('reads transport only the capability, path, and query', async () => {
     assert.deepEqual(await fetchRequest(fetchOutput), {
       url: 'https://aifit.test/v1/agent/workouts?start=2026-09-21&end=2026-09-27',
       method: 'GET',
-      headers: { authorization: 'Bearer capability-test' },
+      headers: { authorization: `Bearer ${scopedContext.capability}` },
       body: null,
     });
   });
@@ -152,7 +156,7 @@ test('exercise catalog pages use only the scoped canonical read', async () => {
     assert.deepEqual(await fetchRequest(fetchOutput), {
       url: 'https://aifit.test/v1/agent/exercises?after=ex_press&limit=50',
       method: 'GET',
-      headers: { authorization: 'Bearer capability-test' },
+      headers: { authorization: `Bearer ${scopedContext.capability}` },
       body: null,
     });
   });
@@ -168,7 +172,7 @@ test('a read without the record uses the canonical path only', async () => {
     assert.deepEqual(await fetchRequest(fetchOutput), {
       url: 'https://aifit.test/v1/agent/workouts/wrk_0123456789abcdef0123456789abcdef',
       method: 'GET',
-      headers: { authorization: 'Bearer capability-test' },
+      headers: { authorization: `Bearer ${scopedContext.capability}` },
       body: null,
     });
   });
@@ -192,7 +196,7 @@ test('valid input is transported with only the Ez capability and typed options',
       url: 'https://aifit.test/v1/agent/blueprints/solidify',
       method: 'POST',
       headers: {
-        authorization: 'Bearer capability-test',
+        authorization: `Bearer ${scopedContext.capability}`,
         'content-type': 'application/json',
       },
       body: {
@@ -229,7 +233,7 @@ test('set count commands require revision and request ID and send only a scoped 
       assert.equal(result.code, 0, result.stderr);
       assert.deepEqual(await fetchRequest(fetchOutput), {
         url: `https://aifit.test/v1/agent/workouts/wrk_test/${path}`, method: 'POST',
-        headers: { authorization: 'Bearer capability-test', 'content-type': 'application/json' },
+        headers: { authorization: `Bearer ${scopedContext.capability}`, 'content-type': 'application/json' },
         body: { expected_revision: 'rev_test', request_id: 'set-count-test' },
       });
     });
@@ -256,7 +260,7 @@ test('exercise, log-set, generate, and swap transport their typed payloads', asy
     assert.deepEqual(await fetchRequest(fetchOutput), {
       url: 'https://aifit.test/v1/agent/workouts/wrk_0123456789abcdef0123456789abcdef/sets/wst_0123456789abcdef0123456789abcdef',
       method: 'PATCH',
-      headers: { authorization: 'Bearer capability-test', 'content-type': 'application/json' },
+      headers: { authorization: `Bearer ${scopedContext.capability}`, 'content-type': 'application/json' },
       body: { actual, expected_revision: 'rev_test', request_id: 'set-test' },
     });
 
@@ -268,7 +272,7 @@ test('exercise, log-set, generate, and swap transport their typed payloads', asy
     assert.equal(retargeted.code, 0, retargeted.stderr);
     assert.deepEqual(await fetchRequest(fetchOutput), {
       url: 'https://aifit.test/v1/agent/workouts/wrk_test/sets/set_test/target', method: 'PATCH',
-      headers: { authorization: 'Bearer capability-test', 'content-type': 'application/json' },
+      headers: { authorization: `Bearer ${scopedContext.capability}`, 'content-type': 'application/json' },
       body: { ...target, expected_revision: 'rev_test', request_id: 'target-test' },
     });
 
@@ -401,7 +405,7 @@ test('workout primitives transport bounded reads and edits with current revision
       assert.equal(result.code, 0, result.stderr);
       assert.deepEqual(await fetchRequest(fetchOutput), {
         url: 'https://aifit.test/v1/agent' + path, method,
-        headers: { authorization: 'Bearer capability-test', ...(body ? { 'content-type': 'application/json' } : {}) },
+        headers: { authorization: `Bearer ${scopedContext.capability}`, ...(body ? { 'content-type': 'application/json' } : {}) },
         body,
       }, action);
     });
@@ -421,5 +425,35 @@ test('progression reads use the bound canonical workout endpoint', async () => {
     const request = await fetchRequest(fetchOutput);
     assert.equal(request.url, 'https://aifit.test/v1/agent/workouts/wrk_0123456789abcdef0123456789abcdef/progression');
     assert.equal(request.method, 'GET');
+  });
+});
+
+ test('private configuration pins tenant and doctor returns no credential', async () => {
+  await withFetchOutput(async fetchOutput => {
+    const directory = dirname(fetchOutput), configFile = join(directory, 'connection.json');
+    const configured = await runCli(['configure'], { configFile, fetchOutput, input: JSON.stringify(scopedContext) });
+    assert.equal(configured.code, 0, configured.stderr);
+    assert.equal(JSON.parse(configured.stdout).account_id, 'acc_test');
+    assert.equal(configured.stdout.includes(scopedContext.capability), false);
+    const doctor = await runCli(['doctor', '--json'], { configFile, fetchOutput });
+    assert.equal(doctor.code, 0, doctor.stderr);
+    assert.equal(JSON.parse(doctor.stdout).tenant_id, 'ten_test');
+    const stored = JSON.parse(await readFile(configFile));
+    assert.equal(stored.capability, scopedContext.capability);
+    assert.equal(stored.tenant_id, 'ten_test');
+    await chmod(configFile, 0o644);
+    const unsafe = await runCli(['doctor', '--json'], { configFile, fetchOutput });
+    assert.equal(unsafe.code, 2);
+    assert.match(JSON.parse(unsafe.stderr).error.message, /not configured/);
+  });
+});
+
+test('configure refuses switching an installation to another tenant', async () => {
+  await withFetchOutput(async fetchOutput => {
+    const configFile = join(dirname(fetchOutput), 'connection.json');
+    await writeFile(configFile, JSON.stringify({...scopedContext, account_id:'acc_other',tenant_id:'ten_other'}), {mode:0o600});
+    const result = await runCli(['configure'], {configFile,fetchOutput,input:JSON.stringify(scopedContext)});
+    assert.match(errorPayload(result).error.message, /different tenant/);
+    assert.equal(JSON.parse(await readFile(configFile)).account_id, 'acc_other');
   });
 });
