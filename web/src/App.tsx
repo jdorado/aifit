@@ -1004,6 +1004,7 @@ const App = () => {
   const swapResponseRef = useRef<SwapCandidates | null>(null)
   const swapExerciseIdRef = useRef<string | null>(null)
   const [chatInput, setChatInput] = useState('')
+  const pendingMainChatScopesRef = useRef(new Set<string>())
   const [showChatScrollToBottom, setShowChatScrollToBottom] = useState(false)
   const [restState, setRestState] = useState<RestState>({
     active: false,
@@ -3287,54 +3288,61 @@ const App = () => {
   const handleSend = useCallback(async (messageOverride?: string) => {
     const value = (messageOverride ?? chatInput).trim()
     if (!value || !coachChatEnabled) return
-    setChatInput('')
-    if (coachActAsLinkId) {
-      const scopeId = `coach-link:${coachActAsLinkId}`
-      await addCoachMessage(scopeId, value, 'user')
-      const statusId = addCoachThinkingMessage(scopeId)
-      const targetDate = selectedDay?.date ?? todayId
-      const expectedRevision = workoutRevisionByOwnerDateRef.current[`${coachActAsOwnerId}:${targetDate}`]
+    const pendingScope = coachActAsLinkId ?? currentUserId
+    if (pendingMainChatScopesRef.current.has(pendingScope)) return
+    pendingMainChatScopesRef.current.add(pendingScope)
+    try {
+      setChatInput('')
+      if (coachActAsLinkId) {
+        const scopeId = `coach-link:${coachActAsLinkId}`
+        await addCoachMessage(scopeId, value, 'user')
+        const statusId = addCoachThinkingMessage(scopeId)
+        const targetDate = selectedDay?.date ?? todayId
+        const expectedRevision = workoutRevisionByOwnerDateRef.current[`${coachActAsOwnerId}:${targetDate}`]
+        try {
+          const result = await fetchChatJobResult({
+            user_id: currentUserId,
+            request_id: crypto.randomUUID(),
+            message: value,
+            reference_date: targetDate,
+            ...(expectedRevision ? { expected_revision: expectedRevision } : {}),
+            act_as_link_id: coachActAsLinkId,
+          })
+          await updateCoachMessage(scopeId, statusId, typeof result.reply === 'string' ? result.reply : String(result.reply ?? ''))
+          await refreshVisibleWorkoutSessions().catch(() => undefined)
+        } catch (error) {
+          removeCoachMessage(scopeId, statusId)
+          await addCoachMessage(scopeId, error instanceof Error ? error.message : t('messages.networkError'), 'ai')
+        }
+        return
+      }
+      await addMessage(value, 'user')
+      const statusId = addThinkingMessage(selectedModelLabel)
+
       try {
-        const result = await fetchChatJobResult({
+        const targetDate = selectedDay?.date ?? todayId
+        const expectedRevision = workoutRevisionByOwnerDateRef.current[`${currentUserId}:${targetDate}`]
+        const payload = {
           user_id: currentUserId,
           request_id: crypto.randomUUID(),
           message: value,
           reference_date: targetDate,
           ...(expectedRevision ? { expected_revision: expectedRevision } : {}),
-          act_as_link_id: coachActAsLinkId,
-        })
-        await updateCoachMessage(scopeId, statusId, typeof result.reply === 'string' ? result.reply : String(result.reply ?? ''))
-        await refreshVisibleWorkoutSessions().catch(() => undefined)
+        }
+
+        await fetchChatReply(payload, statusId)
       } catch (error) {
-        removeCoachMessage(scopeId, statusId)
-        await addCoachMessage(scopeId, error instanceof Error ? error.message : t('messages.networkError'), 'ai')
+        removeMessage(statusId)
+        console.error('Chat Error:', error)
+        const message = error instanceof Error && error.message.includes('Async chat endpoint unavailable')
+          ? 'Backend needs a restart for async chat. /chat/async is not available yet.'
+          : error instanceof TypeError || !(error instanceof Error) || !error.message
+            ? t('messages.networkError')
+            : error.message
+        await addMessage(message, 'ai')
       }
-      return
-    }
-    await addMessage(value, 'user')
-    const statusId = addThinkingMessage(selectedModelLabel)
-
-    try {
-      const targetDate = selectedDay?.date ?? todayId
-      const expectedRevision = workoutRevisionByOwnerDateRef.current[`${currentUserId}:${targetDate}`]
-      const payload = {
-        user_id: currentUserId,
-        request_id: crypto.randomUUID(),
-        message: value,
-        reference_date: targetDate,
-        ...(expectedRevision ? { expected_revision: expectedRevision } : {}),
-      }
-
-      await fetchChatReply(payload, statusId)
-    } catch (error) {
-      removeMessage(statusId)
-      console.error('Chat Error:', error)
-      const message = error instanceof Error && error.message.includes('Async chat endpoint unavailable')
-        ? 'Backend needs a restart for async chat. /chat/async is not available yet.'
-        : error instanceof TypeError || !(error instanceof Error) || !error.message
-          ? t('messages.networkError')
-          : error.message
-      await addMessage(message, 'ai')
+    } finally {
+      pendingMainChatScopesRef.current.delete(pendingScope)
     }
   }, [
     addMessage,
@@ -5022,7 +5030,7 @@ const App = () => {
           ) : (
             <WorkoutOverflowMenu
               canGeneratePlan={canGenerateWorkoutSelectedDay && canQuerySavedWorkoutSessions && isBackendHealthy}
-              canGenerateWithCoach={canGenerateWorkoutSelectedDay && canQuerySavedWorkoutSessions && isBackendHealthy && coachChatEnabled}
+              canGenerateWithCoach={canGenerateWorkoutSelectedDay && canQuerySavedWorkoutSessions && isBackendHealthy && coachChatEnabled && !(coachActAsLinkId ? (coachMessagesByScope[`coach-link:${coachActAsLinkId}`] ?? []) : messages).some((message) => message.thinking)}
               canCopyLastWeek={canGenerateWorkoutSelectedDay && canQuerySavedWorkoutSessions && isBackendHealthy}
               canClearWorkout={canClearSelectedDay && isBackendHealthy}
               onShowHistory={handleOpenWorkoutHistory}

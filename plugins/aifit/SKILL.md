@@ -26,6 +26,12 @@ required for a dated read. Credentials are operator-owned private plugin state;
 never request, read or repeat their values. If doctor fails, report an access
 problem; opening the app does not fix it.
 
+Operator setup uses `aifit configure --account-id ACCOUNT_ID` with private JSON
+stdin. The expected account comes from the verified application binding and
+must match the credential's API identity. Correcting a mistaken installation
+also requires `--rebind-from-account CURRENT_ACCOUNT_ID`; ordinary configuration
+cannot switch tenants. These setup operations belong to the operator.
+
 ## Reads
 
 ```sh

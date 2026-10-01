@@ -98,6 +98,7 @@ const ChatView: FC<ChatViewProps> = ({
         <ChatComposer
           value={inputValue}
           disabled={inputDisabled}
+          pending={messages.some((message) => message.thinking)}
           onChange={onInputChange}
           onSend={onSend}
         />

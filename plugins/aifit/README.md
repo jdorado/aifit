@@ -23,10 +23,15 @@ the native conversation scope and model selection differ. There is no per-turn
 authentication context or application-side engine polling. An operator issues
 the credential with `python -m aifit_api.plugin_credentials --account-id ID
 --api-url https://api.aifit.living --output PRIVATE_FILE`, then streams that
-mode-0600 file into `ez aifit configure`. Verify `ez aifit doctor --json` and a
+mode-0600 file into `ez aifit configure --account-id ID`, using the account ID
+from that agent's verified application binding. Configure rejects a credential
+for another account before saving it. Verify `ez aifit doctor --json` and a
 canonical workout read. Revoke with the same operator command's `--revoke` flag.
 Secrets remain in the plugin's private state volume and never appear in CLI
-arguments or readback. The CLI refuses a switch to another tenant. Configure,
+arguments or readback. The CLI refuses a switch to another tenant. To correct a
+misbound installation, an operator must supply the intended credential and
+`configure --account-id ID --rebind-from-account CURRENT_ID`; both identities
+are checked before replacement. Configure,
 doctor and all record operations ignore channel-supplied credentials. `ez aifit --help` is available after installation. Ez plugin
 containers are isolated from the agent workspace, so the agent streams its
 authored artifact through stdin:

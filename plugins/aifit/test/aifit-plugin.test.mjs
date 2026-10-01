@@ -431,7 +431,7 @@ test('progression reads use the bound canonical workout endpoint', async () => {
  test('private configuration pins tenant and doctor returns no credential', async () => {
   await withFetchOutput(async fetchOutput => {
     const directory = dirname(fetchOutput), configFile = join(directory, 'connection.json');
-    const configured = await runCli(['configure'], { configFile, fetchOutput, input: JSON.stringify(scopedContext) });
+    const configured = await runCli(['configure', '--account-id', 'acc_test'], { configFile, fetchOutput, input: JSON.stringify(scopedContext) });
     assert.equal(configured.code, 0, configured.stderr);
     assert.equal(JSON.parse(configured.stdout).account_id, 'acc_test');
     assert.equal(configured.stdout.includes(scopedContext.capability), false);
@@ -452,8 +452,47 @@ test('configure refuses switching an installation to another tenant', async () =
   await withFetchOutput(async fetchOutput => {
     const configFile = join(dirname(fetchOutput), 'connection.json');
     await writeFile(configFile, JSON.stringify({...scopedContext, account_id:'acc_other',tenant_id:'ten_other'}), {mode:0o600});
-    const result = await runCli(['configure'], {configFile,fetchOutput,input:JSON.stringify(scopedContext)});
+    const result = await runCli(['configure', '--account-id', 'acc_test'], {configFile,fetchOutput,input:JSON.stringify(scopedContext)});
     assert.match(errorPayload(result).error.message, /different tenant/);
     assert.equal(JSON.parse(await readFile(configFile)).account_id, 'acc_other');
+  });
+});
+
+test('configure rejects a swapped credential before creating private state', async () => {
+  await withFetchOutput(async fetchOutput => {
+    const configFile = join(dirname(fetchOutput), 'connection.json');
+    const result = await runCli(['configure', '--account-id', 'acc_other'], {
+      configFile, fetchOutput, input: JSON.stringify(scopedContext),
+    });
+    assert.match(errorPayload(result).error.message, /intended account/);
+    await assert.rejects(readFile(configFile), { code: 'ENOENT' });
+    const missing = await runCli(['configure'], { configFile, fetchOutput, input: JSON.stringify(scopedContext) });
+    assert.match(errorPayload(missing).error.message, /--account-id/);
+  });
+});
+
+test('operator rebind requires both the current and intended account to match', async () => {
+  await withFetchOutput(async fetchOutput => {
+    const configFile = join(dirname(fetchOutput), 'connection.json');
+    const before = JSON.stringify({ ...scopedContext, account_id: 'acc_other', tenant_id: 'ten_other' });
+    await writeFile(configFile, before, { mode: 0o600 });
+    for (const [expected, current, error] of [
+      ['acc_test', 'acc_wrong', /current account/],
+      ['acc_wrong', 'acc_other', /intended account/],
+    ]) {
+      const denied = await runCli(['configure', '--account-id', expected, '--rebind-from-account', current], {
+        configFile, fetchOutput, input: JSON.stringify(scopedContext),
+      });
+      assert.match(errorPayload(denied).error.message, error);
+      assert.equal(await readFile(configFile, 'utf8'), before);
+    }
+    const corrected = await runCli(['configure', '--account-id', 'acc_test', '--rebind-from-account', 'acc_other'], {
+      configFile, fetchOutput, input: JSON.stringify(scopedContext),
+    });
+    assert.equal(corrected.code, 0, corrected.stderr);
+    assert.equal(JSON.parse(await readFile(configFile)).account_id, 'acc_test');
+    assert.equal(corrected.stdout.includes(scopedContext.capability), false);
+    const doctor = await runCli(['doctor', '--json'], { configFile, fetchOutput });
+    assert.equal(doctor.code, 0, doctor.stderr);
   });
 });
