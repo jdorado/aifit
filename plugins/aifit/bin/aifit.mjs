@@ -30,7 +30,7 @@ function usage() {
   return `AIFit native agent tool
 
 Setup (operator, private JSON stdin):
-  aifit configure
+  aifit configure --account-id ACCOUNT_ID [--rebind-from-account CURRENT_ACCOUNT_ID]
   aifit doctor --json
   configure input: {"api_base_url":"https://api.aifit.living","capability":"PRIVATE_TOKEN"}
 
@@ -189,20 +189,31 @@ async function connection() {
   }
 }
 
-async function configure() {
+async function configure(expectedAccount, rebindFrom) {
+  if (!/^acc_[a-z0-9_]+$/.test(expectedAccount || '') ||
+      (rebindFrom !== undefined && !/^acc_[a-z0-9_]+$/.test(rebindFrom))) {
+    throw new Error('Configure requires the intended --account-id from the verified application binding');
+  }
   let value;
   try { value = JSON.parse(await readStdin()); } catch { throw new Error('Configure requires private JSON stdin'); }
   const next = validateConnection(value);
   const identity = await call(next, 'GET', '/identity');
   if (!identity?.account_id || !identity?.tenant_id) throw new Error('Invalid AIFit identity readback');
+  if (identity.account_id !== expectedAccount) throw new Error('AIFit credential does not match the intended account');
   // An installation must never silently switch tenants.
   try {
     await lstat(connectionFile);
     const current = await connection();
-    if (current.account_id !== identity.account_id || current.tenant_id !== identity.tenant_id) {
-      throw new Error('AIFit installation is bound to a different tenant');
+    if (rebindFrom !== undefined && current.account_id !== rebindFrom) {
+      throw new Error('AIFit rebind does not match the current account');
     }
-  } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    if (current.account_id !== identity.account_id || current.tenant_id !== identity.tenant_id) {
+      if (rebindFrom === undefined) throw new Error('AIFit installation is bound to a different tenant');
+    }
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    if (rebindFrom !== undefined) throw new Error('AIFit rebind requires an existing account binding');
+  }
   await mkdir(dirname(connectionFile), { recursive: true, mode: 0o700 });
   const temporary = connectionFile + '.' + randomUUID() + '.tmp';
   try {
@@ -299,8 +310,9 @@ async function main() {
     return;
   }
   if (args[0] === 'configure') {
-    if (args.length !== 1) throw new Error('Configure requires private JSON stdin, no arguments');
-    process.stdout.write(JSON.stringify(await configure()) + '\n');
+    const { values, positional } = parseArgs(args.slice(1), new Set(['--account-id', '--rebind-from-account']));
+    exactly(positional, 0, 'configure --account-id ACCOUNT_ID [--rebind-from-account CURRENT_ACCOUNT_ID]');
+    process.stdout.write(JSON.stringify(await configure(required(values, '--account-id'), optional(values, '--rebind-from-account'))) + '\n');
     return;
   }
   const context = await connection();

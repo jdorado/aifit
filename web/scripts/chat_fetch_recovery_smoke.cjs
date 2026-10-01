@@ -44,6 +44,37 @@ function fixture(steps) {
   return { run, calls, waits, deadlines }
 }
 async function main() {
+  const sendPrefix = '  const handleSend = useCallback('
+  const sendStart = source.indexOf(sendPrefix) + sendPrefix.length
+  const sendEnd = source.indexOf('  }, [', sendStart)
+  const sendCode = ts.transpile(`const handleSend = ${source.slice(sendStart, sendEnd)} };`, { target: ts.ScriptTarget.ES2020 })
+  for (const link of [null, 'ale-link']) {
+    let complete, admissions = 0
+    const wait = new Promise(resolve => { complete = resolve })
+    const pendingMainChatScopesRef = { current: new Set() }
+    const env = {
+      chatInput: '', coachChatEnabled: true, coachActAsLinkId: link,
+      coachActAsOwnerId: link, currentUserId: 'owner', pendingMainChatScopesRef,
+      setChatInput: () => {}, addMessage: async () => {}, addCoachMessage: async () => {},
+      addThinkingMessage: () => 'thinking', addCoachThinkingMessage: () => 'thinking',
+      selectedDay: { date: '2026-10-01' }, todayId: '2026-10-01',
+      workoutRevisionByOwnerDateRef: { current: {} }, crypto: require('node:crypto'),
+      selectedModelLabel: 'Luna', updateCoachMessage: async () => {},
+      refreshVisibleWorkoutSessions: async () => {}, removeCoachMessage: () => {},
+      removeMessage: () => {}, t: value => value,
+      fetchChatReply: async () => { admissions++; await wait },
+      fetchChatJobResult: async () => { admissions++; await wait; return { reply: 'Saved' } },
+    }
+    const send = new Function(...Object.keys(env), `${sendCode}; return handleSend`)(...Object.values(env))
+    const first = send('Generate Thursday')
+    await send('Generate Thursday')
+    assert.equal(admissions, 1, 'repeated taps cannot queue duplicate owner or trainee requests')
+    complete()
+    await first
+    assert.equal(pendingMainChatScopesRef.current.size, 0, 'completion releases the admission guard')
+    await send('Next request')
+    assert.equal(admissions, 2, 'a completed request does not block the next turn')
+  }
   const queued = response({ job_id: 'existing-run', status: 'running' })
   const completed = response({ job_id: 'existing-run', status: 'complete', reply: 'Saved' })
   const brokenBody = { ...queued, json: async () => { throw new TypeError('Failed to fetch') } }

@@ -6,6 +6,7 @@ import { useAutoGrowTextarea } from '../../utils/autoGrowTextarea'
 type ChatComposerProps = {
   value: string
   disabled?: boolean
+  pending?: boolean
   onChange: (value: string) => void
   onSend: () => void
 }
@@ -13,18 +14,19 @@ type ChatComposerProps = {
 const ChatComposer: FC<ChatComposerProps> = ({
   value,
   disabled = false,
+  pending = false,
   onChange,
   onSend,
 }) => {
   const { t } = useI18n()
   const sentOnTouchRef = useRef(false)
   const textareaRef = useAutoGrowTextarea(value)
-  const canSend = !disabled && value.trim().length > 0
+  const canSend = !disabled && !pending && value.trim().length > 0
 
   const handleKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
       event.preventDefault()
-      if (disabled) return
+      if (!canSend) return
       onSend()
     }
   }

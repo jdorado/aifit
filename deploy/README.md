@@ -33,7 +33,9 @@ Each tenant's installed AIFit plugin has one private revocable credential,
 independent of app, Telegram or Slack admission. Issue it inside the API
 container through `python -m aifit_api.plugin_credentials --account-id ID
 --output /tmp/PRIVATE_FILE`; stream the private file into the bound
-`ez aifit configure`, verify identity and a canonical record, then delete the
+`ez aifit configure --account-id ID`, taking ID from the intended agent's verified
+application binding rather than a label or positional account list. Verify the
+doctor account matches that binding and read a canonical record, then delete the
 staging file. The API stores only its hash on the canonical account. Revoke
 with `--account-id ID --revoke`. Existing verified identity pins prevent
 `configure` from switching tenants. Channel contexts carry references only.
