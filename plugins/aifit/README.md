@@ -17,10 +17,17 @@ ez plugins install aifit
 ez plugins start aifit
 ```
 
-The plugin runs only from an AIFit application turn. Ez passes its own
-`run.application.context.plugins.aifit` object to the one-shot command
-container; the CLI never accepts account identity, capability, or API URL as
-arguments. `ez aifit --help` is available after installation. Ez plugin
+The plugin is bound once to its tenant through a private, revocable installation
+credential. Telegram, Slack and app turns use the same tools and records; only
+the native conversation scope and model selection differ. There is no per-turn
+authentication context or application-side engine polling. An operator issues
+the credential with `python -m aifit_api.plugin_credentials --account-id ID
+--api-url https://api.aifit.living --output PRIVATE_FILE`, then streams that
+mode-0600 file into `ez aifit configure`. Verify `ez aifit doctor --json` and a
+canonical workout read. Revoke with the same operator command's `--revoke` flag.
+Secrets remain in the plugin's private state volume and never appear in CLI
+arguments or readback. The CLI refuses a switch to another tenant. Configure,
+doctor and all record operations ignore channel-supplied credentials. `ez aifit --help` is available after installation. Ez plugin
 containers are isolated from the agent workspace, so the agent streams its
 authored artifact through stdin:
 
@@ -66,6 +73,11 @@ and copied days from native context; a swap input contains the current
 reason. Logged sets are immutable: swap and override preserve them under their
 original exercise snapshots and apply the change to the unlogged remainder. The
 frontend consumes the same backend records separately.
+
+Exit codes: 0 success, 1 invalid/unavailable operation, 2 doctor not ready.
+
+Managed usage hint decision: snippet unnecessary; help and the installed skill
+provide connection and dated-read discovery without channel prompt additions.
 
 ## Local verification
 

@@ -3,16 +3,20 @@
 // AIFit is the coach's full application surface: canonical record reads and
 // deterministic domain writes. The agent owns the surrounding context; these
 // commands only transport typed artifacts and ids to the AIFit API, scoped to
-// the current Ez run by the capability Ez delivers to this container.
+// its installed tenant credential, independent of the incoming channel.
 
-import { readFile } from 'node:fs/promises';
+import { chmod, lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { dirname } from 'node:path';
+
+const connectionFile = process.env.AIFIT_CONFIG_FILE || '/state/connection.json';
 
 function fail(message) {
   const payload = message && typeof message === 'object' && message.payload
     ? message.payload
     : { error: { code: 'cli_error', message: message instanceof Error ? message.message : String(message) } };
   process.stderr.write(`${JSON.stringify(payload)}\n`);
-  process.exitCode = 1;
+  process.exitCode = process.argv[2] === 'doctor' ? 2 : 1;
 }
 
 class ApiError extends Error {
@@ -24,6 +28,11 @@ class ApiError extends Error {
 
 function usage() {
   return `AIFit native agent tool
+
+Setup (operator, private JSON stdin):
+  aifit configure
+  aifit doctor --json
+  configure input: {"api_base_url":"https://api.aifit.living","capability":"PRIVATE_TOKEN"}
 
 Read:
   aifit exercise list [--after EXERCISE_ID] [--limit N]
@@ -154,17 +163,54 @@ function exactly(positional, count, shape) {
   return positional;
 }
 
-async function runContext() {
-  let aifit;
+function validateConnection(value) {
+  if (!value || Object.keys(value).sort().join(',') !== 'api_base_url,capability' ||
+      typeof value.api_base_url !== 'string' || typeof value.capability !== 'string' ||
+      !value.capability.startsWith('aifit_plugin_') || value.capability.length < 48) {
+    throw new Error('Invalid AIFit connection; operator setup required');
+  }
+  const url = new URL(value.api_base_url);
+  if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash ||
+      url.pathname !== '/' || url.origin !== value.api_base_url) {
+    throw new Error('AIFit connection requires an HTTPS origin');
+  }
+  return value;
+}
+
+async function connection() {
   try {
-    aifit = JSON.parse(process.env.EZ_PLUGIN_CONTEXT || 'null');
+    const stat = await lstat(connectionFile);
+    if (!stat.isFile() || (stat.mode & 0o077)) throw new Error('private file required');
+    const stored = JSON.parse(await readFile(connectionFile, 'utf8'));
+    if (typeof stored.account_id !== 'string' || typeof stored.tenant_id !== 'string') throw new Error('tenant pin required');
+    return { ...validateConnection({ api_base_url: stored.api_base_url, capability: stored.capability }), account_id: stored.account_id, tenant_id: stored.tenant_id };
   } catch {
-    throw new Error('Ez supplied invalid AIFit plugin context');
+    throw new Error('AIFit plugin is not configured; operator must bind its tenant credential');
   }
-  if (!aifit || typeof aifit.api_base_url !== 'string' || typeof aifit.capability !== 'string') {
-    throw new Error('This AIFit plugin has no scoped application context. Start from AIFit chat or mini-chat.');
-  }
-  return aifit;
+}
+
+async function configure() {
+  let value;
+  try { value = JSON.parse(await readStdin()); } catch { throw new Error('Configure requires private JSON stdin'); }
+  const next = validateConnection(value);
+  const identity = await call(next, 'GET', '/identity');
+  if (!identity?.account_id || !identity?.tenant_id) throw new Error('Invalid AIFit identity readback');
+  // An installation must never silently switch tenants.
+  try {
+    await lstat(connectionFile);
+    const current = await connection();
+    if (current.account_id !== identity.account_id || current.tenant_id !== identity.tenant_id) {
+      throw new Error('AIFit installation is bound to a different tenant');
+    }
+  } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  await mkdir(dirname(connectionFile), { recursive: true, mode: 0o700 });
+  const temporary = connectionFile + '.' + randomUUID() + '.tmp';
+  try {
+    await writeFile(temporary, JSON.stringify({ ...next, account_id: identity.account_id, tenant_id: identity.tenant_id }) + '\n', { mode: 0o600, flag: 'wx' });
+    await chmod(temporary, 0o600);
+    await rename(temporary, connectionFile);
+  } finally { await rm(temporary, { force: true }); }
+  return { configured: true, ...identity };
 }
 
 async function call(context, method, path, body, query) {
@@ -252,7 +298,19 @@ async function main() {
     process.stdout.write(`${usage()}\n`);
     return;
   }
-  const context = await runContext();
+  if (args[0] === 'configure') {
+    if (args.length !== 1) throw new Error('Configure requires private JSON stdin, no arguments');
+    process.stdout.write(JSON.stringify(await configure()) + '\n');
+    return;
+  }
+  const context = await connection();
+  if (args[0] === 'doctor') {
+    if (args.length !== 2 || args[1] !== '--json') throw new Error('Use aifit doctor --json');
+    const identity = await call(context, 'GET', '/identity');
+    if (identity.account_id !== context.account_id || identity.tenant_id !== context.tenant_id) throw new Error('AIFit credential does not match its tenant pin');
+    process.stdout.write(JSON.stringify({ ok: true, ...identity }) + '\n');
+    return;
+  }
   const [area, action, ...rest] = args;
   let result;
   if (area === 'exercise' && action === 'list') {

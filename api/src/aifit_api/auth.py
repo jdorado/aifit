@@ -1,3 +1,4 @@
+import hashlib
 import logging
 import os
 import secrets
@@ -79,6 +80,16 @@ def mint_agent_capability(
 
 
 async def require_agent_capability(authorization: str | None = Header(default=None)) -> AgentCapability:
+    if authorization and authorization.startswith("Bearer aifit_plugin_"):
+        # Installed credentials are private to one plugin and revocable in the
+        # canonical account. No channel, run admission or engine polling.
+        from .main import db
+        digest = hashlib.sha256(authorization.removeprefix("Bearer ").encode()).hexdigest()
+        account = await db.accounts.find_one({"agent_plugin_token_hash": digest})
+        if not account or not account.get("account_id") or not account.get("tenant_id"):
+            raise HTTPException(401, "AIFit plugin credential is invalid or revoked.")
+        return AgentCapability(account["account_id"], account["tenant_id"],
+                               f"plugin:{digest[:16]}", frozenset({"aifit:read", "aifit:write"}))
     secret = _agent_capability_secret()
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(401, "Agent capability required.")

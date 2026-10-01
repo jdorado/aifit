@@ -10,21 +10,6 @@ from test_workout_plan_edits import insert_workout, make_item, make_segment, mak
 from test_workout_transactions import FakeDatabase
 
 
-def test_agent_context_is_namespaced_to_the_aifit_plugin(monkeypatch):
-    secret = "test-secret-with-at-least-thirty-two-bytes"
-    monkeypatch.setattr(auth, "AIFIT_AGENT_CAPABILITY_SECRET", secret)
-    monkeypatch.setattr(main, "AGENT_API_BASE_URL", "http://aifit-api:8100")
-
-    context = main.agent_run_context({"account_id": "acc_one", "tenant_id": "ten_one"}, "job_one")
-
-    assert context is not None
-    assert set(context) == {"plugins"}
-    plugin = context["plugins"]["aifit"]
-    assert plugin["api_base_url"] == "http://aifit-api:8100"
-    capability = asyncio.run(auth.require_agent_capability(f"Bearer {plugin['capability']}"))
-    assert capability.permissions == frozenset({main.AGENT_READ, main.AGENT_WRITE})
-
-
 def test_plugin_agent_surface_covers_the_canonical_reads_and_writes():
     routes = [route for route in main.app.routes if route.path.startswith("/v1/agent/")]
     by_path: dict[str, set[str]] = {}
@@ -33,6 +18,7 @@ def test_plugin_agent_surface_covers_the_canonical_reads_and_writes():
     for path in ("/v1/agent/messages", "/v1/agent/jobs/{job_id}"):
         by_path.pop(path)
     assert set(by_path) == {
+        "/v1/agent/identity",
         "/v1/agent/exercises",
         "/v1/agent/exercises/{exercise_id}",
         "/v1/agent/exercises/{exercise_id}/history",
@@ -202,16 +188,7 @@ async def test_workout_operations_use_bound_authority_and_typed_service(monkeypa
             assert args[-1].model_dump(mode="json") == body
 
 
-@pytest.mark.parametrize("value", [
-    "file:///tmp/aifit-api",
-    "https://user:password@example.test/aifit",
-    "https://example.test/aifit?token=leak",
-    "https://example.test/aifit#fragment",
-])
-def test_agent_context_rejects_unsafe_api_origins(monkeypatch, value):
-    monkeypatch.setattr(main, "AGENT_API_BASE_URL", value)
 
-    assert main.agent_run_context({"account_id": "acc_one", "tenant_id": "ten_one"}, "job_one") is None
 
 
 def test_agent_swap_intent_requires_blueprint_revision_and_selects_the_source():

@@ -100,3 +100,59 @@ def test_capability_secret_falls_back_to_ephemeral_process_secret(monkeypatch):
     first = auth._agent_capability_secret()
     assert len(first) >= 32
     assert auth._agent_capability_secret() == first
+
+@pytest.mark.asyncio
+async def test_installed_plugin_credential_is_tenant_bound_and_revocable(monkeypatch):
+    import hashlib
+    from aifit_api import main
+    token = 'aifit_plugin_' + 'private-test-token' * 4
+    digest = hashlib.sha256(token.encode()).hexdigest()
+    account = {"account_id": "acc_one", "tenant_id": "tenant_one"}
+    class Accounts:
+        async def find_one(self, query):
+            return account if query == {"agent_plugin_token_hash": digest} else None
+    class Database:
+        accounts = Accounts()
+    monkeypatch.setattr(main, "db", Database())
+    capability = await auth.require_agent_capability(f'Bearer {token}')
+    assert (capability.account_id, capability.tenant_id) == ('acc_one', 'tenant_one')
+    assert capability.permissions == frozenset({'aifit:read', 'aifit:write'})
+    with pytest.raises(HTTPException) as invalid:
+        await auth.require_agent_capability(f'Bearer {token}-wrong')
+    assert invalid.value.status_code == 401
+    account.clear()  # canonical revocation removes the lookup
+    with pytest.raises(HTTPException) as revoked:
+        await auth.require_agent_capability(f'Bearer {token}')
+    assert revoked.value.status_code == 401
+
+@pytest.mark.asyncio
+async def test_operator_credential_issuance_is_private_and_idempotent(monkeypatch, tmp_path):
+    import hashlib
+    import json
+    from types import SimpleNamespace
+    from aifit_api import plugin_credentials
+    account = {"account_id": "acc_one", "tenant_id": "tenant_one"}
+    class Accounts:
+        async def find_one(self, query):
+            return account if query.get('account_id') == account['account_id'] else None
+        async def update_one(self, query, update):
+            if '$unset' in update:
+                account.pop('agent_plugin_token_hash', None)
+            else:
+                account.update(update['$set'])
+            return SimpleNamespace(modified_count=1)
+    monkeypatch.setattr(plugin_credentials, 'db', SimpleNamespace(accounts=Accounts()))
+    output = tmp_path / 'connection.json'
+    await plugin_credentials.issue('acc_one', 'https://aifit.test', output)
+    original = output.read_bytes()
+    token = json.loads(original)['capability']
+    assert account['agent_plugin_token_hash'] == hashlib.sha256(token.encode()).hexdigest()
+    assert output.stat().st_mode & 0o077 == 0
+    await plugin_credentials.issue('acc_one', 'https://aifit.test', output)
+    assert output.read_bytes() == original
+    with pytest.raises(ValueError, match='Registered tenant'):
+        await plugin_credentials.issue('acc_other', 'https://aifit.test', tmp_path / 'other.json')
+    with pytest.raises(ValueError, match='already issued'):
+        await plugin_credentials.issue('acc_one', 'https://aifit.test', tmp_path / 'duplicate.json')
+    await plugin_credentials.issue('acc_one', 'https://aifit.test', None, revoke=True)
+    assert 'agent_plugin_token_hash' not in account
