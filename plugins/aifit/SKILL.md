@@ -478,13 +478,12 @@ under the original exercise and swaps only the sets that are still open, so a
 partially logged exercise can still be swapped. Only an exercise whose every
 set is logged returns `completed_exercise_locked`. An item kept verbatim from
 outside the blueprint (legacy import, copied day, or override remainder) has
-no blueprint slot and returns `blueprint_slot_missing`. Read the repertoire to
-find an eligible add/remove composition, or explain that an explicitly authored
-remaining-day override is needed. Do not clear then generate to force a swap:
-generate returns any existing day unchanged, including its preserved logs.
-If the required workout or
-blueprint context is absent, stop with structured feedback; never invent a
-candidate or turn a swap into an exception day.
+no blueprint slot and returns `blueprint_slot_missing`. Use the scoped
+substitution path below when a compatible catalog exercise is known; otherwise
+explain that no safe replacement was found. Do not clear then generate to force
+a swap: generate returns any existing day unchanged, including its preserved
+logs. If the required workout context is absent, stop with structured feedback;
+never invent a candidate or turn a swap into an exception day.
 
 For an exception-day or legacy item whose swap read returns
 `blueprint_slot_missing`, a concrete compatible replacement does not require a
