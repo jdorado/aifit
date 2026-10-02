@@ -23,6 +23,7 @@
     ".dockerignore",
     "LICENSE",
     "THIRD_PARTY_NOTICES.md",
-    "pnpm-lock.yaml"
+    "pnpm-lock.yaml",
+    "pnpm-workspace.yaml"
   ]
 }

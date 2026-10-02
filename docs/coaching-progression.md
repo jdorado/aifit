@@ -57,7 +57,7 @@ to read progression, correct an unlogged target, complete work without RPE, and
 generate the next day. Read back canonical targets and ensure previous actuals
 are unchanged. Do not create synthetic records in the shared live database.
 
-For manual QA in `yarn dev`: open Leg Press, check the compact indicator and last
+For manual QA in `pnpm dev`: open Leg Press, check the compact indicator and last
 125 kg performance, tap for the next step, then log only weight/reps. Verify the
 indicator refreshes after saving and remains correct after reload. Check Training
 history → Muscle progress for the same exercise trend.

@@ -13,7 +13,7 @@ export PNPM_HOME="${PNPM_HOME:-$HOME/Library/pnpm}"
 export PATH="$PNPM_HOME:$PATH"
 # Agent QA needs the standard local Ez relay: /chat/models and the Telegram
 # admission bridge both call the deployment bound in the binding registry
-# (see DEV_INDEX). Start it by default so `yarn dev` is QA-ready; set
+# (see DEV_INDEX). Start it by default so `pnpm dev` is QA-ready; set
 # AIFIT_WITH_RELAY=0 for API + app only.
 AIFIT_WITH_RELAY="${AIFIT_WITH_RELAY:-1}"
 
