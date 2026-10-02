@@ -602,6 +602,20 @@ async def enqueue_chat(body: ChatInput, identity: Identity = Depends(require_ide
     if body.scope == OWNER_CHAT_SCOPE and not body.act_as_link_id:
         admission["followOwner"] = True
     context = dict(references)
+    if body.scope == MINI_CHAT_SCOPE:
+        # Ez exposes only this plugin-specific object to the isolated AIFit
+        # command. That lets the deterministic boundary reject day-wide writes
+        # from an exercise-scoped mini-chat even if the model picks the wrong
+        # command. Keep the ordinary run references as well so the agent can
+        # still inspect them through the native schedule context.
+        context["plugins"] = {"aifit": {
+            key: value for key, value in {
+                "scope": MINI_CHAT_SCOPE,
+                "workoutId": body.workout_id,
+                "exerciseInstanceId": body.exercise_instance_id,
+                "expectedRevision": body.expected_revision,
+            }.items() if value is not None
+        }}
     if context:
         admission["context"] = context
     run = await ez_call(binding, "POST", "/v1/runs", admission)

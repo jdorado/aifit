@@ -97,11 +97,18 @@ async def test_enqueue_forwards_canonical_workout_and_instance_refs(monkeypatch,
         scope="owner-minichat", scope_id="coach:session:wex_1",
         workout_id="wrk_0123456789abcdef0123456789abcdef",
         exercise_instance_id="wex_0123456789abcdef0123456789abcdef",
+        expected_revision="rev_0123456789abcdef0123456789abcdef",
     ), identity)
     admission = submitted[0][2]
     assert admission["scope"] == "owner-minichat"
     assert admission["context"]["workoutId"] == "wrk_0123456789abcdef0123456789abcdef"
     assert admission["context"]["exerciseInstanceId"] == "wex_0123456789abcdef0123456789abcdef"
+    assert admission["context"]["plugins"]["aifit"] == {
+        "scope": "owner-minichat",
+        "workoutId": "wrk_0123456789abcdef0123456789abcdef",
+        "exerciseInstanceId": "wex_0123456789abcdef0123456789abcdef",
+        "expectedRevision": "rev_0123456789abcdef0123456789abcdef",
+    }
 
 
 @pytest.mark.asyncio
@@ -442,6 +449,7 @@ async def test_mini_chat_enqueue_uses_its_own_scope_without_follow_owner(monkeyp
     assert "followOwner" not in admission
     assert admission["text"] == "swap this"
     assert admission["context"]["scopeId"] == "coach:session:wex_1"
+    assert admission["context"]["plugins"]["aifit"] == {"scope": "owner-minichat"}
     assert result["job_id"] == "run_mini"
 
 
@@ -503,7 +511,10 @@ async def test_enqueue_with_act_as_link_runs_the_turn_in_the_trainee_agent(monke
 
     assert seen["binding"] == {"bindingId": "binding_trainee"}
     assert seen["admission"]["text"] == "how did the set go?"
-    assert seen["admission"]["context"] == {"scopeId": "coach:session:wex_9"}
+    assert seen["admission"]["context"] == {
+        "scopeId": "coach:session:wex_9",
+        "plugins": {"aifit": {"scope": "owner-minichat"}},
+    }
     assert result["job_id"] == "run_trainee"
     assert result["messages"][0]["text"] == "hi trainee"
 

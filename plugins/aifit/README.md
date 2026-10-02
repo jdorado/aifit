@@ -20,7 +20,7 @@ ez plugins start aifit
 The plugin is bound once to its tenant through a private, revocable installation
 credential. Telegram, Slack and app turns use the same tools and records; only
 the native conversation scope and model selection differ. There is no per-turn
-authentication context or application-side engine polling. An operator issues
+authentication credential or application-side engine polling. An operator issues
 the credential with `python -m aifit_api.plugin_credentials --account-id ID
 --api-url https://api.aifit.living --output PRIVATE_FILE`, then streams that
 mode-0600 file into `ez aifit configure --account-id ID`, using the account ID
@@ -68,6 +68,13 @@ the browser's last-week shortcut calls the same implementation. Agent writes
 reuse the frontend's typed services and tenant, revision, and history checks.
 The installed skill maps each primitive to its payload, effect, preserved
 records, and sequential composition rules.
+
+For an AIFit mini-chat run, the application passes the current workout and
+exercise instance through Ez's plugin-specific application context. The CLI
+uses that non-secret target only as an execution guard: it refuses whole-day,
+catalog, and blueprint writes and refuses exercise-scoped commands aimed at a
+different target. Main chat and ordinary native channels retain the complete
+surface. Channel context is never accepted as a credential or tenant selector.
 
 The override input is the complete resolved unlogged remainder of the target day.
 Already logged work is preserved automatically; including its dose in the

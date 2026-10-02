@@ -73,7 +73,7 @@ The references are not in the prompt; read the current run first:
 ezenciel-agents-schedule context
 ```
 
-Its `run.application.context` carries only these references:
+Its `run.application.context` carries these top-level references:
 
 - `workoutId`: the `wrk_...` record holding the instance
 - `exerciseInstanceId`: the `wex_...` target item inside that record
@@ -102,6 +102,16 @@ blueprint questions. Broader planning and writes retain their normal profile,
 health-gate, and revision checks. Never ask which exercise the user means.
 If a required reference or plugin read fails, report the missing information
 briefly; do not browse packages, permissions, source, or old plans to guess it.
+
+The isolated AIFit command also receives the current mini-chat workout and
+exercise target as a non-secret execution guard. In mini-chat it rejects
+program/catalog writes and whole-day operations (`generate`, `copy`, `override`,
+`clear`, day notes, segment-wide edits, and adding another exercise), even if
+you select one by mistake. It also rejects workout/exercise primitives aimed at
+a different target. Use `workout swap` for a requested replacement and
+`add-set`/the other bounded primitives for the current instance. Move an
+explicit whole-day or program-authoring request to main chat; never work around
+the guard by composing destructive operations.
 
 ## Operation model
 

@@ -10,7 +10,14 @@ const pluginRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const cliPath = join(pluginRoot, 'bin', 'aifit.mjs');
 const fetchStubPath = join(pluginRoot, 'test-support', 'fetch-stub.mjs');
 
-async function runCli(args, { context = null, fetchOutput = '', input = '', configFile, mode = 0o600 } = {}) {
+async function runCli(args, {
+  context = null,
+  fetchOutput = '',
+  input = '',
+  configFile,
+  mode = 0o600,
+  pluginContext = { api_base_url: 'https://wrong-tenant.test', capability: 'wrong' },
+} = {}) {
   const directory = configFile ? null : await mkdtemp(join(tmpdir(), 'aifit-plugin-connection-'));
   const connectionFile = configFile || join(directory, 'connection.json');
   if (context) await writeFile(connectionFile, JSON.stringify({ ...context, account_id: 'acc_test', tenant_id: 'ten_test' }), { mode });
@@ -20,7 +27,7 @@ async function runCli(args, { context = null, fetchOutput = '', input = '', conf
       env: {
         ...process.env,
         AIFIT_CONFIG_FILE: connectionFile,
-        EZ_PLUGIN_CONTEXT: JSON.stringify({api_base_url:'https://wrong-tenant.test',capability:'wrong'}),
+        EZ_PLUGIN_CONTEXT: JSON.stringify(pluginContext),
         AIFIT_TEST_FETCH_OUTPUT: fetchOutput,
         NODE_OPTIONS: [process.env.NODE_OPTIONS, `--import=${fetchStubPath}`]
           .filter(Boolean)
@@ -61,6 +68,12 @@ async function withFetchOutput(callback) {
 }
 
 const scopedContext = { api_base_url: 'https://aifit.test', capability: 'aifit_plugin_' + 'test'.repeat(16) };
+const miniChatContext = {
+  scope: 'owner-minichat',
+  workoutId: 'wrk_0123456789abcdef0123456789abcdef',
+  exerciseInstanceId: 'wex_0123456789abcdef0123456789abcdef',
+  expectedRevision: 'rev_0123456789abcdef0123456789abcdef',
+};
 
 test('help exposes the canonical reads and the full write surface', async () => {
   const result = await runCli(['--help']);
@@ -333,6 +346,79 @@ test('exercise, log-set, generate, and swap transport their typed payloads', asy
       source: 'jev',
       target_candidate_id: 'cand_row_cable',
     });
+  });
+});
+
+test('mini-chat rejects whole-day and program writes before any API call', async () => {
+  for (const args of [
+    ['workout', 'generate', '--date', '2026-09-21', '--request-id', 'blocked-generate'],
+    ['workout', 'copy', '--from', '2026-09-14', '--date', '2026-09-21', '--source-revision', 'rev_test', '--request-id', 'blocked-copy'],
+    ['workout', 'override', '--input', '-', '--request-id', 'blocked-override'],
+    ['workout', 'clear', miniChatContext.workoutId, '--expected-revision', miniChatContext.expectedRevision, '--request-id', 'blocked-clear'],
+    ['workout', 'add-exercise', miniChatContext.workoutId, '--input', '-', '--expected-revision', miniChatContext.expectedRevision, '--request-id', 'blocked-add'],
+    ['blueprint', 'solidify', '--input', '-', '--request-id', 'blocked-blueprint'],
+    ['exercise', 'create', '--input', '-', '--request-id', 'blocked-exercise'],
+  ]) {
+    await withFetchOutput(async (fetchOutput) => {
+      const result = await runCli(args, {
+        context: scopedContext,
+        fetchOutput,
+        input: '{}',
+        pluginContext: miniChatContext,
+      });
+      assert.match(errorPayload(result).error.message, /Mini-chat is scoped to one exercise/);
+      assert.equal(await fetchRequest(fetchOutput), null);
+    });
+  }
+});
+
+test('mini-chat permits only its current workout and exercise target', async () => {
+  const intent = {
+    workout_id: miniChatContext.workoutId,
+    exercise_instance_id: miniChatContext.exerciseInstanceId,
+    expected_blueprint_revision: 'rev_abcdef0123456789abcdef0123456789',
+    reason: 'The machine is occupied.',
+  };
+  await withFetchOutput(async (fetchOutput) => {
+    const result = await runCli([
+      'workout', 'swap', '--input', '-', '--request-id', 'mini-swap',
+      '--expected-revision', miniChatContext.expectedRevision,
+    ], {
+      context: scopedContext,
+      fetchOutput,
+      input: JSON.stringify(intent),
+      pluginContext: miniChatContext,
+    });
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal((await fetchRequest(fetchOutput)).url, 'https://aifit.test/v1/agent/workouts/swap');
+  });
+
+  for (const changed of [
+    { workout_id: 'wrk_ffffffffffffffffffffffffffffffff' },
+    { exercise_instance_id: 'wex_ffffffffffffffffffffffffffffffff' },
+  ]) {
+    await withFetchOutput(async (fetchOutput) => {
+      const result = await runCli([
+        'workout', 'swap', '--input', '-', '--request-id', 'wrong-mini-swap',
+        '--expected-revision', miniChatContext.expectedRevision,
+      ], {
+        context: scopedContext,
+        fetchOutput,
+        input: JSON.stringify({ ...intent, ...changed }),
+        pluginContext: miniChatContext,
+      });
+      assert.match(errorPayload(result).error.message, /Mini-chat cannot change or read a different/);
+      assert.equal(await fetchRequest(fetchOutput), null);
+    });
+  }
+
+  await withFetchOutput(async (fetchOutput) => {
+    const result = await runCli([
+      'workout', 'add-set', miniChatContext.workoutId, 'wex_ffffffffffffffffffffffffffffffff',
+      '--expected-revision', miniChatContext.expectedRevision, '--request-id', 'wrong-mini-add-set',
+    ], { context: scopedContext, fetchOutput, pluginContext: miniChatContext });
+    assert.match(errorPayload(result).error.message, /different exercise instance/);
+    assert.equal(await fetchRequest(fetchOutput), null);
   });
 });
 

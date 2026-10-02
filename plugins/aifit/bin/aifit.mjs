@@ -163,6 +163,57 @@ function exactly(positional, count, shape) {
   return positional;
 }
 
+const MINI_CHAT_SCOPE = 'owner-minichat';
+
+function pluginApplicationContext() {
+  const encoded = (process.env.EZ_PLUGIN_CONTEXT || '').trim();
+  if (!encoded) return null;
+  let value;
+  try { value = JSON.parse(encoded); } catch { throw new Error('Invalid AIFit application context'); }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Invalid AIFit application context');
+  }
+  // Older/native invocations may carry unrelated opaque plugin context. Only
+  // the application-owned mini-chat scope activates these restrictions.
+  return value.scope === MINI_CHAT_SCOPE ? value : null;
+}
+
+function enforceMiniChatOperation(context, area, action) {
+  if (!context) return;
+  const blocked = (
+    (area === 'exercise' && action === 'create') ||
+    (area === 'blueprint' && ['draft', 'solidify'].includes(action)) ||
+    (area === 'workout' && [
+      'generate', 'copy', 'override', 'clear', 'add-exercise',
+      'remove-segment', 'reorder-segments', 'set-notes',
+    ].includes(action))
+  );
+  if (blocked) {
+    throw new Error(
+      `Mini-chat is scoped to one exercise and cannot run ${area} ${action}. ` +
+      'Use workout swap or another exercise/set primitive for the current target; use main chat for whole-day changes.',
+    );
+  }
+}
+
+function requireMiniChatTarget(context, workoutId, exerciseInstanceId) {
+  if (!context) return;
+  if (typeof context.workoutId !== 'string' || !context.workoutId) {
+    throw new Error('Mini-chat is missing its canonical workout target; refresh the workout and try again.');
+  }
+  if (workoutId !== context.workoutId) {
+    throw new Error('Mini-chat cannot change or read a different workout.');
+  }
+  if (exerciseInstanceId !== undefined) {
+    if (typeof context.exerciseInstanceId !== 'string' || !context.exerciseInstanceId) {
+      throw new Error('Mini-chat is missing its canonical exercise target; refresh the workout and try again.');
+    }
+    if (exerciseInstanceId !== context.exerciseInstanceId) {
+      throw new Error('Mini-chat cannot change or read a different exercise instance.');
+    }
+  }
+}
+
 function validateConnection(value) {
   if (!value || Object.keys(value).sort().join(',') !== 'api_base_url,capability' ||
       typeof value.api_base_url !== 'string' || typeof value.capability !== 'string' ||
@@ -316,6 +367,7 @@ async function main() {
     return;
   }
   const context = await connection();
+  const applicationContext = pluginApplicationContext();
   if (args[0] === 'doctor') {
     if (args.length !== 2 || args[1] !== '--json') throw new Error('Use aifit doctor --json');
     const identity = await call(context, 'GET', '/identity');
@@ -324,6 +376,7 @@ async function main() {
     return;
   }
   const [area, action, ...rest] = args;
+  enforceMiniChatOperation(applicationContext, area, action);
   let result;
   if (area === 'exercise' && action === 'list') {
     const { values, positional } = parseArgs(rest, new Set(['--after', '--limit']));
@@ -380,18 +433,22 @@ async function main() {
   } else if (area === 'workout' && action === 'exercise-repertoire') {
     const { positional } = parseArgs(rest, new Set());
     const [workoutId] = exactly(positional, 1, 'workout exercise-repertoire WORKOUT_ID');
+    requireMiniChatTarget(applicationContext, workoutId);
     result = await call(context, 'GET', `/workouts/${encodeURIComponent(workoutId)}/exercise-repertoire`);
   } else if (area === 'workout' && action === 'swap-candidates') {
     const { positional } = parseArgs(rest, new Set());
     const [workoutId, instanceId] = exactly(positional, 2, 'workout swap-candidates WORKOUT_ID EXERCISE_INSTANCE_ID');
+    requireMiniChatTarget(applicationContext, workoutId, instanceId);
     result = await call(context, 'GET', `/workouts/${encodeURIComponent(workoutId)}/exercises/${encodeURIComponent(instanceId)}/swap-candidates`);
   } else if (area === 'workout' && action === 'progression') {
     const { positional } = parseArgs(rest, new Set());
     const [workoutId] = exactly(positional, 1, 'workout progression WORKOUT_ID');
+    requireMiniChatTarget(applicationContext, workoutId);
     result = await call(context, 'GET', `/workouts/${encodeURIComponent(workoutId)}/progression`);
   } else if (area === 'workout' && action === 'show') {
     const { positional } = parseArgs(rest, new Set());
     const [workoutId] = exactly(positional, 1, 'workout show WORKOUT_ID');
+    requireMiniChatTarget(applicationContext, workoutId);
     result = await call(context, 'GET', `/workouts/${workoutId}`);
   } else if (area === 'workout' && action === 'list') {
     const { values } = parseArgs(rest, new Set(['--start', '--end']));
@@ -409,6 +466,7 @@ async function main() {
   } else if (area === 'workout' && action === 'add-set') {
     const { values, positional } = parseArgs(rest, new Set(['--expected-revision', '--request-id']));
     const [workoutId, instanceId] = exactly(positional, 2, 'workout add-set WORKOUT_ID EXERCISE_INSTANCE_ID');
+    requireMiniChatTarget(applicationContext, workoutId, instanceId);
     result = await call(context, 'POST', `/workouts/${encodeURIComponent(workoutId)}/exercises/${encodeURIComponent(instanceId)}/sets`, {
       expected_revision: required(values, '--expected-revision'),
       request_id: required(values, '--request-id'),
@@ -416,6 +474,7 @@ async function main() {
   } else if (area === 'workout' && action === 'remove-set') {
     const { values, positional } = parseArgs(rest, new Set(['--expected-revision', '--request-id']));
     const [workoutId, setId] = exactly(positional, 2, 'workout remove-set WORKOUT_ID SET_ID');
+    requireMiniChatTarget(applicationContext, workoutId);
     result = await call(context, 'POST', `/workouts/${encodeURIComponent(workoutId)}/sets/${encodeURIComponent(setId)}/remove`, {
       expected_revision: required(values, '--expected-revision'),
       request_id: required(values, '--request-id'),
@@ -423,6 +482,7 @@ async function main() {
   } else if (area === 'workout' && action === 'log-set') {
     const { values, positional } = parseArgs(rest, new Set(['--input', '--expected-revision', '--request-id']));
     const [workoutId, setId] = exactly(positional, 2, 'workout log-set WORKOUT_ID SET_ID');
+    requireMiniChatTarget(applicationContext, workoutId);
     result = await call(context, 'PATCH', `/workouts/${workoutId}/sets/${setId}`, {
       actual: await jsonFile(required(values, '--input'), jsonShape('set actual', ['expected_revision', 'request_id'])),
       expected_revision: required(values, '--expected-revision'),
@@ -431,6 +491,7 @@ async function main() {
   } else if (area === 'workout' && action === 'set-target') {
     const { values, positional } = parseArgs(rest, new Set(['--input', '--expected-revision', '--request-id']));
     const [workoutId, setId] = exactly(positional, 2, 'workout set-target WORKOUT_ID SET_ID');
+    requireMiniChatTarget(applicationContext, workoutId);
     result = await call(context, 'PATCH', `/workouts/${encodeURIComponent(workoutId)}/sets/${encodeURIComponent(setId)}/target`, {
       ...await jsonFile(required(values, '--input'), jsonShape('set target object', ['expected_revision', 'request_id'])),
       expected_revision: required(values, '--expected-revision'),
@@ -442,6 +503,13 @@ async function main() {
       '--expected-revision', '--request-id', ...(edit.input ? ['--input'] : []),
     ]));
     const ids = exactly(positional, edit.ids, `workout ${action} ${edit.shape}`).map(encodeURIComponent);
+    requireMiniChatTarget(
+      applicationContext,
+      decodeURIComponent(ids[0]),
+      ['remove-exercise', 'move-exercise', 'extract-exercise', 'set-exercise-notes'].includes(action)
+        ? decodeURIComponent(ids[1])
+        : undefined,
+    );
     const input = edit.input === 'optional' && !values['--input'] ? {}
       : edit.input ? await jsonFile(required(values, '--input'), jsonShape(`${action} object`, ['expected_revision', 'request_id'])) : {};
     result = await call(context, edit.method, edit.path(...ids), {
@@ -472,8 +540,10 @@ async function main() {
     if (targetCandidate !== undefined && !/^cand_[a-z0-9_]{3,120}$/.test(targetCandidate)) {
       throw new Error('--target-candidate must match ^cand_[a-z0-9_]{3,120}$');
     }
+    const intent = await jsonFile(required(values, '--input'), jsonShape('swap intent', ['expected_revision', 'request_id', 'source', 'target_candidate_id']));
+    requireMiniChatTarget(applicationContext, intent.workout_id, intent.exercise_instance_id);
     result = await call(context, 'POST', '/workouts/swap', {
-      ...await jsonFile(required(values, '--input'), jsonShape('swap intent', ['expected_revision', 'request_id', 'source', 'target_candidate_id'])),
+      ...intent,
       expected_revision: required(values, '--expected-revision'),
       request_id: required(values, '--request-id'),
       source: optional(values, '--source') ? oneOf(values['--source'], '--source', ['default', 'jev']) : 'jev',
