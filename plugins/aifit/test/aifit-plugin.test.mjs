@@ -393,6 +393,29 @@ test('mini-chat permits only its current workout and exercise target', async () 
     assert.equal((await fetchRequest(fetchOutput)).url, 'https://aifit.test/v1/agent/workouts/swap');
   });
 
+  await withFetchOutput(async (fetchOutput) => {
+    const result = await runCli([
+      'workout', 'substitute', miniChatContext.workoutId, miniChatContext.exerciseInstanceId,
+      '--input', '-', '--request-id', 'mini-substitute',
+      '--expected-revision', miniChatContext.expectedRevision,
+    ], {
+      context: scopedContext,
+      fetchOutput,
+      input: JSON.stringify({
+        exercise_id: 'ex_cable_row',
+        exercise_revision: 'rev_abcdef0123456789abcdef0123456789',
+        prescription: { set_count: 2, metric: 'reps', target: { reps: { min: 8, max: 12 } }, rest_seconds: 90 },
+        reason: 'Use the compatible cable version.',
+      }),
+      pluginContext: miniChatContext,
+    });
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(
+      (await fetchRequest(fetchOutput)).url,
+      `https://aifit.test/v1/agent/workouts/${miniChatContext.workoutId}/exercises/${miniChatContext.exerciseInstanceId}/substitute`,
+    );
+  });
+
   for (const changed of [
     { workout_id: 'wrk_ffffffffffffffffffffffffffffffff' },
     { exercise_instance_id: 'wex_ffffffffffffffffffffffffffffffff' },
@@ -417,6 +440,20 @@ test('mini-chat permits only its current workout and exercise target', async () 
       'workout', 'add-set', miniChatContext.workoutId, 'wex_ffffffffffffffffffffffffffffffff',
       '--expected-revision', miniChatContext.expectedRevision, '--request-id', 'wrong-mini-add-set',
     ], { context: scopedContext, fetchOutput, pluginContext: miniChatContext });
+    assert.match(errorPayload(result).error.message, /different exercise instance/);
+    assert.equal(await fetchRequest(fetchOutput), null);
+  });
+
+  await withFetchOutput(async (fetchOutput) => {
+    const result = await runCli([
+      'workout', 'substitute', miniChatContext.workoutId, 'wex_ffffffffffffffffffffffffffffffff',
+      '--input', '-', '--expected-revision', miniChatContext.expectedRevision, '--request-id', 'wrong-mini-substitute',
+    ], {
+      context: scopedContext,
+      fetchOutput,
+      input: JSON.stringify({ exercise_id: 'ex_cable_row' }),
+      pluginContext: miniChatContext,
+    });
     assert.match(errorPayload(result).error.message, /different exercise instance/);
     assert.equal(await fetchRequest(fetchOutput), null);
   });
@@ -464,6 +501,7 @@ test('workout primitives transport bounded reads and edits with current revision
   const cases = [
     ["unlog-set","POST","/workouts/wrk_one/sets/set_one/unlog",["wrk_one","set_one"],{}],
     ["add-exercise","POST","/workouts/wrk_one/exercises",["wrk_one"],{"blueprint_id": "bp_one","expected_blueprint_revision": "rev_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","day_id": "day_one","slot_id": "slot_one","candidate_id": "cand_one"}],
+    ["substitute","POST","/workouts/wrk_one/exercises/wex_one/substitute",["wrk_one","wex_one"],{"exercise_id":"ex_cable_row","exercise_revision":"rev_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","prescription":{"set_count":2,"metric":"reps","target":{"reps":{"min":8,"max":12}},"rest_seconds":90},"reason":"Use cable."}],
     ["remove-exercise","POST","/workouts/wrk_one/exercises/wex_one/remove",["wrk_one","wex_one"],{}],
     ["remove-segment","POST","/workouts/wrk_one/segments/seg_one/remove",["wrk_one","seg_one"],{}],
     ["reorder-segments","POST","/workouts/wrk_one/segments/reorder",["wrk_one"],{"segment_ids": ["seg_one"]}],

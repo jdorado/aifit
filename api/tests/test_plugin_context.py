@@ -39,6 +39,7 @@ def test_plugin_agent_surface_covers_the_canonical_reads_and_writes():
         "/v1/agent/workouts/{workout_id}/sets/{set_id}/unlog",
         "/v1/agent/workouts/{workout_id}/exercises",
         "/v1/agent/workouts/{workout_id}/exercises/{exercise_instance_id}/remove",
+        "/v1/agent/workouts/{workout_id}/exercises/{exercise_instance_id}/substitute",
         "/v1/agent/workouts/{workout_id}/segments/{segment_id}/remove",
         "/v1/agent/workouts/{workout_id}/segments/reorder",
         "/v1/agent/workouts/{workout_id}/exercises/{exercise_instance_id}/move",

@@ -50,6 +50,9 @@ cat /absolute/path/exception-day.json | ez aifit workout override \
 
 cat /absolute/path/swap.json | ez aifit workout swap \
   --input - --request-id swap-<unique-key> --expected-revision REV
+
+cat /absolute/path/substitute.json | ez aifit workout substitute WORKOUT_ID EXERCISE_INSTANCE_ID \
+  --input - --request-id substitute-<unique-key> --expected-revision REV
 ```
 
 The full typed artifact schema, rules, and command list live in `SKILL.md`,
@@ -61,7 +64,8 @@ workout revision and an idempotency key. They preserve logged history and other
 exercises; never use a day override for these edits.
 
 The plugin also exposes every existing workout control: repertoire and swap
-candidate reads, exercise add/remove/move/extract, segment reorder/remove,
+candidate reads, scoped same-pattern substitution for off-blueprint items,
+exercise add/remove/move/extract, segment reorder/remove,
 workout and exercise notes, clear, and explicit log correction. `workout copy`
 copies any saved source date to another date using source and target revisions;
 the browser's last-week shortcut calls the same implementation. Agent writes
@@ -73,8 +77,10 @@ For an AIFit mini-chat run, the application passes the current workout and
 exercise instance through Ez's plugin-specific application context. The CLI
 uses that non-secret target only as an execution guard: it refuses whole-day,
 catalog, and blueprint writes and refuses exercise-scoped commands aimed at a
-different target. Main chat and ordinary native channels retain the complete
-surface. Channel context is never accepted as a credential or tenant selector.
+different target. A scoped substitute atomically replaces only that instance's
+open sets and must keep their count and movement pattern. Main chat and ordinary
+native channels retain the complete surface. Channel context is never accepted
+as a credential or tenant selector.
 
 The override input is the complete resolved unlogged remainder of the target day.
 Already logged work is preserved automatically; including its dose in the

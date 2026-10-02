@@ -376,6 +376,26 @@ class SwapInput(StrictModel):
     request_id: str = Field(min_length=1, max_length=160, pattern=r"^[A-Za-z0-9_.:-]+$")
 
 
+class ExerciseSubstituteInput(StrictModel):
+    """One exact exercise replacement when a workout item has no blueprint alternative."""
+
+    exercise_id: str = Field(pattern=r"^ex_[a-z0-9_]{3,120}$")
+    exercise_revision: str = Field(pattern=r"^rev_[a-f0-9]{32}$")
+    prescription: CandidatePrescription
+    reason: str = Field(min_length=1, max_length=500)
+    expected_revision: str = Field(pattern=r"^rev_[a-f0-9]{32}$")
+    request_id: str = Field(min_length=1, max_length=160, pattern=r"^[A-Za-z0-9_.:-]+$")
+
+    @model_validator(mode="after")
+    def exact_remaining_dose(self) -> "ExerciseSubstituteInput":
+        count = self.prescription.set_count
+        if count is None:
+            raise ValueError("exercise substitution requires an explicit set_count")
+        if self.prescription.round_targets is not None and len(self.prescription.round_targets) != count:
+            raise ValueError("substitution round_targets must match set_count")
+        return self
+
+
 class WorkoutOverrideInput(StrictModel):
     """A deliberately exceptional, fully resolved agent-authored day."""
 
@@ -1811,6 +1831,132 @@ class WorkoutService:
             "blueprint_revision": blueprint["revision"],
             "candidates": options,
         }
+
+    @transactional_mutation
+    async def substitute(self, account_id: str, workout_id: str, instance_id: str,
+                         input: ExerciseSubstituteInput) -> dict[str, Any]:
+        """Replace only one instance's open sets with an exact compatible catalog exercise."""
+        fingerprint = _fingerprint({"workout_id": workout_id, "instance_id": instance_id, **input.model_dump(mode="json")})
+        prior = await self._receipt(account_id, input.request_id, fingerprint)
+        if prior:
+            return prior
+        workout = await self._editable_workout(account_id, workout_id, input.expected_revision)
+        target_segment: dict[str, Any] | None = None
+        target_item: dict[str, Any] | None = None
+        for segment in workout["segments"]:
+            for item in segment["items"]:
+                if item["exercise_instance_id"] == instance_id:
+                    target_segment, target_item = segment, item
+                    break
+        if target_item is None or target_segment is None:
+            raise WorkoutDomainError("exercise_instance_not_found", "Workout exercise was not found.", 404)
+        logged_sets = [set_row for set_row in target_item["sets"] if set_row.get("actual") is not None]
+        open_sets = [set_row for set_row in target_item["sets"] if set_row.get("actual") is None]
+        if not open_sets:
+            raise WorkoutDomainError("completed_exercise_locked", "Every set of this exercise is logged; there is nothing left to substitute.")
+        if input.prescription.set_count != len(open_sets):
+            raise WorkoutDomainError(
+                "substitute_set_count_mismatch",
+                "A substitution must prescribe exactly the current exercise's remaining set count.",
+                422,
+            )
+        current_exercise_id = target_item["exercise_snapshot"]["exercise_id"]
+        if input.exercise_id == current_exercise_id:
+            raise WorkoutDomainError("substitute_target_unchanged", "The requested exercise is already selected.")
+        if any(
+            item is not target_item and item["exercise_snapshot"]["exercise_id"] == input.exercise_id
+            for segment in workout["segments"] for item in segment["items"]
+        ):
+            raise WorkoutDomainError("exercise_already_added", "This exercise is already in this workout.")
+        head = await self.db.exercise_heads.find_one({"account_id": account_id, "exercise_id": input.exercise_id})
+        if head is None:
+            raise WorkoutDomainError("exercise_not_found", "Exercise was not found.", 404)
+        if head["revision"] != input.exercise_revision:
+            raise WorkoutDomainError("stale_exercise_revision", "Exercise changed. Pull its current revision before substituting.")
+        exercise = await self.db.exercises.find_one({
+            "account_id": account_id, "exercise_id": input.exercise_id, "revision": input.exercise_revision,
+        })
+        if exercise is None:
+            raise WorkoutDomainError("exercise_not_found", "Exercise revision was not found.", 404)
+        if exercise.get("movement_pattern") != target_item["exercise_snapshot"].get("movement_pattern"):
+            raise WorkoutDomainError(
+                "substitute_movement_mismatch",
+                "A scoped substitution must keep the current exercise's movement pattern.",
+                422,
+            )
+        try:
+            active = await self.active_blueprint(account_id)
+        except WorkoutDomainError as error:
+            if error.code != "active_blueprint_missing":
+                raise
+            active = None
+        if active and input.exercise_id in active["blueprint"].get("hard_constraints", {}).get("forbidden_exercise_ids", []):
+            raise WorkoutDomainError("exercise_forbidden", "This exercise is excluded from your plan.", 422)
+        snapshot = {
+            key: exercise[key]
+            for key in ("exercise_id", "name", "movement_pattern", "primary_muscles", "secondary_muscles",
+                        "equipment_kind", "laterality", "load_basis")
+        }
+        snapshot.update(exercise_revision=input.exercise_revision, equipment_profile_id=None)
+        prescription = input.prescription.model_dump(mode="json", exclude_none=True)
+        targets = prescription.get("round_targets") or [prescription["target"]] * input.prescription.set_count
+        candidate = {
+            "candidate_id": f"cand_substitute_{sha256(f'{input.exercise_id}:{input.exercise_revision}'.encode()).hexdigest()[:16]}",
+            "exercise_id": input.exercise_id,
+            "exercise_revision": input.exercise_revision,
+            "priority": 1,
+            "rationale_md": input.reason,
+            "prescription": prescription,
+            "progression": {"kind": "none"},
+        }
+        new_sets = [
+            {
+                "set_id": new_id("set"),
+                "kind": source.get("kind", "work"),
+                "target": deepcopy(target),
+                "actual": None,
+                "round": source.get("round", index + 1),
+            }
+            for index, (source, target) in enumerate(zip(open_sets, targets))
+        ]
+        context = progression_context(candidate, len(new_sets), workout["date"], None)
+        replacement = {
+            "slot_id": target_item["slot_id"],
+            "candidate_id": candidate["candidate_id"],
+            "exercise_snapshot": snapshot,
+            "sets": new_sets,
+            "cues_md": self._cues(candidate, exercise),
+            "progression_context": context,
+        }
+        if logged_sets:
+            target_item["sets"] = logged_sets
+            replacement.update(exercise_instance_id=new_id("wex"), order=target_item["order"] + 1)
+            replacement["progression_context"]["partial"] = True
+            if target_item.get("source_blueprint"):
+                replacement["source_blueprint"] = deepcopy(target_item["source_blueprint"])
+            position = target_segment["items"].index(target_item) + 1
+            target_segment["items"].insert(position, replacement)
+            for index, item in enumerate(target_segment["items"], start=1):
+                item["order"] = index
+        else:
+            target_item.pop("notes", None)
+            target_item.update(replacement)
+        workout["status"] = self._workout_status(workout)
+        workout["revision"], workout["updated_at"] = new_revision(), utc_now()
+        workout["lineage"].setdefault("substitutions", []).append({
+            "exercise_instance_id": instance_id,
+            "from_exercise_id": current_exercise_id,
+            "to_exercise_id": input.exercise_id,
+            "reason": input.reason,
+        })
+        replaced = await self.db.workouts.replace_one(
+            {"account_id": account_id, "workout_id": workout_id, "revision": input.expected_revision}, workout,
+        )
+        if not replaced.modified_count:
+            raise WorkoutDomainError("stale_revision", "Workout changed. Pull the current revision before substituting.")
+        response = self.receipt("workout", workout_id, workout["revision"], input.request_id, "substituted")
+        response["workout"] = self._public(workout, ("account_id", "_id"))
+        return await self._save_receipt(account_id, input.request_id, fingerprint, response)
 
     @transactional_mutation
     async def swap(self, account_id: str, workout_id: str, instance_id: str, input: SwapInput) -> dict[str, Any]:

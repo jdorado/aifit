@@ -57,6 +57,7 @@ Write (all require --request-id):
   aifit workout set-target WORKOUT_ID SET_ID --input FILE|- --expected-revision REV
   aifit workout unlog-set WORKOUT_ID SET_ID --expected-revision REV
   aifit workout add-exercise WORKOUT_ID --input FILE|- --expected-revision REV
+  aifit workout substitute WORKOUT_ID EXERCISE_INSTANCE_ID --input FILE|- --expected-revision REV
   aifit workout remove-exercise WORKOUT_ID EXERCISE_INSTANCE_ID --expected-revision REV
   aifit workout move-exercise WORKOUT_ID EXERCISE_INSTANCE_ID --input FILE|- --expected-revision REV
   aifit workout extract-exercise WORKOUT_ID EXERCISE_INSTANCE_ID [--input FILE|-] --expected-revision REV
@@ -88,6 +89,8 @@ Artifacts (full typed schema and rules are in the installed aifit skill):
   set target: target{reps|duration_seconds,load,rpe}, apply_to_remaining (optional)
   add exercise: blueprint_id, expected_blueprint_revision, day_id, slot_id, candidate_id
     (read exercise-repertoire; copies one eligible published prescription)
+  substitute: exercise_id, exercise_revision, prescription{set_count,metric,target,
+    round_targets?,rest_seconds,tempo?}, reason (same movement pattern and exact open-set count)
   move exercise: target_segment_id, target_index (1-based, after source removal)
   extract exercise: before_segment_id (optional; default is end of workout)
   reorder segments: segment_ids (every current segment exactly once)
@@ -336,6 +339,8 @@ const workoutEdits = {
     path: (workout, id) => `/workouts/${workout}/sets/${id}/unlog` },
   'add-exercise': { ids: 1, shape: 'WORKOUT_ID', method: 'POST', input: "required",
     path: (workout) => `/workouts/${workout}/exercises` },
+  'substitute': { ids: 2, shape: 'WORKOUT_ID EXERCISE_INSTANCE_ID', method: 'POST', input: "required",
+    path: (workout, id) => `/workouts/${workout}/exercises/${id}/substitute` },
   'remove-exercise': { ids: 2, shape: 'WORKOUT_ID EXERCISE_INSTANCE_ID', method: 'POST', input: null,
     path: (workout, id) => `/workouts/${workout}/exercises/${id}/remove` },
   'move-exercise': { ids: 2, shape: 'WORKOUT_ID EXERCISE_INSTANCE_ID', method: 'POST', input: "required",
@@ -506,7 +511,7 @@ async function main() {
     requireMiniChatTarget(
       applicationContext,
       decodeURIComponent(ids[0]),
-      ['remove-exercise', 'move-exercise', 'extract-exercise', 'set-exercise-notes'].includes(action)
+      ['substitute', 'remove-exercise', 'move-exercise', 'extract-exercise', 'set-exercise-notes'].includes(action)
         ? decodeURIComponent(ids[1])
         : undefined,
     );

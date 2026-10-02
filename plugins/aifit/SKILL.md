@@ -108,7 +108,9 @@ exercise target as a non-secret execution guard. In mini-chat it rejects
 program/catalog writes and whole-day operations (`generate`, `copy`, `override`,
 `clear`, day notes, segment-wide edits, and adding another exercise), even if
 you select one by mistake. It also rejects workout/exercise primitives aimed at
-a different target. Use `workout swap` for a requested replacement and
+a different target. Use `workout swap` for a published in-slot replacement.
+When that target has no usable blueprint slot, use `workout substitute` for one
+same-pattern catalog exercise and exactly the target's open-set count. Use
 `add-set`/the other bounded primitives for the current instance. Move an
 explicit whole-day or program-authoring request to main chat; never work around
 the guard by composing destructive operations.
@@ -127,7 +129,7 @@ prescribed coaching workflows.
 | Blueprint | `blueprint active/draft/solidify` | Read, author, and publish future training structure and progression. Does not rewrite materialized workouts. |
 | Workout | `workout list/show/progression/generate/copy/override/clear/set-notes` | Read state/evidence, materialize a published day, copy a saved day, replace remaining work, clear remaining work, or replace its note. |
 | Segment | `reorder-segments/remove-segment` | Order entire blocks or remove their unlogged work. `extract-exercise` creates a standalone block; `move-exercise` moves between or within existing blocks. |
-| Exercise instance | `exercise-repertoire/add-exercise/swap-candidates/swap/remove-exercise/move-exercise/extract-exercise/set-exercise-notes` | Discover published choices, add/swap a prescribed movement, remove its unlogged sets, change its position/group, or replace its feedback note. |
+| Exercise instance | `exercise-repertoire/add-exercise/swap-candidates/swap/substitute/remove-exercise/move-exercise/extract-exercise/set-exercise-notes` | Discover published choices, add/swap a prescribed movement, substitute one compatible off-blueprint target, remove its unlogged sets, change its position/group, or replace its feedback note. |
 | Set | `add-set/remove-set/set-target/log-set/unlog-set` | Change planned volume/targets or explicitly record/correct performance. |
 
 Ordinary set, exercise, ordering, and note edits preserve all unrelated records
@@ -163,6 +165,7 @@ aifit workout log-set WORKOUT_ID SET_ID --input FILE|- --expected-revision REV -
 aifit workout unlog-set WORKOUT_ID SET_ID --expected-revision REV --request-id KEY
 aifit workout add-exercise WORKOUT_ID --input FILE|- --expected-revision REV --request-id KEY
 aifit workout swap --input FILE|- --expected-revision REV --request-id KEY [--source default|jev] [--target-candidate CAND]
+aifit workout substitute WORKOUT_ID EXERCISE_INSTANCE_ID --input FILE|- --expected-revision REV --request-id KEY
 aifit workout remove-exercise WORKOUT_ID EXERCISE_INSTANCE_ID --expected-revision REV --request-id KEY
 aifit workout move-exercise WORKOUT_ID EXERCISE_INSTANCE_ID --input FILE|- --expected-revision REV --request-id KEY
 aifit workout extract-exercise WORKOUT_ID EXERCISE_INSTANCE_ID [--input FILE|-] --expected-revision REV --request-id KEY
@@ -175,6 +178,7 @@ aifit workout set-exercise-notes WORKOUT_ID EXERCISE_INSTANCE_ID --input FILE|- 
 | Input for | JSON payload and semantics |
 | --- | --- |
 | `add-exercise` | `{"blueprint_id":"bp_...","expected_blueprint_revision":"rev_...","day_id":"day_...","slot_id":"slot_...","candidate_id":"cand_..."}` from `exercise-repertoire`. That read returns `workout_revision`, `blueprint_id`, `blueprint_revision`, and candidates across all published days. Select a candidate with `already_added: false`; map `blueprint_revision` to `expected_blueprint_revision`. Adds its published dose in a new standalone segment. Duplicate exercises and stale blueprints are rejected. |
+| `substitute` | `{"exercise_id":"ex_...","exercise_revision":"rev_...","prescription":{"set_count":2,"metric":"reps","target":{"reps":{"min":8,"max":12},"load":{"value":30,"unit":"kg"}},"rest_seconds":90},"reason":"Requested compatible machine."}`. Use only after reading the current target plus the exact catalog revision/history. The replacement must keep the same movement pattern, cannot already be elsewhere in the workout or violate a hard constraint, and must prescribe exactly the current target's open-set count. Logged sets stay under the original snapshot; unrelated work is untouched. |
 | `move-exercise` | `{"target_segment_id":"seg_...","target_index":1}`. Position is 1-based **after removing the source item**, including moves within the same segment. Sets and the target segment's kind/rest remain unchanged; an emptied source segment disappears. |
 | `extract-exercise` | Optional `{"before_segment_id":"seg_..."}`; omit input or use `{}` to append at the end. Creates a new straight-sets segment holding that same instance and sets. |
 | `reorder-segments` | `{"segment_ids":["seg_second","seg_first"]}`. Include every current segment exactly once. |
@@ -481,6 +485,15 @@ generate returns any existing day unchanged, including its preserved logs.
 If the required workout or
 blueprint context is absent, stop with structured feedback; never invent a
 candidate or turn a swap into an exception day.
+
+For an exception-day or legacy item whose swap read returns
+`blueprint_slot_missing`, a concrete compatible replacement does not require a
+whole-day override. Read the requested catalog exercise and relevant history,
+then use `workout substitute` on the current exercise instance. Supply an
+explicit `set_count` equal to its open sets and an appropriate target for the
+new equipment; never transfer the old machine's load. The API atomically keeps
+logged sets, replaces only the open remainder, and rejects a different movement
+pattern, a stale catalog revision, duplicate exercise, or changed dose.
 
 ## Receipts and errors
 

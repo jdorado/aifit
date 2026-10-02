@@ -3,6 +3,7 @@ import pytest
 from aifit_api import main
 from aifit_api.workouts import (
     BlueprintInput,
+    ExerciseSubstituteInput,
     GenerateInput,
     SetActual,
     SetLogInput,
@@ -18,6 +19,30 @@ from test_workout_transactions import FakeDatabase
 
 ROW = "ex_chest_supported_row_machine"
 CABLE = "ex_chest_supported_row_cable"
+
+
+def substitute_input(workout: dict, *, set_count: int, request_id: str = "substitute-001") -> ExerciseSubstituteInput:
+    return ExerciseSubstituteInput(
+        exercise_id=CABLE,
+        exercise_revision="rev_abcdef0123456789abcdef0123456789",
+        prescription={
+            "set_count": set_count,
+            "metric": "reps",
+            "target": {"reps": {"min": 8, "max": 12}, "load": {"value": 30, "unit": "kg"}},
+            "rest_seconds": 90,
+        },
+        reason="Use the compatible cable row instead.",
+        expected_revision=workout["revision"],
+        request_id=request_id,
+    )
+
+
+def seed_substitute_head(database) -> None:
+    database.documents["exercise_heads"].append({
+        "account_id": "acc_one",
+        "exercise_id": CABLE,
+        "revision": "rev_abcdef0123456789abcdef0123456789",
+    })
 
 
 def override_segments() -> list[dict]:
@@ -94,6 +119,76 @@ async def test_swap_keeps_logged_sets_and_swaps_only_the_open_ones():
     assert items[0]["sets"][0]["actual"]["reps"] == 10
     assert [set_row["round"] for set_row in items[1]["sets"]] == [2, 3]
     assert all(set_row["actual"] is None for set_row in items[1]["sets"])
+
+
+@pytest.mark.asyncio
+async def test_substitute_replaces_only_the_target_instance_without_a_day_override():
+    database = FakeDatabase()
+    service, workout = await generated_day(database)
+    seed_substitute_head(database)
+    target = workout["segments"][0]["items"][0]
+
+    result = await service.substitute(
+        "acc_one", workout["workout_id"], target["exercise_instance_id"], substitute_input(workout, set_count=3),
+    )
+
+    assert result["effect"] == "substituted"
+    saved = result["workout"]
+    assert len(saved["segments"]) == 1
+    item = saved["segments"][0]["items"][0]
+    assert item["exercise_instance_id"] == target["exercise_instance_id"]
+    assert item["slot_id"] == target["slot_id"]
+    assert item["exercise_snapshot"]["exercise_id"] == CABLE
+    assert [row["target"]["load"]["value"] for row in item["sets"]] == [30, 30, 30]
+    assert all(row["actual"] is None for row in item["sets"])
+    assert saved["lineage"]["substitutions"][-1]["from_exercise_id"] == ROW
+
+
+@pytest.mark.asyncio
+async def test_substitute_preserves_logged_sets_and_replaces_only_the_open_remainder():
+    database = FakeDatabase()
+    service, workout = await generated_day(database)
+    seed_substitute_head(database)
+    workout, logged_set_id = await log_set_at(service, workout, 0, "log-before-substitute")
+    target = workout["segments"][0]["items"][0]
+
+    result = await service.substitute(
+        "acc_one", workout["workout_id"], target["exercise_instance_id"],
+        substitute_input(workout, set_count=2, request_id="substitute-partial-001"),
+    )
+
+    items = result["workout"]["segments"][0]["items"]
+    assert [item["exercise_snapshot"]["exercise_id"] for item in items] == [ROW, CABLE]
+    assert [row["set_id"] for row in items[0]["sets"]] == [logged_set_id]
+    assert items[0]["sets"][0]["actual"]["reps"] == 10
+    assert len(items[1]["sets"]) == 2
+    assert all(row["actual"] is None for row in items[1]["sets"])
+    assert items[1]["progression_context"]["partial"] is True
+
+
+@pytest.mark.asyncio
+async def test_substitute_rejects_dose_changes_and_movement_mismatches():
+    database = FakeDatabase()
+    service, workout = await generated_day(database)
+    seed_substitute_head(database)
+    target = workout["segments"][0]["items"][0]
+
+    with pytest.raises(WorkoutDomainError) as error:
+        await service.substitute(
+            "acc_one", workout["workout_id"], target["exercise_instance_id"],
+            substitute_input(workout, set_count=2, request_id="substitute-count-001"),
+        )
+    assert error.value.code == "substitute_set_count_mismatch"
+
+    cable = next(row for row in database.documents["exercises"] if row["exercise_id"] == CABLE)
+    cable["movement_pattern"] = "vertical_pull"
+    with pytest.raises(WorkoutDomainError) as error:
+        await service.substitute(
+            "acc_one", workout["workout_id"], target["exercise_instance_id"],
+            substitute_input(workout, set_count=3, request_id="substitute-pattern-001"),
+        )
+    assert error.value.code == "substitute_movement_mismatch"
+    assert await service.workout("acc_one", workout["workout_id"]) == workout
 
 
 @pytest.mark.asyncio

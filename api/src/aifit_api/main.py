@@ -40,6 +40,7 @@ from .workouts import (
     CopyWorkoutInput,
     ExerciseDefinitionInput,
     ExerciseNoteInput,
+    ExerciseSubstituteInput,
     GenerateInput,
     PlanEntryRemoveInput,
     PlanInput,
@@ -954,6 +955,12 @@ async def swap_workout_exercise_v1(workout_id: str, exercise_instance_id: str, b
     return await workouts().swap(account["account_id"], workout_id, exercise_instance_id, body)
 
 
+@app.post("/v1/workouts/{workout_id}/exercises/{exercise_instance_id}/substitute")
+async def substitute_workout_exercise_v1(workout_id: str, exercise_instance_id: str, body: ExerciseSubstituteInput,
+                                         account: dict = Depends(require_edit_account)) -> dict:
+    return await workouts().substitute(account["account_id"], workout_id, exercise_instance_id, body)
+
+
 @app.post("/v1/agent/messages", status_code=202)
 async def agent_message_v1(body: AgentMessageInput, identity: Identity = Depends(require_identity)) -> dict:
     account = await browser_account(identity)
@@ -1205,6 +1212,18 @@ async def agent_remove_exercise_v1(
     require_agent_permission(capability, AGENT_WRITE)
     require_agent_request(capability, body.request_id)
     return await workouts().remove_exercise(capability.account_id, workout_id, exercise_instance_id, body)
+
+
+@app.post("/v1/agent/workouts/{workout_id}/exercises/{exercise_instance_id}/substitute")
+async def agent_substitute_exercise_v1(
+    workout_id: str,
+    exercise_instance_id: str,
+    body: ExerciseSubstituteInput,
+    capability: AgentCapability = Depends(require_agent_capability),
+) -> dict:
+    require_agent_permission(capability, AGENT_WRITE)
+    require_agent_request(capability, body.request_id)
+    return await workouts().substitute(capability.account_id, workout_id, exercise_instance_id, body)
 
 
 @app.post("/v1/agent/workouts/{workout_id}/segments/{segment_id}/remove")
