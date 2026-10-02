@@ -275,6 +275,69 @@ async def test_override_keeps_logged_sets_and_replaces_only_open_work():
 
 
 @pytest.mark.asyncio
+async def test_override_rejects_repeating_a_completed_exercise_as_new_work():
+    database = FakeDatabase()
+    service, workout = await generated_day(database)
+    for index in range(3):
+        workout, _ = await log_set_at(service, workout, index, f"log-{index:03d}")
+    completed_revision = workout["revision"]
+    completed_segments = blueprint()["days"][0]["segments"]
+    completed_segments[0]["slots"][0]["candidates"] = completed_segments[0]["slots"][0]["candidates"][:1]
+
+    with pytest.raises(WorkoutDomainError) as error:
+        await service.override(
+            "acc_one",
+            WorkoutOverrideInput(
+                date="2026-09-21",
+                title="Incorrect repeated day",
+                reason_md="The completed exercise was accidentally sent as new work.",
+                segments=completed_segments,
+                expected_revision=completed_revision,
+                request_id="override-repeat-completed-001",
+            ),
+            {"kind": "agent", "job_id": "job_one"},
+        )
+
+    assert error.value.code == "override_repeats_completed_exercise"
+    stored = await database.workouts.find_one({"account_id": "acc_one", "workout_id": workout["workout_id"]})
+    assert stored["revision"] == completed_revision
+    assert not any(
+        row["request_id"] == "override-repeat-completed-001"
+        for row in database.documents["mutation_receipts"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_override_allows_only_the_remaining_dose_of_a_partially_completed_exercise():
+    database = FakeDatabase()
+    service, workout = await generated_day(database)
+    for index in range(2):
+        workout, _ = await log_set_at(service, workout, index, f"log-partial-{index:03d}")
+    remaining_segments = blueprint()["days"][0]["segments"]
+    remaining_candidate = remaining_segments[0]["slots"][0]["candidates"][0]
+    remaining_segments[0]["slots"][0]["candidates"] = [remaining_candidate]
+    remaining_candidate["prescription"]["set_count"] = 1
+
+    response = await service.override(
+        "acc_one",
+        WorkoutOverrideInput(
+            date="2026-09-21",
+            title="One row set remains",
+            reason_md="Keep only the unfinished set in the remaining dose.",
+            segments=remaining_segments,
+            expected_revision=workout["revision"],
+            request_id="override-partial-remainder-001",
+        ),
+        {"kind": "agent", "job_id": "job_one"},
+    )
+
+    items = [item for segment in response["workout"]["segments"] for item in segment["items"]]
+    assert [len(item["sets"]) for item in items] == [2, 1]
+    assert sum(set_row.get("actual") is not None for item in items for set_row in item["sets"]) == 2
+    assert sum(set_row.get("actual") is None for item in items for set_row in item["sets"]) == 1
+
+
+@pytest.mark.asyncio
 async def test_override_without_logs_still_replaces_the_whole_day():
     database = FakeDatabase()
     service, workout = await generated_day(database)

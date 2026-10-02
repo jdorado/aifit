@@ -1990,6 +1990,24 @@ class WorkoutService:
                                                  if candidate["exercise_id"] == item["exercise_snapshot"]["exercise_id"]), None)
                         if source_candidate is not None:
                             item["candidate_id"] = source_candidate["candidate_id"]
+        if current:
+            completed_exercise_ids = {
+                item["exercise_snapshot"]["exercise_id"]
+                for segment in current["segments"]
+                for item in segment["items"]
+                if item["sets"] and all(set_row.get("actual") is not None for set_row in item["sets"])
+            }
+            repeated_completed = completed_exercise_ids & {
+                item["exercise_snapshot"]["exercise_id"]
+                for segment in materialized["segments"]
+                for item in segment["items"]
+            }
+            if repeated_completed:
+                raise WorkoutDomainError(
+                    "override_repeats_completed_exercise",
+                    "An override cannot add new sets for an exercise that is already complete; send only the unlogged remainder.",
+                    422,
+                )
         if preserved_segments:
             for segment in materialized["segments"]:
                 for item in segment["items"]:
