@@ -79,6 +79,32 @@ def test_policy_does_not_advertise_effort_missing_from_ez(tmp_path, monkeypatch)
     assert model_policy.filter_control(value, OTHER)["models"] == []
 
 
+def test_purpose_label_preserves_authorization_and_native_efforts(tmp_path, monkeypatch):
+    configure(tmp_path, monkeypatch)
+    path = tmp_path / "model-policy.json"
+    policy = json.loads(path.read_text())
+    policy["privileged"][1]["label"] = "Detailed planning"
+    path.write_text(json.dumps(policy))
+    filtered = model_policy.filter_control(control(), OWNER)
+    assert filtered["models"][1]["labels"] == {"max": "Detailed planning"}
+    model_policy.require_allowed(OWNER, LUNA["cli"], LUNA["model"], LUNA["effort"])
+    assert all("labels" not in item for item in model_policy.filter_control(control(), OTHER)["models"])
+    value = control()
+    value["models"][1]["efforts"] = ["medium"]
+    assert all(item["cli"] != "codex" for item in model_policy.filter_control(value, OWNER)["models"])
+
+
+def test_invalid_purpose_label_is_rejected(tmp_path, monkeypatch):
+    configure(tmp_path, monkeypatch)
+    path = tmp_path / "model-policy.json"
+    policy = json.loads(path.read_text())
+    policy["privileged"][1]["label"] = " "
+    path.write_text(json.dumps(policy))
+    with pytest.raises(HTTPException) as error:
+        model_policy.allowed_choices(OWNER)
+    assert error.value.status_code == 503
+
+
 def test_disallowed_selection_is_rejected_before_ez(tmp_path, monkeypatch):
     configure(tmp_path, monkeypatch)
     with pytest.raises(HTTPException) as error:

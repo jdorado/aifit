@@ -56,6 +56,7 @@ type EzModel = {
   name: string
   model?: string
   efforts: string[]
+  labels?: Record<string, string>
 }
 
 type ModelControl = {
@@ -89,7 +90,7 @@ const presetLabel = (preset: EzPreset | undefined, models: EzModel[] = []) => {
     && item.model === preset.model
   ))
   return installed
-    ? `${modelDisplayName(installed)}${preset.effort ? ` ${titleCase(preset.effort)}` : ''}${providerLabel(installed.provider) ? ` · ${providerLabel(installed.provider)}` : ''}`
+    ? installed.labels?.[preset.effort ?? ''] ?? `${modelDisplayName(installed)}${preset.effort ? ` ${titleCase(preset.effort)}` : ''}${providerLabel(installed.provider) ? ` · ${providerLabel(installed.provider)}` : ''}`
     : preset.name
 }
 
@@ -105,17 +106,19 @@ type ModelOption = {
 const MINI_CHAT_SCOPE = 'owner-minichat'
 
 const buildModelOptions = (control: ModelControl | null): ModelOption[] => {
+  const hasPurposes = control?.models.some((model) => model.efforts.some((effort) => model.labels?.[effort]))
   const options = (control?.models ?? []).flatMap((model) => {
     const efforts = model.efforts.length > 0 ? model.efforts : [undefined]
-    return efforts.map((effort) => ({
+    return efforts.filter((effort) => !hasPurposes || (effort && model.labels?.[effort])).map((effort) => ({
       value: JSON.stringify([model.cli, model.provider ?? null, model.model ?? null, effort ?? null]),
-      label: `${modelDisplayName(model)}${effort ? ` ${titleCase(effort)}` : ''}${providerLabel(model.provider) ? ` · ${providerLabel(model.provider)}` : ''}`,
+      label: model.labels?.[effort ?? ''] ?? `${modelDisplayName(model)}${effort ? ` ${titleCase(effort)}` : ''}${providerLabel(model.provider) ? ` · ${providerLabel(model.provider)}` : ''}`,
       cli: model.cli,
       provider: model.provider,
       model: model.model,
       effort,
     }))
   })
+  if (hasPurposes) return options
   const optionKeys = new Set(options.map((option) => option.value))
   for (const preset of control?.presets ?? []) {
     if (!preset.model || !preset.effort) continue

@@ -1,6 +1,6 @@
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -13,6 +13,7 @@ class ModelChoice:
     cli: str
     model: str
     effort: str
+    label: str | None = field(default=None, compare=False)
 
 
 @dataclass(frozen=True)
@@ -26,14 +27,17 @@ class ModelPolicy:
 
 
 def _choice(value: Any) -> ModelChoice:
-    if not isinstance(value, dict) or set(value) != {"cli", "model", "effort"}:
-        raise ValueError("Each model policy choice must contain only cli, model and effort.")
+    if not isinstance(value, dict) or not {"cli", "model", "effort"} <= set(value) or set(value) - {"cli", "model", "effort", "label"}:
+        raise ValueError("Each model policy choice requires cli, model and effort, with an optional label.")
     fields = [value.get(field) for field in ("cli", "model", "effort")]
     if any(not isinstance(field, str) or not field.strip() for field in fields):
         raise ValueError("Model policy choices require non-empty cli, model and effort strings.")
     if any(len(field) > limit for field, limit in zip(fields, (80, 160, 40), strict=True)):
         raise ValueError("A model policy choice is too long.")
-    return ModelChoice(*(field.strip() for field in fields))
+    label = value.get("label")
+    if label is not None and (not isinstance(label, str) or not label.strip() or len(label) > 80):
+        raise ValueError("Model policy labels must be non-empty strings of at most 80 characters.")
+    return ModelChoice(*(field.strip() for field in fields), label=label.strip() if label else None)
 
 
 def load_model_policy(path: str) -> ModelPolicy:
@@ -88,15 +92,22 @@ def filter_control(value: dict, subject: str) -> dict:
     if allowed is None:
         return value
     permitted_efforts: dict[tuple[str, str], set[str]] = {}
+    labels: dict[tuple[str, str], dict[str, str]] = {}
     for choice in allowed:
         permitted_efforts.setdefault((choice.cli, choice.model), set()).add(choice.effort)
+        if choice.label:
+            labels.setdefault((choice.cli, choice.model), {})[choice.effort] = choice.label
     models = []
     for item in value["models"]:
         efforts = permitted_efforts.get((item["cli"], item.get("model", "")))
         if efforts:
             enabled_efforts = [effort for effort in item["efforts"] if effort in efforts]
             if enabled_efforts:
-                models.append({**item, "efforts": enabled_efforts})
+                purpose_labels = {effort: label for effort, label in labels.get(
+                    (item["cli"], item.get("model", "")), {}
+                ).items() if effort in enabled_efforts}
+                models.append({**item, "efforts": enabled_efforts,
+                               **({"labels": purpose_labels} if purpose_labels else {})})
     presets = [item for item in value["presets"] if ModelChoice(
         item["cli"], item.get("model", ""), item.get("effort", "")
     ) in allowed]

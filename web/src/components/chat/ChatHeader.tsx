@@ -56,17 +56,17 @@ const ChatHeader: FC<ChatHeaderProps> = ({
             <button
               type="button"
               className="chat-model-trigger"
-              aria-label="AI model"
+              aria-label="Response purpose"
               aria-expanded={modelMenuOpen}
               title={activeModelOption?.label}
               disabled={modelSelectionDisabled}
               onClick={() => setModelMenuOpen((open) => !open)}
             >
-              <span>{activeModelOption?.label ?? 'Select model'}</span>
+              <span>{activeModelOption?.label ?? 'Choose purpose'}</span>
               <svg viewBox="0 0 12 8" aria-hidden="true"><path d="m1 1 5 5 5-5" /></svg>
             </button>
             {modelMenuOpen && (
-              <div className="chat-model-menu" role="group" aria-label="AI model options">
+              <div className="chat-model-menu" role="group" aria-label="Response purpose options">
                 {modelOptions.map((option) => (
                   <button
                     key={option.value}
