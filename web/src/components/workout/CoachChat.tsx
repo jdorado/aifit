@@ -204,10 +204,10 @@ const CoachChat: FC<CoachChatProps> = ({
               <select
                 value={selectedModel}
                 onChange={(event) => onModelChange(event.target.value)}
-                aria-label="AI model"
+                aria-label="Response purpose"
                 disabled={disabled || modelSelectionDisabled}
               >
-                <option value="" disabled>Select model</option>
+                <option value="" disabled>Choose purpose</option>
                 {modelOptions.map((option) => (
                   <option key={option.value} value={option.value}>{option.label}</option>
                 ))}

@@ -65,6 +65,13 @@ trainee needs its own verified binding in the API deployment serving the app,
 including local development. Arbitrary plan rewrites stay disabled until their own typed
 public contract exists.
 
+The private account model policy can give an allowed model/effort choice an
+optional `label`, such as `Quick reply`, `Everyday help`, or `Detailed planning`.
+When labeled choices are available, both chat pickers show those purposes.
+The backend policy owns their exact model and effort; the frontend displays and
+submits the selected choice without deciding which engine to use from a prompt.
+Unlabeled installations retain their existing model picker.
+
 Before authoring a blueprint or override, the coach can page the existing exercise
 catalog with `aifit exercise list` and reuse its IDs and revisions. Common names
 belong on exercise definitions; setup and tempo cues belong in instructions and
