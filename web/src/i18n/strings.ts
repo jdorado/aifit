@@ -135,7 +135,7 @@ export const STRINGS = {
       openExternally: 'Open in YouTube',
     },
     tabs: {
-      home: 'AIFit',
+      home: 'Coach',
       workout: 'Workout',
       profile: 'Profile',
     },
@@ -581,7 +581,7 @@ export const STRINGS = {
       openExternally: 'Abrir en YouTube',
     },
     tabs: {
-      home: 'AIFit',
+      home: 'Coach',
       workout: 'Entrenamiento',
       profile: 'Perfil',
     },

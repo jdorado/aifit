@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FC, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type TouchEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FC, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type TouchEvent } from 'react'
 import { useI18n } from '../../i18n'
 import type { WorkoutExercise, WorkoutExtra } from '../../data/testWorkout'
 import { circuitGroupKey } from '../../data/testWorkout'
@@ -755,6 +755,7 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
           >
             <div
               className={`workout-card circuit-group ${isCompleted ? 'is-completed' : ''}`}
+              style={{ '--progress': targetWorkSetCount ? completedWorkSetCount / targetWorkSetCount : 0 } as CSSProperties}
               data-stage={block.stage.tone}
               data-section-color={block.colorSlot}
               role="group"
@@ -899,6 +900,7 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
             : null}
           <button
             className={`workout-card ${exercise.status === 'skip' ? 'is-skip' : ''} ${isCompleted ? 'is-completed' : ''}`}
+            style={{ '--progress': total ? doneCount / total : 0 } as CSSProperties}
             type="button"
             onClick={handlePlanCardClick(exercise.id, 'exercise')}
             data-stage={block.stage.tone}

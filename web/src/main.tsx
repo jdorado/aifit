@@ -4,6 +4,7 @@ import { PrivyProvider, usePrivy } from '@privy-io/react-auth'
 import App from './App'
 import Landing from './Landing'
 import './style.css'
+import './design/index.css'
 
 const rootElement = document.querySelector<HTMLDivElement>('#app')
 

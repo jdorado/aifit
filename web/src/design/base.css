@@ -1,0 +1,95 @@
+/* AIFit design system — base: canvas, type, focus, motion preferences. */
+
+:root {
+  font-family: var(--ds-font-ui);
+  font-feature-settings: 'ss01', 'cv11';
+  --bg-deep: var(--ds-paper);
+  --bg-subtle: var(--ds-surface);
+  --ink-primary: var(--ds-ink);
+  --ink-secondary: var(--ds-ink-2);
+  --ink-tertiary: var(--ds-ink-3);
+  --brand-primary: var(--ds-cobalt);
+  --selection-bg: var(--ds-volt);
+  --selection-fg: var(--ds-on-volt);
+}
+
+html,
+body,
+#app {
+  background: var(--ds-paper);
+}
+
+body {
+  color: var(--ds-ink);
+  background-image: none;
+  font-family: var(--ds-font-ui);
+  font-size: 16px;
+  line-height: 1.45;
+  letter-spacing: -0.005em;
+}
+
+/* Paper grain: a barely-there texture so large light areas never read as flat UI. */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0.5;
+  background-image: radial-gradient(rgb(12 16 32 / 0.045) 1px, transparent 1px);
+  background-size: 3px 3px;
+}
+
+:root[data-theme='dark'] body::before {
+  opacity: 0.35;
+  background-image: radial-gradient(rgb(242 240 232 / 0.05) 1px, transparent 1px);
+}
+
+::selection {
+  background: var(--ds-volt);
+  color: var(--ds-on-volt);
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--ds-font-ui);
+  letter-spacing: -0.02em;
+}
+
+button,
+input,
+textarea,
+select {
+  font-family: inherit;
+}
+
+button {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* One focus language everywhere: a cobalt ring that clears the surface. */
+:focus-visible {
+  outline: 2px solid var(--ds-cobalt);
+  outline-offset: 2px;
+  border-radius: var(--ds-r-xs);
+}
+
+/* Tabular figures keep counters, loads and timers from jittering. */
+.ds-num,
+.badge,
+.week-day-date {
+  font-family: var(--ds-font-num);
+  font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}

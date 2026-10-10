@@ -105,6 +105,7 @@ const TabBar: FC<TabBarProps> = ({
                   title={tabDisabled ? (disabledNotice || tab.label) : tab.label}
                 >
                   <span className="app-top-nav-icon">{tab.icon}</span>
+                  <span className="app-top-nav-label">{tab.label}</span>
                 </button>
               )
             })}
