@@ -1,4 +1,5 @@
-import type { FC } from 'react'
+import type { CSSProperties, FC } from 'react'
+import { useI18n } from '../i18n'
 import type { RestState } from '../types/app'
 import { formatTime } from '../utils/workoutDisplay'
 
@@ -7,16 +8,29 @@ type MiniTimerProps = {
   onMaximize: () => void
 }
 
-const MiniTimer: FC<MiniTimerProps> = ({ restState, onMaximize }) => (
-  <div
-    className={`global-mini-timer ${restState.active && restState.minimized ? 'active' : ''}`}
-    onClick={onMaximize}
-  >
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-      <path d="M15 1H9v2h6V1zm-4 13h2V8h-2v6zm8.03-6.61l1.42-1.42c-.43-.51-.9-.99-1.41-1.41l-1.42 1.42A8.962 8.962 0 0012 4c-4.97 0-9 4.03-9 9s4.02 9 9 9a8.994 8.994 0 007.03-14.61zM12 20c-3.87 0-7-3.13-7-7s3.13-7 7-7 7 3.13 7 7-3.13 7-7 7z" />
-    </svg>
-    <span>{formatTime(restState.remainingSec)}</span>
-  </div>
-)
+const MiniTimer: FC<MiniTimerProps> = ({ restState, onMaximize }) => {
+  const { t } = useI18n()
+  const active = restState.active && restState.minimized
+  const total = Math.max(1, restState.totalSec || 1)
+  const progress = Math.min(1, Math.max(0, restState.remainingSec / total))
+  return (
+    <button
+      type="button"
+      className={`global-mini-timer ${active ? 'active' : ''}`}
+      style={{ '--rest-progress': progress } as CSSProperties}
+      aria-label={`${t('workout.restLabel')} ${formatTime(restState.remainingSec)}`}
+      tabIndex={active ? 0 : -1}
+      aria-hidden={active ? undefined : true}
+      onClick={onMaximize}
+    >
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <circle cx="12" cy="13.5" r="7.5" />
+        <path d="M12 9.5v4l2.5 1.5M9.5 2.5h5" />
+      </svg>
+      <span className="global-mini-timer-label">{t('workout.restLabel')}</span>
+      <span className="global-mini-timer-time">{formatTime(restState.remainingSec)}</span>
+    </button>
+  )
+}
 
 export default MiniTimer

@@ -26,7 +26,7 @@ const WeekStrip: FC<WeekStripProps> = ({ days, onSelectDay }) => {
   if (days.length === 0) return null
 
   return (
-    <div className="week-strip" role="tablist" aria-label={t('workout.weekStripLabel')}>
+    <div className="week-strip" role="group" aria-label={t('workout.weekStripLabel')}>
       {days.map((day) => {
         const dayNumber = String(Number(day.date.split('-').pop() || ''))
         const isSelectable = day.isSelectable ?? true

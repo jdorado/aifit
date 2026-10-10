@@ -768,7 +768,7 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
               >
                 <div>
                   <p className="card-label">{t('workout.circuit')}</p>
-                  <h3>{circuitName}</h3>
+                  <h2>{circuitName}</h2>
                   <p className="card-sub">{summaryParts}</p>
                 </div>
                 <div className="card-meta">
@@ -908,7 +908,7 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
           >
             <div>
               <p className="card-label">{exercise.section}</p>
-              <h3>{exercise.name}</h3>
+              <h2>{exercise.name}</h2>
               <p className="card-sub">{exercise.summary}</p>
             </div>
             <div className="card-meta">
@@ -966,7 +966,7 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
         >
           <div>
             <p className="card-label">{extra.section}</p>
-            <h3>{extra.name}</h3>
+            <h2>{extra.name}</h2>
             <p className="card-sub">{extra.summary}</p>
           </div>
           <div className="card-meta">
@@ -985,7 +985,7 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
           <div className="workout-card rest-day" role="status">
             <div>
               <p className="card-label">{t('workout.emptyPlanLabel')}</p>
-              <h3>{t('workout.emptyPlanTitle')}</h3>
+              <h2>{t('workout.emptyPlanTitle')}</h2>
               <p className="card-sub">{t('workout.emptyPlanHint')}</p>
             </div>
           </div>
@@ -993,7 +993,7 @@ const WorkoutPlanList: FC<WorkoutPlanListProps> = ({
           <div className="workout-card rest-day" role="status">
             <div>
               <p className="card-label">{t('workout.noWorkoutLabel')}</p>
-              <h3>{t('workout.noWorkoutTitle')}</h3>
+              <h2>{t('workout.noWorkoutTitle')}</h2>
               <p className="card-sub">{t('workout.noWorkoutHint')}</p>
             </div>
           </div>

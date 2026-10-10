@@ -234,3 +234,14 @@
 .app-top-bar-coach-context strong {
   color: var(--ds-ink);
 }
+
+/* In dark the active dock tab is the volt "you are here" chip. */
+:root[data-theme='dark'] .app-top-bar .app-top-nav-btn.active,
+:root[data-theme='dark'] .app-top-nav-btn.active {
+  background: var(--ds-volt);
+  color: var(--ds-on-volt);
+}
+
+:root[data-theme='dark'] .app-top-nav-btn.active svg {
+  color: var(--ds-on-volt);
+}

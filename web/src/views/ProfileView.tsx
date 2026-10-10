@@ -3,10 +3,10 @@ import { useI18n } from '../i18n'
 import type { Language } from '../i18n/strings'
 import type { AuthUiState } from '../types/app'
 import {
-  ProfileMetric,
   ProfilePanel,
   ProfileRangeField,
-  ProfileSelectField,
+  ProfileSegmentField,
+  ProfileSwitch,
 } from '../components/profile/ProfileBlocks'
 
 export type CoachPermissions = {
@@ -50,6 +50,12 @@ type ProfileViewProps = {
 }
 
 const EMAIL_PATTERN = /^[^@\s]+@[^@\s]+\.[^@\s]+$/
+
+/** "maya.lopez@x.com" -> "Maya". Only a display nicety; falls back to the page title. */
+const displayNameFromEmail = (email: string | null | undefined) => {
+  const local = (email || '').split('@')[0]?.split(/[._+\-\d]+/).find(Boolean)
+  return local ? local.charAt(0).toUpperCase() + local.slice(1) : ''
+}
 
 const ProfileView: FC<ProfileViewProps> = ({
   telegramControl,
@@ -119,9 +125,6 @@ const ProfileView: FC<ProfileViewProps> = ({
     return parts.join(' / ')
   }, [])
 
-  const languageLabel = language === 'es'
-    ? t('profile.languageOptionEs')
-    : t('profile.languageOptionEn')
   const languageOptions = useMemo(() => ([
     { value: 'en', label: t('profile.languageOptionEn') },
     { value: 'es', label: t('profile.languageOptionEs') },
@@ -305,13 +308,6 @@ const ProfileView: FC<ProfileViewProps> = ({
     return date.toLocaleDateString()
   }, [])
 
-  const permissionSummary = useCallback((permissions: CoachPermissions) => (
-    [
-      permissions.view_progress ? t('coach.permissionViewProgress') : null,
-      permissions.edit_programs ? t('coach.permissionEditPrograms') : null,
-    ].filter(Boolean).join(' · ')
-  ), [t])
-
   const statusLabel = useCallback((status: CoachLink['status']) => {
     if (status === 'active') return t('coach.statusActive')
     if (status === 'revoked') return t('coach.statusRevoked')
@@ -319,31 +315,28 @@ const ProfileView: FC<ProfileViewProps> = ({
   }, [t])
 
   const renderPermissions = (link: CoachLink, editable: boolean) => (
-    <div className="coach-link-permissions">
-      <span className="coach-link-permissions-label">{t('coach.permissionsLabel')}</span>
+    <div className="pf-link-permissions">
+      <span className="pf-mini-label">{t('coach.permissionsLabel')}</span>
       {editable ? (
-        <>
-          <label>
-            <input
-              type="checkbox"
-              checked={link.permissions.view_progress}
-              disabled={busyLinkId === link.link_id}
-              onChange={(event) => { void handlePermissionToggle(link, 'view_progress', event.target.checked) }}
-            />
-            {t('coach.permissionViewProgress')}
-          </label>
-          <label>
-            <input
-              type="checkbox"
-              checked={link.permissions.edit_programs}
-              disabled={busyLinkId === link.link_id}
-              onChange={(event) => { void handlePermissionToggle(link, 'edit_programs', event.target.checked) }}
-            />
-            {t('coach.permissionEditPrograms')}
-          </label>
-        </>
+        <div className="pf-switches">
+          <ProfileSwitch
+            label={t('coach.permissionViewProgress')}
+            checked={link.permissions.view_progress}
+            disabled={busyLinkId === link.link_id}
+            onChange={(checked) => { void handlePermissionToggle(link, 'view_progress', checked) }}
+          />
+          <ProfileSwitch
+            label={t('coach.permissionEditPrograms')}
+            checked={link.permissions.edit_programs}
+            disabled={busyLinkId === link.link_id}
+            onChange={(checked) => { void handlePermissionToggle(link, 'edit_programs', checked) }}
+          />
+        </div>
       ) : (
-        <span>{permissionSummary(link.permissions)}</span>
+        <ul className="pf-chips">
+          {link.permissions.view_progress ? <li>{t('coach.permissionViewProgress')}</li> : null}
+          {link.permissions.edit_programs ? <li>{t('coach.permissionEditPrograms')}</li> : null}
+        </ul>
       )}
     </div>
   )
@@ -356,166 +349,153 @@ const ProfileView: FC<ProfileViewProps> = ({
       ? (link.trainee_email || t('coach.traineeFallback'))
       : (link.coach_email || t('coach.traineeFallback'))
     return (
-      <article className="coach-link-card" key={link.link_id}>
-        <div className="coach-link-head">
+      <article className={`pf-link pf-link--${link.status}`} key={link.link_id}>
+        <div className="pf-link-head">
           <strong title={label}>{label}</strong>
-          <span className={`coach-link-status coach-link-status--${link.status}`}>{statusLabel(link.status)}</span>
+          <span className={`pf-status pf-status--${link.status}`}>{statusLabel(link.status)}</span>
         </div>
-        {side === 'coach' && isPending ? (
-          <div className="coach-link-token">
-            <span className="coach-link-token-label">{t('coach.inviteTokenLabel')}</span>
-            <code>{link.invite_token}</code>
-            <button type="button" onClick={() => { void handleCopyToken(link) }} disabled={busy}>
-              {copiedToken === link.link_id ? t('coach.copied') : t('coach.copyToken')}
-            </button>
-          </div>
-        ) : null}
-        {side === 'trainee' && isPending ? (
-          <div className="coach-link-token">
-            <span className="coach-link-token-label">{t('coach.inviteTokenLabel')}</span>
-            <code>{link.invite_token}</code>
-            <button type="button" onClick={() => { void handleCopyToken(link) }} disabled={busy}>
-              {copiedToken === link.link_id ? t('coach.copied') : t('coach.copyToken')}
-            </button>
-            {link.invite_expires_at ? (
-              <span className="coach-link-expiry">{t('coach.inviteExpires', { date: formatExpiry(link.invite_expires_at) })}</span>
+        {isPending ? (
+          <div className="pf-token">
+            <span className="pf-mini-label">{t('coach.inviteTokenLabel')}</span>
+            <div className="pf-token-row">
+              <code>{link.invite_token}</code>
+              <button
+                type="button"
+                className={`pf-btn pf-btn--ghost${copiedToken === link.link_id ? ' is-done' : ''}`}
+                onClick={() => { void handleCopyToken(link) }}
+                disabled={busy}
+              >
+                {copiedToken === link.link_id ? t('coach.copied') : t('coach.copyToken')}
+              </button>
+            </div>
+            {side === 'trainee' && link.invite_expires_at ? (
+              <span className="pf-token-expiry">{t('coach.inviteExpires', { date: formatExpiry(link.invite_expires_at) })}</span>
             ) : null}
           </div>
         ) : null}
         {renderPermissions(link, side === 'trainee' && link.status !== 'revoked')}
-        <div className="coach-link-actions">
-          {link.status === 'revoked' ? null : (
-            <>
-              {side === 'coach' && isPending ? (
-                <button type="button" onClick={() => { void acceptToken(link.invite_token) }} disabled={busy || acceptBusy}>
-                  {acceptBusy ? t('coach.accepting') : t('coach.acceptAction')}
-                </button>
-              ) : null}
-              {side === 'coach' && isActive ? (
-                actAsLinkId === link.link_id ? (
-                  <button type="button" onClick={onStopActAs} disabled={!onStopActAs}>
-                    {t('coach.exitCoachView')}
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    disabled={!onStartActAs}
-                    onClick={() => onStartActAs?.({
-                      linkId: link.link_id,
-                      label: link.trainee_email || link.trainee_account_id,
-                      permissions: link.permissions,
-                    })}
-                  >
-                    {t('coach.openTraineeView')}
-                  </button>
-                )
-              ) : null}
-              <button type="button" className="coach-link-revoke" onClick={() => { void handleRevoke(link) }} disabled={busy}>
-                {busy ? t('coach.revoking') : t('coach.revokeAction')}
+        {link.status === 'revoked' ? null : (
+          <div className="pf-link-actions">
+            {side === 'coach' && isPending ? (
+              <button type="button" className="pf-btn" onClick={() => { void acceptToken(link.invite_token) }} disabled={busy || acceptBusy}>
+                {acceptBusy ? t('coach.accepting') : t('coach.acceptAction')}
               </button>
-            </>
-          )}
-        </div>
+            ) : null}
+            {side === 'coach' && isActive ? (
+              actAsLinkId === link.link_id ? (
+                <button type="button" className="pf-btn" onClick={onStopActAs} disabled={!onStopActAs}>
+                  {t('coach.exitCoachView')}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="pf-btn"
+                  disabled={!onStartActAs}
+                  onClick={() => onStartActAs?.({
+                    linkId: link.link_id,
+                    label: link.trainee_email || link.trainee_account_id,
+                    permissions: link.permissions,
+                  })}
+                >
+                  {t('coach.openTraineeView')}
+                </button>
+              )
+            ) : null}
+            <button type="button" className="pf-btn pf-btn--danger" onClick={() => { void handleRevoke(link) }} disabled={busy}>
+              {busy ? t('coach.revoking') : t('coach.revokeAction')}
+            </button>
+          </div>
+        )}
       </article>
     )
   }
 
-  const accountActions = (
-    <div className="profile-account-actions">
-      {authState.enabled ? (
-        <button
-          className="header-auth-btn profile-icon-btn"
-          type="button"
-          onClick={onAuthClick}
-          disabled={authState.loading}
-          aria-label={authState.buttonLabel}
-          title={authState.buttonTitle || authState.buttonLabel}
-        >
-          <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            {authState.statusEmail ? (
-              <>
-                <path d="M10 17l5-5-5-5" />
-                <path d="M15 12H3" />
-                <path d="M21 19V5a2 2 0 0 0-2-2h-5" />
-                <path d="M14 21h5a2 2 0 0 0 2-2" />
-              </>
-            ) : (
-              <>
-                <path d="M14 3h5a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-5" />
-                <path d="M10 17l5-5-5-5" />
-                <path d="M15 12H3" />
-              </>
-            )}
-          </svg>
-        </button>
-      ) : null}
-    </div>
+  const displayName = displayNameFromEmail(authState.statusEmail) || t('profile.title')
+  const authIcon = (
+    <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+      {authState.statusEmail ? (
+        <>
+          <path d="M10 17l5-5-5-5" />
+          <path d="M15 12H3" />
+          <path d="M21 19V5a2 2 0 0 0-2-2h-5" />
+          <path d="M14 21h5a2 2 0 0 0 2-2" />
+        </>
+      ) : (
+        <>
+          <path d="M14 3h5a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-5" />
+          <path d="M10 17l5-5-5-5" />
+          <path d="M15 12H3" />
+        </>
+      )}
+    </svg>
   )
 
   return (
     <section className={`view ${active ? 'active' : ''}`} data-view="profile">
-      <header className="profile-hero">
-        <div>
-          <p className="eyebrow">{t('profile.eyebrow')}</p>
-          <h1 className="page-title">{t('profile.title')}</h1>
+      <header className="pf-hero">
+        <span className="pf-avatar" aria-hidden="true">{displayName.charAt(0)}</span>
+        <div className="pf-hero-copy">
+          <p className="pf-eyebrow">{t('profile.eyebrow')}</p>
+          <h1 className="pf-name">{displayName}</h1>
+          <p className="pf-account-line">
+            <i className={signedIn ? 'is-on' : ''} aria-hidden="true" />
+            <span>{signedIn ? t('profile.signedIn') : t('profile.signInPrompt')}</span>
+          </p>
         </div>
       </header>
 
-      <section className="metric-grid profile-summary-grid">
-        <ProfileMetric
-          label={t('profile.accountLabel')}
-          value={authState.statusEmail ? t('profile.signedIn') : t('auth.signIn')}
-          note={authState.statusEmail || t('profile.signInPrompt')}
-          tone="green"
-        />
-        <ProfileMetric
-          label={t('profile.languageLabel')}
-          value={languageLabel}
-          tone="peach"
-        />
-      </section>
-
-      <ProfilePanel
-        id="profile-account"
-        className="profile-auth-card"
-        eyebrow={t('profile.accountLabel')}
-        title={authState.statusEmail ? t('profile.signedIn') : t('auth.signIn')}
-        subtitle={authState.statusEmail ? authState.statusEmail : t('profile.signInPrompt')}
-        actions={accountActions}
-      >
-        <div className={`auth-status ${authState.statusVisible ? '' : 'hidden'}`}>
-          <span className="auth-email">{authState.statusEmail}</span>
+      <ProfilePanel id="profile-account" className="pf-group--account" title={t('profile.accountLabel')}>
+        <div className="pf-rows">
+          {signedIn ? (
+            <div className="pf-row pf-row--line">
+              <span className="pf-row-label">{t('profile.emailLabel')}</span>
+              <span className="auth-email pf-row-value">{authState.statusEmail}</span>
+            </div>
+          ) : null}
+          {authState.errorMessage ? (
+            <div className="pf-row">
+              <p className="auth-error pf-error" role="alert" title={authState.errorTitle}>{authState.errorMessage}</p>
+            </div>
+          ) : null}
+          {telegramControl}
+          {authState.enabled ? (
+            <div className="pf-row pf-row--auth">
+              <button
+                className={`pf-auth-btn${signedIn ? '' : ' pf-auth-btn--primary'}`}
+                type="button"
+                onClick={onAuthClick}
+                disabled={authState.loading}
+                aria-label={authState.buttonLabel}
+                title={authState.buttonTitle || authState.buttonLabel}
+              >
+                {authIcon}
+                <span>{authState.buttonLabel}</span>
+              </button>
+            </div>
+          ) : null}
         </div>
-        <div
-          className={`auth-error ${authState.errorMessage ? '' : 'hidden'}`}
-          title={authState.errorTitle}
-        >
-          {authState.errorMessage}
-        </div>
-        {telegramControl}
       </ProfilePanel>
 
       <ProfilePanel
         id="profile-coach-sharing"
-        className="profile-card"
         title={t('coach.sharingTitle')}
         subtitle={t('coach.sharingSubtitle')}
       >
         {!signedIn ? (
-          <p className="coach-links-empty">{t('profile.signInPrompt')}</p>
+          <p className="pf-empty">{t('profile.signInPrompt')}</p>
         ) : (
-          <div className="coach-sharing">
+          <div className="pf-sharing">
             {actAsLinkId ? (
-              <div className="coach-sharing-active" role="status">
+              <div className="pf-viewing" role="status">
                 <span>{t('coach.viewingNow')}</span>
-                <button type="button" onClick={onStopActAs} disabled={!onStopActAs}>
+                <button type="button" className="pf-btn" onClick={onStopActAs} disabled={!onStopActAs}>
                   {t('coach.exitCoachView')}
                 </button>
               </div>
             ) : null}
 
-            <form className="coach-invite-form" onSubmit={handleInvite}>
-              <div className="coach-field">
+            <form className="pf-form" onSubmit={handleInvite}>
+              <div className="pf-field">
                 <label htmlFor="coach-invite-email">{t('coach.coachEmailLabel')}</label>
                 <input
                   id="coach-invite-email"
@@ -524,73 +504,74 @@ const ProfileView: FC<ProfileViewProps> = ({
                   autoComplete="email"
                   placeholder={t('coach.coachEmailPlaceholder')}
                   value={inviteEmail}
+                  aria-invalid={inviteError ? true : undefined}
                   onChange={(event) => setInviteEmail(event.target.value)}
                 />
               </div>
-              <fieldset className="coach-permissions-field">
-                <legend>{t('coach.permissionsLabel')}</legend>
-                <label>
-                  <input
-                    type="checkbox"
+              <fieldset className="pf-fieldset">
+                <legend className="pf-mini-label">{t('coach.permissionsLabel')}</legend>
+                <div className="pf-switches">
+                  <ProfileSwitch
+                    label={t('coach.permissionViewProgress')}
                     checked={invitePermissions.view_progress}
-                    onChange={(event) => setInvitePermissions((prev) => ({
+                    onChange={(checked) => setInvitePermissions((prev) => ({
                       ...prev,
-                      view_progress: event.target.checked,
-                      ...(event.target.checked ? {} : { edit_programs: false }),
+                      view_progress: checked,
+                      ...(checked ? {} : { edit_programs: false }),
                     }))}
                   />
-                  {t('coach.permissionViewProgress')}
-                </label>
-                <label>
-                  <input
-                    type="checkbox"
+                  <ProfileSwitch
+                    label={t('coach.permissionEditPrograms')}
                     checked={invitePermissions.edit_programs}
-                    onChange={(event) => setInvitePermissions((prev) => ({
+                    onChange={(checked) => setInvitePermissions((prev) => ({
                       ...prev,
-                      edit_programs: event.target.checked,
-                      ...(event.target.checked ? { view_progress: true } : {}),
+                      edit_programs: checked,
+                      ...(checked ? { view_progress: true } : {}),
                     }))}
                   />
-                  {t('coach.permissionEditPrograms')}
-                </label>
+                </div>
               </fieldset>
-              <button type="submit" disabled={inviteBusy}>
+              <button type="submit" className="pf-btn pf-btn--primary" disabled={inviteBusy}>
                 {inviteBusy ? t('coach.inviting') : t('coach.inviteAction')}
               </button>
-              {inviteError ? <p className="coach-links-error" role="alert">{inviteError}</p> : null}
+              {inviteError ? <p className="pf-error" role="alert">{inviteError}</p> : null}
             </form>
 
-            <form className="coach-accept-form" onSubmit={handleAccept}>
-              <label htmlFor="coach-accept-token">{t('coach.acceptTitle')}</label>
-              <p className="coach-links-hint">{t('coach.acceptHint')}</p>
-              <div className="coach-accept-row">
-                <input
-                  id="coach-accept-token"
-                  value={tokenInput}
-                  placeholder={t('coach.inviteTokenLabel')}
-                  onChange={(event) => setTokenInput(event.target.value)}
-                />
-                <button type="submit" disabled={acceptBusy}>
-                  {acceptBusy ? t('coach.accepting') : t('coach.acceptAction')}
-                </button>
+            <form className="pf-form pf-form--accept" onSubmit={handleAccept}>
+              <div className="pf-field">
+                <label htmlFor="coach-accept-token">{t('coach.acceptTitle')}</label>
+                <p className="pf-hint">{t('coach.acceptHint')}</p>
+                <div className="pf-inline">
+                  <input
+                    id="coach-accept-token"
+                    value={tokenInput}
+                    placeholder={t('coach.inviteTokenLabel')}
+                    autoComplete="off"
+                    spellCheck={false}
+                    onChange={(event) => setTokenInput(event.target.value)}
+                  />
+                  <button type="submit" className="pf-btn" disabled={acceptBusy}>
+                    {acceptBusy ? t('coach.accepting') : t('coach.acceptAction')}
+                  </button>
+                </div>
               </div>
-              {acceptError ? <p className="coach-links-error" role="alert">{acceptError}</p> : null}
+              {acceptError ? <p className="pf-error" role="alert">{acceptError}</p> : null}
             </form>
 
-            {linksError ? <p className="coach-links-error" role="alert">{t('coach.linksError')}</p> : null}
-            {linksLoading ? <p className="coach-links-hint">{t('coach.linksLoading')}</p> : null}
+            {linksError ? <p className="pf-error" role="alert">{t('coach.linksError')}</p> : null}
+            {linksLoading ? <p className="pf-hint" role="status">{t('coach.linksLoading')}</p> : null}
 
-            <div className="coach-link-group">
-              <h3>{t('coach.traineesTitle')}</h3>
+            <div className="pf-link-group">
+              <h3 className="pf-section-rule"><span>{t('coach.traineesTitle')}</span></h3>
               {coachLinks.length === 0
-                ? <p className="coach-links-empty">{t('coach.linksEmpty')}</p>
+                ? <p className="pf-empty">{t('coach.linksEmpty')}</p>
                 : coachLinks.map((link) => renderLinkCard(link, 'coach'))}
             </div>
 
-            <div className="coach-link-group">
-              <h3>{t('coach.coachesTitle')}</h3>
+            <div className="pf-link-group">
+              <h3 className="pf-section-rule"><span>{t('coach.coachesTitle')}</span></h3>
               {traineeLinks.length === 0
-                ? <p className="coach-links-empty">{t('coach.linksEmpty')}</p>
+                ? <p className="pf-empty">{t('coach.linksEmpty')}</p>
                 : traineeLinks.map((link) => renderLinkCard(link, 'trainee'))}
             </div>
           </div>
@@ -599,34 +580,31 @@ const ProfileView: FC<ProfileViewProps> = ({
 
       <ProfilePanel
         id="profile-preferences"
-        className="profile-card"
         title={t('profile.preferencesLabel')}
         subtitle={t('profile.preferencesNote')}
       >
-        <div className="profile-form-grid">
-          <div className="profile-controls-grid">
-            <ProfileRangeField
-              id="profile-font-scale"
-              label={t('profile.fontSizeLabel')}
-              min="1"
-              max="1.2"
-              step="0.05"
-              value={fontScale}
-              valueLabel={fontScaleLabel}
-              onChange={(value) => onChange('fontScale', value)}
-            />
-            <ProfileSelectField
-              id="profile-language"
-              label={t('profile.languageLabel')}
-              value={language}
-              options={languageOptions}
-              onChange={(value) => onChange('language', value)}
-            />
-          </div>
+        <div className="pf-rows">
+          <ProfileSegmentField
+            id="profile-language"
+            label={t('profile.languageLabel')}
+            value={language}
+            options={languageOptions}
+            onChange={(value) => onChange('language', value)}
+          />
+          <ProfileRangeField
+            id="profile-font-scale"
+            label={t('profile.fontSizeLabel')}
+            min="1"
+            max="1.2"
+            step="0.05"
+            value={fontScale}
+            valueLabel={fontScaleLabel}
+            onChange={(value) => onChange('fontScale', value)}
+          />
         </div>
       </ProfilePanel>
 
-      <p className="profile-version">
+      <p className="profile-version pf-version">
         <span className="profile-version-label">{t('profile.versionLabel')}</span>
         <span className="profile-version-value">{versionText || t('profile.versionUnknown')}</span>
       </p>

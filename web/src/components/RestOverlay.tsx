@@ -23,6 +23,7 @@ const RestOverlay: FC<RestOverlayProps> = ({ restState, onAdjust, onStop, onMini
   return (
     <div className={`rest-overlay ${restState.active && !restState.minimized ? 'active' : ''}`}>
       <button className="btn-minimize-timer" type="button" onClick={onMinimize}>{t('common.minimize')}</button>
+      <p className="rest-eyebrow">{t('workout.restLabel')}</p>
       <div className="timer-circle">
         <svg viewBox="0 0 100 100" aria-hidden="true">
           <circle className="bg" cx="50" cy="50" r="45"></circle>
@@ -34,7 +35,7 @@ const RestOverlay: FC<RestOverlayProps> = ({ restState, onAdjust, onStop, onMini
             style={{ strokeDasharray: String(restCircleLength), strokeDashoffset: String(offset) }}
           ></circle>
         </svg>
-        <div className="timer-text">{formatted}</div>
+        <div className="timer-text" role="timer" aria-label={`${t('workout.restLabel')} ${formatted}`}>{formatted}</div>
       </div>
       <div className="timer-controls">
         <button type="button" onClick={() => onAdjust(-15)}>-15s</button>

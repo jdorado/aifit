@@ -250,6 +250,8 @@ type ChatHistoryPayloadItem = {
 type WeekPlanDay = {
   date: string
   label: string
+  // Coach-authored workout name (e.g. "Upper strength"); `label` stays the weekday.
+  title?: string
   exercises: WorkoutExercise[]
   extras: WorkoutExtra[]
   isRest?: boolean
@@ -867,8 +869,8 @@ const updateExerciseSummary = (exercise: {
   const weightTarget = normalizeWeightValue(findSetValue(exercise.sets, 'targetWeight', { includeWarmup: false }))
   const metricDisplay = formatMetricTargetForDisplay(metricTarget || '-', exercise)
   const weightDisplay = formatWeightTargetForDisplay(weightTarget, exercise)
-  const base = `${setCount} sets x ${metricDisplay}`
-  exercise.summary = weightDisplay ? `${base} - ${weightDisplay}` : base
+  const base = `${setCount} × ${metricDisplay}`
+  exercise.summary = weightDisplay ? `${base} · ${weightDisplay}` : base
 }
 
 const decodePrivyJwt = (token: string) => {
@@ -2711,6 +2713,7 @@ const App = () => {
           ? undefined
           : (session.auto_fill_suppressed_at || session.updated_at),
         planNotes: notes || existingDay?.planNotes || '',
+        title: session.label?.trim() || undefined,
         notes: existingDay?.notes ?? '',
       }
       nextDays = existingDayIndex >= 0
@@ -2847,6 +2850,7 @@ const App = () => {
               ? undefined
               : (session.auto_fill_suppressed_at || session.updated_at),
             planNotes: notes || existingDay?.planNotes || '',
+            title: session.label?.trim() || undefined,
             notes: existingDay?.notes ?? '',
           }
           nextDays = existingDayIndex >= 0
@@ -3543,6 +3547,7 @@ const App = () => {
           exercises: [],
           extras: [],
           isRest: true,
+          title: undefined,
           autoFillSuppressedAt: (receipt as unknown as { updated_at?: string }).updated_at ?? new Date().toISOString(),
           planNotes: '',
           notes: '',
@@ -3903,6 +3908,7 @@ const App = () => {
       exercises: [],
       extras: [],
       isRest: true,
+      title: undefined,
       autoFillSuppressedAt: clearedWorkoutAtRef.current[targetDate],
       planNotes: '',
       notes: '',
@@ -4850,9 +4856,7 @@ const App = () => {
   return (
     <I18nProvider value={i18n}>
       <div className={`shell shell--${activeView}${coachActAsOwnerId ? ' shell--coach-view' : ''}`}>
-        <div className="shell-aura shell-aura-primary" aria-hidden="true" />
-        <div className="shell-aura shell-aura-secondary" aria-hidden="true" />
-        <div className="content">
+        <div className="content" role="main">
           <ChatView
             active={activeView === 'home'}
             messages={coachActAsLinkId ? (coachMessagesByScope[`coach-link:${coachActAsLinkId}`] ?? []) : messages}
@@ -4893,6 +4897,7 @@ const App = () => {
             workoutRevision={workoutRevisionByOwnerDateRef.current[`${coachActAsOwnerId ?? currentUserId}:${selectedDay?.date ?? todayId}`]}
             weekDays={weekDaySummaries}
             selectedDayLabel={selectedDayLabel}
+            workoutTitle={selectedDay?.title}
             selectedDateId={selectedDay?.date ?? null}
             todayId={todayId}
             onBackToToday={() => handleSelectDay(-1, todayId)}

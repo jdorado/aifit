@@ -16,8 +16,8 @@
 
   /* Ink */
   --ds-ink: #0c1020;
-  --ds-ink-2: rgb(12 16 32 / 0.68);
-  --ds-ink-3: rgb(12 16 32 / 0.48);
+  --ds-ink-2: rgb(12 16 32 / 0.76);
+  --ds-ink-3: rgb(12 16 32 / 0.64);
   --ds-line: rgb(12 16 32 / 0.1);
   --ds-line-strong: rgb(12 16 32 / 0.2);
 
@@ -26,6 +26,8 @@
   --ds-cobalt-text: #2036d6;
   --ds-cobalt-soft: #e5e8ff;
   --ds-on-cobalt: #ffffff;
+  /* Thin progress rules and meters need 3:1 on paper: cobalt in light, volt in dark. Volt is for fills carrying ink. */
+  --ds-progress: var(--ds-cobalt);
   --ds-volt: #d5f24b;
   --ds-volt-soft: #eef8b8;
   --ds-on-volt: #0c1020;
@@ -59,7 +61,7 @@
   --ds-top-h: 52px;
 }
 
-/* Dark ink theme. Enabled with <html data-theme="dark"> until every surface is verified. */
+/* Dark ink theme. index.html mirrors the system preference into <html data-theme>. */
 :root[data-theme='dark'] {
   color-scheme: dark;
 
@@ -69,12 +71,13 @@
   --ds-surface-raised: #181d36;
 
   --ds-ink: #f2f0e8;
-  --ds-ink-2: rgb(242 240 232 / 0.7);
-  --ds-ink-3: rgb(242 240 232 / 0.48);
+  --ds-ink-2: rgb(242 240 232 / 0.78);
+  --ds-ink-3: rgb(242 240 232 / 0.64);
   --ds-line: rgb(242 240 232 / 0.12);
   --ds-line-strong: rgb(242 240 232 / 0.24);
 
   --ds-cobalt: #4b63ff;
+  --ds-progress: var(--ds-volt);
   --ds-cobalt-text: #93a2ff;
   --ds-cobalt-soft: #1b2250;
   --ds-volt-soft: #2b3410;

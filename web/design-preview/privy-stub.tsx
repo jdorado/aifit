@@ -5,7 +5,7 @@ const b64 = (value: object) => btoa(JSON.stringify(value)).replace(/=+$/, '').re
 const token = ['e30', b64({ sub: 'demo-user', exp: 4_000_000_000 }), 'preview'].join('.')
 const user = { id: 'demo-user', email: { address: 'maya@example.com' } }
 const auth = {
-  ready: true,
+  ready: new URLSearchParams(window.location.search).get('landing') !== 'loading',
   authenticated: !new URLSearchParams(window.location.search).has('landing'),
   user,
   login: () => {},

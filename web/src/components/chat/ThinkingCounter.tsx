@@ -57,9 +57,11 @@ const ThinkingCounter: FC<ThinkingCounterProps> = ({ label, statusText, startedA
       role="timer"
       aria-label={`${label}: ${elapsedSeconds}s`}
     >
-      <span className="thinking-status-label" aria-hidden="true">{statusText}</span>
-      <span className="thinking-status-divider" aria-hidden="true">·</span>
-      <span className="thinking-seconds" aria-hidden="true">{displayTime}</span>
+      <span className="thinking-status-row" aria-hidden="true">
+        <span className="thinking-status-label">{statusText}</span>
+        <span className="thinking-seconds">{displayTime}</span>
+      </span>
+      <span className="thinking-rule" aria-hidden="true"></span>
     </span>
   )
 }

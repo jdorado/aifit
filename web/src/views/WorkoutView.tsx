@@ -75,6 +75,7 @@ type WorkoutViewProps = {
   actAsLinkId?: string | null
   weekDays: WeekDaySummary[]
   selectedDayLabel: string
+  workoutTitle?: string
   selectedDateId?: string | null
   todayId?: string
   onBackToToday?: () => void
@@ -168,6 +169,7 @@ const WorkoutView: FC<WorkoutViewProps> = ({
   actAsLinkId = null,
   weekDays,
   selectedDayLabel,
+  workoutTitle,
   selectedDateId = null,
   todayId = null,
   onBackToToday,
@@ -524,6 +526,20 @@ const WorkoutView: FC<WorkoutViewProps> = ({
         <div className="detail-summary-card detail-target-card">
           <p className="card-label">{hasNoSets ? `${activeExercise.section} • ${t('workout.noSets')}` : t('workout.targetLabel')}</p>
           {hasNoSets ? null : <p className="card-sub">{activeExercise.summary}</p>}
+          {hasNoSets ? null : (
+            <div
+              className="detail-meter"
+              role="img"
+              aria-label={`${stateList.filter((item) => item.done).length}/${stateList.length}`}
+            >
+              {stateList.map((item, index) => (
+                <span
+                  key={`${activeExercise.id}-meter-${index}`}
+                  className={`detail-meter-step${item.done ? (item.skipped ? ' is-skipped' : ' is-done') : index === nextIndex ? ' is-next' : ''}`}
+                />
+              ))}
+            </div>
+          )}
         </div>
         {activeExercise.exerciseKey ? (
           <VideoGallery
@@ -656,6 +672,9 @@ const WorkoutView: FC<WorkoutViewProps> = ({
           <WorkoutMiniBar
             activeWeekDay={activeWeekDay}
             selectedDayLabel={selectedDayLabel}
+            workoutTitle={workoutTitle}
+            doneSets={exercises.reduce((count, exercise) => count + (setLogs[exercise.id]?.filter((set) => set.done).length ?? 0), 0)}
+            totalSets={exercises.reduce((count, exercise) => count + exercise.sets.length, 0)}
           />
         </>
       ) : null}
@@ -729,10 +748,11 @@ const WorkoutView: FC<WorkoutViewProps> = ({
 
       <section className={`workout-detail ${activeEntryId ? 'active' : ''}`} data-section-color={detailSectionColorSlot}>
         <div className="detail-header-bar">
-          <button className="back-btn" type="button" onClick={onBack}>
+          <button className="back-btn" type="button" title={t('common.back')} onClick={onBack}>
             <span className="icon-back">‹</span> {t('common.back')}
           </button>
           <div className="detail-title-block">
+            {activeExercise ? <p className="detail-kicker">{activeCircuit?.name ?? activeExercise.section}</p> : null}
             <h1 className="detail-title-text">{detailTitle}</h1>
           </div>
           {activeExercise ? (
@@ -756,6 +776,7 @@ const WorkoutView: FC<WorkoutViewProps> = ({
                   type="button"
                   className={`detail-history-btn${historyOpen ? ' active' : ''}`}
                   aria-label={t('workout.historyTitle')}
+                  title={t('workout.historyTitle')}
                   aria-expanded={historyOpen}
                   onClick={openExerciseHistory}
                 >
@@ -788,6 +809,7 @@ const WorkoutView: FC<WorkoutViewProps> = ({
                 type="button"
                 className={`detail-coach-btn${coachChatOpen ? ' active' : ''}`}
                 aria-label={t('workout.askCoach')}
+                title={t('workout.askCoach')}
                 aria-expanded={coachChatOpen}
                 disabled={!coachChatEnabled}
                 onClick={() => {
@@ -821,7 +843,7 @@ const WorkoutView: FC<WorkoutViewProps> = ({
           {saveStatus}
           <div className={`footer-actions ${activeExtra ? 'hidden' : ''}`}>
             <button
-              className="primary large detail-log-button"
+              className={`primary large detail-log-button${isAllDone ? ' is-done' : ''}`}
               type="button"
               aria-label={`${isAllDone ? t('common.done') : t('workout.now')} ${footerTitle}: ${nextActionLabel}`}
               onClick={isAllDone ? onBack : () => onLogSet(logTargetExercise?.id)}
@@ -831,7 +853,7 @@ const WorkoutView: FC<WorkoutViewProps> = ({
                 <span>{isAllDone ? t('common.done') : t('workout.now')}</span>
                 <strong>{footerTitle}</strong>
               </span>
-              <span className="detail-log-action">{nextActionLabel}</span>
+              <span className="detail-log-action" key={nextActionLabel}>{nextActionLabel}</span>
             </button>
           </div>
         </div>

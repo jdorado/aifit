@@ -141,6 +141,7 @@ const WorkoutOverflowMenu: FC<WorkoutOverflowMenuProps> = ({
             </svg>
             <span>{t('common.refresh')}</span>
           </button>
+          <div className="header-menu-divider" role="separator" />
           <button
             className="header-menu-item"
             type="button"

@@ -57,6 +57,21 @@ h3 {
   letter-spacing: -0.02em;
 }
 
+/* Legacy hard-codes navy on text elements; inherit so dark mode (and any themed parent) just works.
+   Class-level colours in src/design/ are more specific and still win. */
+p,
+li,
+blockquote,
+td,
+th,
+label,
+h1,
+h2,
+h3,
+h4 {
+  color: inherit;
+}
+
 button,
 input,
 textarea,

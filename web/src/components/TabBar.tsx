@@ -70,7 +70,7 @@ const TabBar: FC<TabBarProps> = ({
   ]
 
   return (
-    <div className={`app-top-bar ${coachModeActive ? 'coach-active' : ''}`}>
+    <header className={`app-top-bar ${coachModeActive ? 'coach-active' : ''}`}>
       <BrandMark alt={t('chat.logoAlt')} className="app-top-bar-logo" />
       {coachModeActive || coachContextLabel ? (
         <div className="app-top-bar-coach-context" role="status">
@@ -113,7 +113,7 @@ const TabBar: FC<TabBarProps> = ({
         </nav>
         {leadingControl ? <div className="app-top-bar-extra">{leadingControl}</div> : null}
       </div>
-    </div>
+    </header>
   )
 }
 

@@ -54,6 +54,54 @@
   color: var(--ds-ink);
 }
 
+/* Day progress: mono counter + ink meter with a volt head. */
+
+.workout-day-progress {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.workout-day-progress-text {
+  flex: 0 0 auto;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ds-ink-2);
+}
+
+.workout-day-progress-track {
+  position: relative;
+  flex: 1;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--ds-line);
+}
+
+.workout-day-progress-track::before {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: calc(var(--progress, 0) * 100%);
+  border-radius: inherit;
+  background: var(--ds-ink);
+  transition: width var(--ds-med) var(--ds-ease);
+}
+
+.workout-day-progress-track::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: calc(var(--progress, 0) * 100%);
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--ds-ink);
+  border-radius: 50%;
+  background: var(--ds-volt);
+  transform: translate(-50%, -50%);
+  transition: left var(--ds-med) var(--ds-ease);
+}
+
 /* ---------- Week strip ---------- */
 
 .week-strip,
@@ -103,6 +151,7 @@
 }
 
 .week-day-label {
+  opacity: 1;
   font-family: var(--ds-font-num);
   font-size: 10px;
   font-weight: 500;
@@ -174,10 +223,6 @@
 
 .week-day.active.completed .week-day-dot {
   background: var(--ds-volt);
-}
-
-.week-day.projected:not(.active) {
-  opacity: 0.6;
 }
 
 .week-day:disabled {
@@ -330,7 +375,7 @@
   transform: scale(0.985);
 }
 
-/* Progress rule: fills volt across the bottom edge as sets are logged. */
+/* Progress rule: fills across the bottom edge as sets are logged. */
 .workout-card::after {
   content: '';
   position: absolute;
@@ -338,7 +383,7 @@
   right: 0;
   bottom: 0;
   height: 3px;
-  background: linear-gradient(90deg, var(--ds-volt) calc(var(--progress, 0) * 100%), var(--ds-line) 0);
+  background: linear-gradient(90deg, var(--ds-progress) calc(var(--progress, 0) * 100%), var(--ds-line) 0);
   transition: background-size var(--ds-med) var(--ds-ease);
 }
 
@@ -352,7 +397,9 @@
   color: var(--ds-ink-3);
 }
 
+.workout-card h2,
 .workout-card h3,
+.view[data-view='workout'] .workout-card h2,
 .view[data-view='workout'] .workout-card h3 {
   margin: 0;
   font-family: var(--ds-font-ui);
@@ -583,4 +630,25 @@
   border-color: var(--ds-clay);
   background: var(--ds-clay-soft);
   color: var(--ds-clay);
+}
+
+/* ---------- Dark theme refinements ---------- */
+
+:root[data-theme='dark'] .week-day.active .week-day-label,
+:root[data-theme='dark'] .week-day.active .week-day-date {
+  color: var(--ds-paper);
+}
+
+:root[data-theme='dark'] .week-day.active .week-day-dot {
+  background: var(--ds-paper);
+}
+
+:root[data-theme='dark'] .workout-card .badge.completed-badge {
+  background: var(--ds-volt);
+  color: var(--ds-on-volt);
+}
+
+:root[data-theme='dark'] .workout-card.is-completed {
+  background: color-mix(in srgb, var(--ds-volt) 11%, var(--ds-surface));
+  border-color: color-mix(in srgb, var(--ds-volt) 40%, var(--ds-line));
 }

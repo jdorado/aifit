@@ -1,10 +1,7 @@
-import { useState } from 'react'
+import { Suspense, lazy } from 'react'
 import { createRoot } from 'react-dom/client'
-import { PrivyProvider, usePrivy } from '@privy-io/react-auth'
-import App from './App'
 import Landing from './Landing'
-import './style.css'
-import './design/index.css'
+import './design/core.css'
 
 const rootElement = document.querySelector<HTMLDivElement>('#app')
 
@@ -12,54 +9,16 @@ if (!rootElement) {
   throw new Error('App root not found')
 }
 
-const privyAppId = (process.env.PRIVY_APP_ID || '').trim()
-const privyClientId = (process.env.PRIVY_CLIENT_ID || '').trim()
-
-if (!privyAppId) {
+if (!(process.env.PRIVY_APP_ID || '').trim()) {
   throw new Error('PRIVY_APP_ID is required to initialize Privy.')
 }
 
-const AuthenticatedApp = () => {
-  const { ready, authenticated, login } = usePrivy()
-  const [error, setError] = useState<string | null>(null)
+// The auth SDK and the app are the heavy part of the bundle: split them out so the
+// landing shell is the first (and tiny) thing the browser has to parse and paint.
+const AuthGate = lazy(() => import('./AuthGate'))
 
-  if (!ready) return <Landing loading />
-  if (!authenticated) {
-    return (
-      <Landing
-        error={error}
-        onLogin={() => {
-          setError(null)
-          void (async () => {
-            try {
-              await login()
-            } catch (reason) {
-              setError(reason instanceof Error ? reason.message : 'Sign-in failed')
-            }
-          })()
-        }}
-      />
-    )
-  }
-  return <App />
-}
-
-const app = (
-  <PrivyProvider
-    appId={privyAppId}
-    clientId={privyClientId || undefined}
-    config={{
-      loginMethods: ['google'],
-      // AIFit uses Privy for sign-in only, with no wallet creation or wallet UI.
-      embeddedWallets: {
-        ethereum: { createOnLogin: 'off' },
-        solana: { createOnLogin: 'off' },
-        showWalletUIs: false,
-      },
-    }}
-  >
-    <AuthenticatedApp />
-  </PrivyProvider>
+createRoot(rootElement).render(
+  <Suspense fallback={<Landing loading />}>
+    <AuthGate />
+  </Suspense>,
 )
-
-createRoot(rootElement).render(app)
