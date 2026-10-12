@@ -1757,27 +1757,29 @@ class WorkoutService:
         if expected_blueprint_revision and expected_blueprint_revision != blueprint["revision"]:
             raise WorkoutDomainError("stale_blueprint", "Blueprint changed. Pull the current blueprint before swapping.")
         lineage = target_item.get("source_blueprint") or workout.get("lineage", {})
-        if (
-            lineage.get("blueprint_id") != blueprint["blueprint_id"]
-            or lineage.get("blueprint_revision") != blueprint["revision"]
-        ):
-            raise WorkoutDomainError("stale_blueprint", "Workout belongs to an older blueprint. Refresh it before swapping.")
+        if lineage.get("blueprint_id") != blueprint["blueprint_id"]:
+            raise WorkoutDomainError("blueprint_slot_missing", "This exercise has no slot in the active blueprint.")
         day = next((item for item in blueprint["days"] if item["day_id"] == lineage.get("day_id")), None)
         if not day:
             raise WorkoutDomainError("blueprint_day_missing", "The active blueprint no longer contains this workout day.")
-        source_slot = self._blueprint_slot(day, target_item)
+        # A publication does not rewrite materialized workouts. Across revisions,
+        # require the same slot ID rather than relinking a removed slot by exercise.
+        if lineage.get("blueprint_revision") != blueprint["revision"]:
+            source_slot = next((slot for segment in day["segments"] for slot in segment["slots"]
+                                if slot["slot_id"] == target_item.get("slot_id")), None)
+        else:
+            source_slot = self._blueprint_slot(day, target_item)
         if not source_slot:
             raise WorkoutDomainError("blueprint_slot_missing", "The active blueprint no longer contains this workout slot.")
         used = {item["exercise_snapshot"]["exercise_id"] for segment in workout["segments"] for item in segment["items"]}
-        candidates = [candidate for candidate in source_slot["candidates"] if candidate["exercise_id"] not in used or candidate["candidate_id"] == target_item["candidate_id"]]
-        candidates = [candidate for candidate in candidates if candidate["candidate_id"] != target_item["candidate_id"]]
-        if source_slot["selection_count"] > 1:
-            # Legacy mixed pools (e.g. biceps + triceps) do not encode one
-            # function per slot. Recovering their link must not turn a curl
-            # swap into elbow-extension work. New blueprints separate roles.
-            pattern = target_item["exercise_snapshot"]["movement_pattern"]
-            candidates = [candidate for candidate in candidates
-                          if (await self._candidate_exercise(account_id, candidate))["movement_pattern"] == pattern]
+        forbidden = set(blueprint.get("hard_constraints", {}).get("forbidden_exercise_ids", []))
+        pattern = target_item["exercise_snapshot"]["movement_pattern"]
+        # Slot IDs can survive a change of purpose, and legacy pools can mix
+        # functions. Every alternative must still match this instance's movement.
+        candidates = [candidate for candidate in source_slot["candidates"]
+                      if candidate["exercise_id"] not in used | forbidden
+                      and candidate["candidate_id"] != target_item["candidate_id"]
+                      and pattern and (await self._candidate_exercise(account_id, candidate))["movement_pattern"] == pattern]
         if not candidates:
             raise WorkoutDomainError("no_eligible_swap", "No eligible candidate remains in this blueprint slot.")
         return {
@@ -2014,6 +2016,8 @@ class WorkoutService:
             target = dict(targets[target_index])
             new_sets.append({"set_id": new_id("set"), "kind": set_row.get("kind", "work"),
                              "target": {**target, **({"load": load} if load else {})}, "actual": None, "round": round_number})
+        source_blueprint = {"blueprint_id": active_blueprint["blueprint_id"],
+                            "blueprint_revision": active_blueprint["revision"], "day_id": context["source_day_id"]}
         if logged_sets:
             # A logged set is immutable history: it keeps its original exercise
             # snapshot, target and actual, and the swap continues under a new
@@ -2022,8 +2026,7 @@ class WorkoutService:
             replacement = {"exercise_instance_id": new_id("wex"), "slot_id": source_slot["slot_id"], "candidate_id": candidate["candidate_id"],
                            "order": target_item["order"] + 1, "exercise_snapshot": snapshot, "sets": new_sets, "cues_md": self._cues(candidate, exercise),
                            "progression_context": {**progression_context(candidate, len(targets), active_blueprint["start_date"], load), "partial": True}}
-            if target_item.get("source_blueprint"):
-                replacement["source_blueprint"] = deepcopy(target_item["source_blueprint"])
+            replacement["source_blueprint"] = source_blueprint
             position = target_segment["items"].index(target_item) + 1
             target_segment["items"].insert(position, replacement)
             for index, item in enumerate(target_segment["items"]):
@@ -2032,7 +2035,8 @@ class WorkoutService:
             # Feedback describes the substituted exercise; a different
             # exercise must not inherit it.
             target_item.pop("notes", None)
-            target_item.update({"slot_id": source_slot["slot_id"], "candidate_id": candidate["candidate_id"], "exercise_snapshot": snapshot, "cues_md": self._cues(candidate, exercise),
+            target_item.update({"slot_id": source_slot["slot_id"], "candidate_id": candidate["candidate_id"], "source_blueprint": source_blueprint,
+                                "exercise_snapshot": snapshot, "cues_md": self._cues(candidate, exercise),
                                 "sets": new_sets, "progression_context": progression_context(candidate, len(targets), active_blueprint["start_date"], load)})
         workout["status"] = self._workout_status(workout)
         workout["revision"], workout["updated_at"] = new_revision(), utc_now()

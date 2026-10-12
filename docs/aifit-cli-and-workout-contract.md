@@ -206,12 +206,16 @@ passes its `candidate_id` as `--target-candidate`; the backend validates the
 choice stays inside the same blueprint slot and is not used elsewhere in the
 day, then applies it directly instead of selecting via `source`. The backend
 verifies the expected active blueprint revision
-and the workout's blueprint lineage, then selects an unused candidate from the
-same blueprint slot, preserves every other workout item, and records the active
+and blueprint identity, then selects an unused, same-pattern candidate from the
+same blueprint slot. A newer revision of that blueprint can supply alternatives
+without rebuilding the saved day; a removed slot cannot be relinked by exercise
+across revisions. The replacement records its own source blueprint revision,
+preserves every other workout item, and records the active
 blueprint ID/revision in the swap receipt. An item kept verbatim from outside
 the blueprint (legacy import, copied day, or override remainder) has no slot
-and returns `blueprint_slot_missing`; the day must be regenerated from the
-active blueprint before its items can be swapped. Logged sets are immutable: they stay
+and returns `blueprint_slot_missing`. A compatible catalog replacement can use
+`workout substitute` with exactly the open-set count, independently of blueprint
+lineage and without rebuilding the day. Logged sets are immutable: they stay
 under the original exercise and the swap materializes the open sets under the
 new candidate as a new exercise instance, so a partially logged exercise can
 still be swapped. It rejects a stale workout, returns `no_eligible_swap` when
