@@ -7,54 +7,13 @@
   <link rel="icon" type="image/png" sizes="16x16" href="/aifit-blue-favicon-16.png" />
   <meta name="viewport"
     content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content" />
-  <meta name="theme-color" content="#f6f4ee" />
-  <meta name="color-scheme" content="light dark" />
-  <meta name="description"
-    content="AIFit is a focused coach for workouts and meals: one conversation that knows your plan, your last session and what to do next." />
-  <meta name="application-name" content="AIFit" />
-  <meta property="og:type" content="website" />
-  <meta property="og:site_name" content="AIFit" />
-  <meta property="og:title" content="AIFit: remember what made you stronger" />
-  <meta property="og:description"
-    content="A focused coach for workouts and meals. Your coach plans, you log, your coach adapts." />
-  <meta name="twitter:card" content="summary" />
-  <meta name="twitter:title" content="AIFit: remember what made you stronger" />
-  <meta name="twitter:description"
-    content="A focused coach for workouts and meals. Your coach plans, you log, your coach adapts." />
-  <style>
-    /* Paper from the first paint, before the bundle injects its CSS. */
-    html, body { margin: 0; background: #f6f4ee; color: #0c1020; }
-    html[data-theme='dark'], html[data-theme='dark'] body { background: #0a0d18; color: #f2f0e8; }
-  </style>
-  <script>
-    // Follow the system theme before first paint (no flash) and keep following it.
-    (function () {
-      var query = window.matchMedia('(prefers-color-scheme: dark)');
-      function apply() {
-        document.documentElement.setAttribute('data-theme', query.matches ? 'dark' : 'light');
-        var meta = document.querySelector('meta[name="theme-color"]');
-        if (meta) meta.setAttribute('content', query.matches ? '#0a0d18' : '#f6f4ee');
-      }
-      apply();
-      query.addEventListener('change', apply);
-    })();
-  </script>
+  <meta name="theme-color" content="#ffffff" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="default" />
   <meta name="apple-mobile-web-app-title" content="AIFit" />
   <link rel="apple-touch-icon" href="/aifit-blue-apple-touch.png" />
   <link rel="manifest" href="/manifest.json" />
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <!-- Fonts load without blocking first paint; text shows immediately and swaps in. -->
-  <link rel="preload" as="style"
-    href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&family=Instrument+Serif:ital@0;1&display=swap"
-    onload="this.onload=null;this.rel='stylesheet'" />
-  <noscript>
-    <link rel="stylesheet"
-      href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&family=Instrument+Serif:ital@0;1&display=swap" />
-  </noscript>
   <title>AIFit Coach</title>
 </head>
 

@@ -44,7 +44,7 @@ const SwapCandidateSheet: FC<SwapCandidateSheetProps> = ({
   return (
     <>
       <button type="button" className="exercise-history-backdrop" aria-label={t('common.close')} onClick={onClose} />
-      <aside className="exercise-history-sheet swap-sheet" aria-label={t('workout.swapTitle')}>
+      <aside className="exercise-history-sheet" aria-label={t('workout.swapTitle')}>
         <header className="exercise-history-header">
           <div>
             <strong>{t('workout.swapTitle')}</strong>
@@ -53,8 +53,8 @@ const SwapCandidateSheet: FC<SwapCandidateSheetProps> = ({
           <button type="button" onClick={onClose} aria-label={t('common.close')}>×</button>
         </header>
         <div className="exercise-history-content">
-          {loading ? <p className="exercise-history-empty is-loading" role="status">{t('workout.swapLoading')}</p> : null}
-          {!loading && error ? <p className="exercise-history-empty error" role="alert">{error}</p> : null}
+          {loading ? <p className="exercise-history-empty">{t('workout.swapLoading')}</p> : null}
+          {!loading && error ? <p className="exercise-history-empty error">{error}</p> : null}
           {!loading && !error && candidates.length === 0 ? (
             <p className="exercise-history-empty">{t('workout.swapEmpty')}</p>
           ) : null}

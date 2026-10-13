@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useI18n } from '../../i18n'
 import { MuscleProgress } from './ProgressionFeedback'
 import type { MuscleProgression } from '../../utils/progression'
-import { loadInKg, type ExerciseHistoryRelated, type ExerciseHistorySession, type ExerciseHistorySet } from '../../utils/exerciseHistory'
+import type { ExerciseHistoryRelated, ExerciseHistorySession, ExerciseHistorySet } from '../../utils/exerciseHistory'
 
 type HistoryTab = 'exercise' | 'related' | 'muscle'
 
@@ -37,36 +37,6 @@ const formatSet = (set: ExerciseHistorySet, repsLabel: (count: number) => string
   const metric = setMetric(set, repsLabel)
   return [load, metric].filter(Boolean).join(' × ')
 }
-
-/** Heaviest logged load of a session, in kg. */
-const sessionPeakKg = (session: ExerciseHistorySession): number | null => {
-  let peak: number | null = null
-  for (const set of session.sets) {
-    const kg = loadInKg(set.load)
-    if (kg !== null && (peak === null || kg > peak)) peak = kg
-  }
-  return peak
-}
-
-type SessionTrend = { pr: boolean; delta: string | null; direction: 'up' | 'down' | null }
-
-/** Sessions arrive newest first. A PR beats every older session's peak load; delta compares with the previous session. */
-const sessionTrends = (sessions: ExerciseHistorySession[]): SessionTrend[] => sessions.map((session, index) => {
-  const older = sessions.slice(index + 1)
-  const peak = sessionPeakKg(session)
-  if (peak === null || older.length === 0) return { pr: false, delta: null, direction: null }
-  const olderPeaks = older.map(sessionPeakKg).filter((value): value is number => value !== null)
-  const best = olderPeaks.length ? Math.max(...olderPeaks) : null
-  const previous = sessionPeakKg(older[0])
-  const unit = session.topSet?.load?.unit ?? 'kg'
-  const delta = previous === null ? null : (peak - previous) / (unit === 'lb' ? 0.45359237 : 1)
-  const rounded = delta === null ? 0 : Math.round(delta * 10) / 10
-  return {
-    pr: best !== null && peak > best + 0.001,
-    delta: rounded === 0 ? null : `${rounded > 0 ? '+' : '\u2212'}${Math.abs(rounded)}${unit}`,
-    direction: rounded === 0 ? null : rounded > 0 ? 'up' : 'down',
-  }
-})
 
 const ExerciseHistorySheet: FC<ExerciseHistorySheetProps> = ({
   open,
@@ -111,7 +81,6 @@ const ExerciseHistorySheet: FC<ExerciseHistorySheetProps> = ({
   }, [related])
 
   const visibleSessions = tab === 'related' ? relatedSessions : sessions
-  const trends = useMemo(() => sessionTrends(sessions), [sessions])
   const visibleLoading = loading || (tab === 'related' && related === null)
   const visibleEmpty = t(tab === 'related' ? 'workout.relatedEmpty' : 'workout.historyEmpty')
 
@@ -154,15 +123,14 @@ const ExerciseHistorySheet: FC<ExerciseHistorySheetProps> = ({
         <div className="exercise-history-content">
           {tab === 'muscle' ? progressionLoading ? <p>{t('progression.loading')}</p> : progressionError ? <p>{t('progression.loadError')}</p> : muscles.length ? <MuscleProgress muscles={muscles} /> : <p>{t('progression.noTrend')}</p> : <>
 
-          {visibleLoading ? <p className="exercise-history-empty is-loading" role="status">{t('workout.historyLoading')}</p> : null}
-          {!visibleLoading && error ? <p className="exercise-history-empty error" role="alert">{error}</p> : null}
+          {visibleLoading ? <p className="exercise-history-empty">{t('workout.historyLoading')}</p> : null}
+          {!visibleLoading && error ? <p className="exercise-history-empty error">{error}</p> : null}
           {!visibleLoading && !error && visibleSessions.length === 0 ? (
             <p className="exercise-history-empty">{visibleEmpty}</p>
           ) : null}
           {!visibleLoading && !error && visibleSessions.length > 0 ? (
             <div className="exercise-history-list">
-              {visibleSessions.map((session, sessionIndex) => {
-                const trend = tab === 'exercise' ? trends[sessionIndex] : undefined
+              {visibleSessions.map((session) => {
                 const topSet = session.topSet ? formatSet(session.topSet, repsLabel) : ''
                 const volume = session.volumeKg !== null
                   ? t('workout.historyVolume', { value: Math.round(session.volumeKg).toLocaleString() })
@@ -172,7 +140,6 @@ const ExerciseHistorySheet: FC<ExerciseHistorySheetProps> = ({
                     <div className="exercise-history-row-head">
                       <div>
                         <strong>{formatDate(session.date)}</strong>
-                        {trend?.pr ? <em className="exercise-history-pr">{t('workout.historyPr')}</em> : null}
                         <span>
                           {tab === 'related' && session.exerciseName ? `${session.exerciseName} · ` : ''}
                           {t('workout.historySetsCount', { count: session.sets.length })}
@@ -181,7 +148,6 @@ const ExerciseHistorySheet: FC<ExerciseHistorySheetProps> = ({
                     </div>
                     <div className="exercise-history-metrics">
                       {topSet ? <span>{topSet}</span> : null}
-                      {trend?.delta ? <span className="exercise-history-delta" data-direction={trend.direction ?? undefined}>{trend.delta}</span> : null}
                       {volume ? <span>{volume}</span> : null}
                     </div>
                     {tab === 'exercise' ? (

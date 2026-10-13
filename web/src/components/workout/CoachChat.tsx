@@ -3,7 +3,6 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import type { FC, KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { useI18n } from '../../i18n'
 import type { ChatMessage } from '../../types/app'
-import { CoachByline } from '../chat/ChatMessages'
 import ThinkingCounter, { ReplyElapsed } from '../chat/ThinkingCounter'
 import { useAutoGrowTextarea } from '../../utils/autoGrowTextarea'
 
@@ -224,9 +223,7 @@ const CoachChat: FC<CoachChatProps> = ({
             onClick={onToggle}
             aria-label={t('common.close')}
           >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M6 6l12 12M18 6 6 18" />
-            </svg>
+            ×
           </button>
         </div>
         <div className="coach-chat-panel" role="region" aria-live="polite">
@@ -238,7 +235,6 @@ const CoachChat: FC<CoachChatProps> = ({
               if (message.thinking) {
                 return (
                   <div key={message.id} className="coach-chat-msg ai thinking">
-                    <CoachByline />
                     <ThinkingCounter
                       label={t('workout.coachThinking')}
                       statusText={t('common.thinking')}
@@ -251,13 +247,8 @@ const CoachChat: FC<CoachChatProps> = ({
               return (
                 <div key={message.id} className={`coach-chat-msg ${message.variant}`}>
                   <div>
-                    {message.variant === 'ai' ? (
-                      <CoachByline label={showModelLabels ? message.modelLabel : undefined} timestamp={message.timestamp} />
-                    ) : null}
                     {message.variant === 'ai' && message.html ? (
-                      <div className="message-body" dangerouslySetInnerHTML={{ __html: message.html }}></div>
-                    ) : message.variant === 'ai' ? (
-                      <div className="message-body"><p>{message.text}</p></div>
+                      <div dangerouslySetInnerHTML={{ __html: message.html }}></div>
                     ) : (
                       <p>{message.text}</p>
                     )}
@@ -265,6 +256,7 @@ const CoachChat: FC<CoachChatProps> = ({
                       <ReplyElapsed
                         label={t('chat.repliedIn')}
                         seconds={message.replyElapsedSeconds}
+                        modelLabel={showModelLabels ? message.modelLabel : undefined}
                       />
                     ) : null}
                   </div>
@@ -309,7 +301,7 @@ const CoachChat: FC<CoachChatProps> = ({
               autoComplete="off"
               spellCheck={false}
             />
-            <button type="button" className="coach-chat-send" onClick={handleSend} disabled={!hasDraft}>
+            <button type="button" onClick={handleSend} disabled={!hasDraft}>
               {t('common.send')}
             </button>
           </div>

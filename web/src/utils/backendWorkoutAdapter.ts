@@ -195,8 +195,8 @@ const exerciseSummary = (sets: BackendWorkoutSet[], metric: WorkoutExercise['met
     ? formatRange(firstTarget?.duration_seconds)
     : formatRange(firstTarget?.reps)
   const weightValue = formatLoad(firstTarget?.load)
-  const base = `${sets.length} × ${metricValue ?? '-'}`
-  return weightValue ? `${base} · ${weightValue}` : base
+  const base = `${sets.length} sets x ${metricValue ?? '-'}`
+  return weightValue ? `${base} - ${weightValue}` : base
 }
 
 const summarizeActuals = (sets: BackendWorkoutSet[], name: string, metric: WorkoutExercise['metric']): WorkoutSessionExerciseSummary => {

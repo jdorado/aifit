@@ -121,7 +121,7 @@ const AddExerciseSheet: FC<Props> = ({ onLoad, onAdd, onClose }) => {
           placeholder={t('workout.addExerciseSearch')} aria-label={t('workout.addExerciseSearch')} />
       </div>
       <div className="exercise-history-content" aria-busy={loading || addingId !== null}>
-        {loading ? <p className="exercise-history-empty is-loading" role="status">{t('common.loading')}</p> : null}
+        {loading ? <p className="exercise-history-empty" role="status">{t('common.loading')}</p> : null}
         {!loading && error ? (
           <div className="exercise-history-empty" role="alert">
             <p>{error}</p>
@@ -140,13 +140,12 @@ const AddExerciseSheet: FC<Props> = ({ onLoad, onAdd, onClose }) => {
                 aria-label={candidate.already_added ? `${candidate.name}: ${t('workout.addExerciseAlreadyAdded')}` : `${t('workout.addExerciseSelect', { name: candidate.name })}${candidate.fit ? ` · ${t('workout.fitScore', { score: candidate.fit.score })}` : ''}`}>
                 <span className="exercise-history-row-head">
                   <strong>{candidate.name}</strong>
-                  <span className={`add-exercise-action${candidate.already_added ? ' is-added' : addingId === candidate.exercise_id ? ' is-saving' : ''}`}>{candidate.already_added ? t('workout.addExerciseAlreadyAdded') : addingId === candidate.exercise_id ? t('workout.addExerciseSaving') : '+'}</span>
+                  <span>{candidate.already_added ? t('workout.addExerciseAlreadyAdded') : addingId === candidate.exercise_id ? t('workout.addExerciseSaving') : '+'}</span>
                 </span>
                 {candidate.fit ? <ExerciseFitRating fit={candidate.fit} /> : null}
                 <span className="exercise-history-metrics">
                   <span>{t('workout.addExerciseSets', { count: candidate.sets })} · {candidate.target_summary}</span>
                   {candidate.equipment_kind ? <span>{candidate.equipment_kind.replace(/_/g, ' ')}</span> : null}
-                  {candidate.primary_muscles.length ? <span>{candidate.primary_muscles.map((muscle) => muscle.replace(/_/g, ' ')).join(', ')}</span> : null}
                 </span>
                 <span className="add-exercise-source">{candidate.day_title} · {candidate.section_title}</span>
               </button>
