@@ -400,12 +400,16 @@ def public_turn_from_snapshot(run_id: str, request_id: str, snapshot: dict) -> d
     if not isinstance(status, str):
         raise HTTPException(502, "Ez returned an invalid run status.")
     messages = validated_messages(snapshot.get("messages", []))
+    missing_reply = status == "completed" and not messages
     result: dict[str, Any] = {"job_id": run_id, "request_id": request_id,
-                              "status": "complete" if status == "completed" else status, "messages": messages}
+                              "status": "failed" if missing_reply else "complete" if status == "completed" else status,
+                              "messages": messages}
     if messages:
         result["reply"] = messages[-1]["text"]
     if snapshot.get("error"):
         result["error"] = snapshot["error"]
+    elif missing_reply:
+        result["error"] = "Your coach finished without delivering a reply."
     preset = validated_preset(snapshot.get("preset"))
     if preset:
         result["preset"] = preset
