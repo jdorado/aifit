@@ -2952,17 +2952,33 @@ const App = () => {
     setWorkoutSavePending(true)
     const saving = workoutWriteQueueRef.current.enqueue(ownerKey, {
       run: async () => {
-        const headers = { 'Content-Type': 'application/json', ...(await getPrivyAuthHeaders()) }
-        if (workoutWriteScopeRef.current !== scope) throw new Error('Workout owner changed')
-        const revision = workoutRevisionByOwnerDateRef.current[ownerKey]
-        if (!revision) throw new Error('Workout needs a refresh')
-        const response = await apiFetch(url, {
-          method, headers,
-          body: JSON.stringify({ ...body, expected_revision: revision, request_id: requestId }),
-          signal: AbortSignal.timeout(15000),
-        })
-        if (!response.ok) throw new Error(`Workout save failed (${response.status})`)
-        const receipt = await response.json() as BackendWorkoutReceipt
+        // A lost connection (phone locked, app backgrounded, gateway restart)
+        // says nothing about whether the write committed. Resend the identical
+        // request: the API replays its stored receipt for this request_id, so
+        // the edit applies exactly once and the local paint is kept.
+        let payload: string | null = null
+        let receipt: BackendWorkoutReceipt | null = null
+        for (let retryDelay = 1000; !receipt; retryDelay = Math.min(retryDelay * 2, 10_000)) {
+          const headers = { 'Content-Type': 'application/json', ...(await getPrivyAuthHeaders()) }
+          if (workoutWriteScopeRef.current !== scope) throw new Error('Workout owner changed')
+          if (!payload) {
+            const revision = workoutRevisionByOwnerDateRef.current[ownerKey]
+            if (!revision) throw new Error('Workout needs a refresh')
+            payload = JSON.stringify({ ...body, expected_revision: revision, request_id: requestId })
+          }
+          try {
+            const response = await apiFetch(url, { method, headers, body: payload, signal: AbortSignal.timeout(15000) })
+            if (![408, 429, 502, 503, 504].includes(response.status)) {
+              if (!response.ok) throw new Error(`Workout save failed (${response.status})`)
+              receipt = await response.json() as BackendWorkoutReceipt
+            }
+          } catch (error) {
+            if (!(error instanceof TypeError) && !(error instanceof DOMException && ['AbortError', 'TimeoutError', 'NetworkError'].includes(error.name))) {
+              throw error
+            }
+          }
+          if (!receipt) await new Promise((resolve) => setTimeout(resolve, retryDelay))
+        }
         const nextRevision = receipt.revision ?? receipt.workout?.revision
         if (!nextRevision && receipt.workout !== null) throw new Error('Workout save returned no revision')
         if (nextRevision) workoutRevisionByOwnerDateRef.current[ownerKey] = nextRevision
@@ -2970,8 +2986,8 @@ const App = () => {
       },
       rollback,
       onError: (error) => {
-        // A lost response may still have committed. Invalidate and read back;
-        // never retry a stale payload over a coach/other tab's changes.
+        // The server rejected the write (stale revision, validation). Invalidate
+        // and read back; never resend it over a coach/other tab's changes.
         delete workoutRevisionByOwnerDateRef.current[ownerKey]
         console.warn('Workout save failed:', error)
         if (workoutWriteScopeRef.current === scope) setWorkoutSaveError(true)

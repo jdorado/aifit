@@ -76,14 +76,39 @@ async function main() {
   await h.reply(0)
   await Promise.all([todaySave, tomorrowSave])
 
-  for (const failure of [409, 500, 'network']) {
+  // Locking the phone mid-save drops the request. Resend it unchanged (the API
+  // replays its receipt for the same request_id) instead of undoing the sets.
+  for (const lost of ['network', 'timeout', 503]) {
+    h = harness({ setTimeout: fn => queueMicrotask(fn) })
+    const rollback = []
+    const a = h.enqueue('workout', 'today', 'owner:today', '/sets/a', 'PATCH', { actual: { reps: 10 } }, () => rollback.push('a'))
+    const b = h.enqueue('workout', 'today', 'owner:today', '/sets/b', 'PATCH', { actual: { reps: 8 } }, () => rollback.push('b'))
+    await tick()
+    if (lost === 'network') h.requests[0].reject(new TypeError('Load failed'))
+    else if (lost === 'timeout') h.requests[0].reject(new DOMException('timed out', 'TimeoutError'))
+    else await h.reply(0, lost)
+    await tick()
+    assert.equal(h.requests.length, 2, `a ${lost} save is resent before later edits`)
+    assert.deepEqual(h.requests[1].body, h.requests[0].body, 'resent unchanged: same request_id and expected_revision')
+    assert.equal(h.pending, true, 'the edit stays pending while the connection recovers')
+    await h.reply(1)
+    assert.equal(h.requests[2].body.expected_revision, 'r3')
+    await h.reply(2)
+    assert.deepEqual(await Promise.all([a, b]), [true, true])
+    assert.deepEqual(rollback, [], 'a lost connection never undoes logged sets')
+    assert.equal(h.errors.length, 0)
+    assert.equal(h.refreshes.length, 0)
+    assert.equal(h.pending, false)
+  }
+
+  for (const failure of [409, 500, 'error']) {
     h = harness()
     const rollback = []
     const a = h.enqueue('workout', 'today', 'owner:today', '/sets/a', 'PATCH', {}, () => rollback.push('a'))
     const b = h.enqueue('workout', 'today', 'owner:today', '/sets/b', 'PATCH', {}, () => rollback.push('b'))
     const c = h.enqueue('workout', 'today', 'owner:today', '/sets/c', 'PATCH', {}, () => rollback.push('c'))
     await tick()
-    if (failure === 'network') h.requests[0].reject(new Error('offline'))
+    if (failure === 'error') h.requests[0].reject(new Error('unexpected'))
     else await h.reply(0, failure)
     assert.deepEqual(await Promise.all([a, b, c]), [false, false, false])
     assert.deepEqual(rollback, ['c', 'b', 'a'], 'rollback unwinds dependent optimistic edits in reverse order')
@@ -103,6 +128,6 @@ async function main() {
   assert.equal(reverted, true)
   assert.equal(h.errors.length, 0, 'another owner must not receive this error')
   assert.equal(h.refreshes.length, 0, 'another owner must not receive this workout')
-  console.log('workout async writes smoke passed: serial revisions, target/log/undo ordering, snapshots, failure rollback, owner isolation')
+  console.log('workout async writes smoke passed: serial revisions, target/log/undo ordering, snapshots, lost-connection resend, failure rollback, owner isolation')
 }
 main().catch(error => { console.error(error); process.exitCode = 1 })

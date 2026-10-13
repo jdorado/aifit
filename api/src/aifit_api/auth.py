@@ -31,6 +31,9 @@ _EPHEMERAL_CAPABILITY_SECRET = secrets.token_urlsafe(32)
 _ephemeral_warned = False
 
 _key_cache: dict[str, Any] = {"value": None, "expires": 0.0}
+# Privy access tokens carry no email, so every request would otherwise call
+# Privy's user API before touching the database.
+_email_cache: dict[str, tuple[str, float]] = {}
 
 
 @dataclass(frozen=True)
@@ -147,6 +150,9 @@ async def _verification_key() -> str:
 
 
 async def _verified_email(subject: str) -> str | None:
+    cached = _email_cache.get(subject)
+    if cached and cached[1] > time.time():
+        return cached[0]
     try:
         async with httpx.AsyncClient(timeout=8) as client:
             response = await client.get(
@@ -161,7 +167,9 @@ async def _verified_email(subject: str) -> str | None:
             for field in ("email", "address"):
                 value = account.get(field)
                 if isinstance(value, str) and "@" in value:
-                    return value.strip().lower()
+                    email = value.strip().lower()
+                    _email_cache[subject] = (email, time.time() + 3600)
+                    return email
     except (httpx.HTTPError, AttributeError, TypeError):
         return None
     return None

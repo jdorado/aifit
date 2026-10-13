@@ -1,5 +1,6 @@
 import time
 
+import httpx
 import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -42,6 +43,24 @@ def _claims(**overrides) -> dict:
 async def test_privy_token_returns_real_subject(privy_key):
     identity = await auth.require_identity(f"Bearer {_token(_claims(), privy_key)}")
     assert identity.subject == "did:privy:owner"
+
+
+@pytest.mark.asyncio
+async def test_email_lookup_is_cached_across_requests(privy_key, monkeypatch):
+    lookups = []
+
+    def respond(request):
+        lookups.append(request.url.path)
+        return httpx.Response(200, json={"linked_accounts": [{"type": "email", "address": "Owner@Example.com"}]})
+
+    original_client = httpx.AsyncClient
+    monkeypatch.setattr(auth.httpx, "AsyncClient", lambda **kwargs: original_client(transport=httpx.MockTransport(respond), **kwargs))
+    monkeypatch.setattr(auth, "_email_cache", {})
+    token = _token(_claims(email=None), privy_key)
+    for _ in range(3):
+        identity = await auth.require_identity(f"Bearer {token}")
+        assert identity.email == "owner@example.com"
+    assert len(lookups) == 1
 
 
 @pytest.mark.asyncio
