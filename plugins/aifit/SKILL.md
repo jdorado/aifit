@@ -485,9 +485,17 @@ a swap: generate returns any existing day unchanged, including its preserved
 logs. If the required workout context is absent, stop with structured feedback;
 never invent a candidate or turn a swap into an exception day.
 
-For an exception-day or legacy item whose swap read returns
-`blueprint_slot_missing`, a concrete compatible replacement does not require a
-whole-day override. Read the requested catalog exercise and relevant history,
+A newer revision of the same blueprint does not require rebuilding a saved day:
+swap uses the current alternatives for the same slot and movement pattern.
+`stale_blueprint` means the supplied expected revision is stale, so its choices
+must be read again. Removed days/slots or a different blueprint have no usable
+in-slot swap. `workout substitute` is independent of blueprint lineage and can
+replace one compatible exercise's exact open-set count, including in mini-chat;
+it does not clear, regenerate or override the rest of the day.
+
+For an item with no usable in-slot alternative, a concrete compatible replacement
+does not require a whole-day override. Read the requested catalog exercise and
+relevant history,
 then use `workout substitute` on the current exercise instance. Supply an
 explicit `set_count` equal to its open sets and an appropriate target for the
 new equipment; never transfer the old machine's load. The API atomically keeps
