@@ -669,3 +669,35 @@ def async_value(value):
     async def result():
         return value
     return result()
+
+
+@pytest.mark.asyncio
+async def test_completed_native_chat_without_delivery_is_a_visible_failure(monkeypatch, identity):
+    monkeypatch.setattr(main, "chat_account", lambda *_args: async_value({"account_id": "acc_1"}))
+    monkeypatch.setattr(main, "verified_binding", lambda *_args: async_value({"bindingId": "binding_1"}))
+    calls = []
+    async def ez_call(_binding, method, path, body=None):
+        calls.append((method, path))
+        return {"id": "run_no_reply", "status": "completed", "messages": [],
+                "preset": {"id": "flash", "name": "Antigravity test", "cli": "agy", "model": "gemini-3.8-flash-medium", "effort": "medium"}}
+    monkeypatch.setattr(main, "ez_call", ez_call)
+    result = await main.chat_job("run_no_reply", identity.subject, identity)
+    assert result["status"] == "failed"
+    assert result["error"] == "Your coach finished without delivering a reply."
+    assert result["messages"] == []
+    assert result["preset"]["cli"] == "agy"
+    assert calls == [("GET", "/v1/runs/run_no_reply")]
+
+
+@pytest.mark.parametrize("status", ["queued", "running", "cancelled"])
+def test_no_reply_does_not_change_noncompleted_turn_status(status):
+    result = main.public_turn_from_snapshot("run_1", "request_1", {"status": status, "messages": []})
+    assert result["status"] == status
+    assert "error" not in result
+
+
+def test_delivered_chat_keeps_completed_status():
+    result = main.public_turn_from_snapshot("run_1", "request_1", {"status": "completed", "messages": [{"id": "m1", "text": "hi"}]})
+    assert result["status"] == "complete"
+    assert result["reply"] == "hi"
+    assert "error" not in result
