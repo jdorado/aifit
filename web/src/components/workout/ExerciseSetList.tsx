@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState, type FC, type ReactNode, type FocusEvent, type MouseEvent as ReactMouseEvent, type TouchEvent } from 'react'
+import { useCallback, useRef, useState, type FC, type ReactNode, type ChangeEvent, type FocusEvent, type MouseEvent as ReactMouseEvent, type TouchEvent } from 'react'
 import { useI18n } from '../../i18n'
 import type { WorkoutExercise } from '../../data/testWorkout'
 import type { HoldTimerState, SetState } from '../../types/app'
@@ -50,6 +50,72 @@ type ExerciseSetListProps = {
   onLogHoldTimerSet: () => void
 }
 
+type StepperFieldProps = {
+  field: 'weight' | 'metric'
+  label: string
+  value: string
+  placeholder: string
+  inputMode: 'numeric' | 'decimal'
+  stepDownLabel: string
+  stepUpLabel: string
+  inputId: string
+  onFocus: (event: FocusEvent<HTMLInputElement>) => void
+  onBlur?: () => void
+  onChange: (event: ChangeEvent<HTMLInputElement>) => void
+  onStep: (direction: 1 | -1) => void
+}
+
+const StepperField: FC<StepperFieldProps> = ({
+  field, label, value, placeholder, inputMode, stepDownLabel, stepUpLabel, inputId, onFocus, onBlur, onChange, onStep,
+}) => (
+  <div className="hero-field" data-field-kind={field}>
+    <label className="hero-field-label" htmlFor={inputId}>{label}</label>
+    <div className="hero-stepper">
+      <button className="hero-step" type="button" aria-label={stepDownLabel} title={stepDownLabel} onClick={() => onStep(-1)}>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12h12" /></svg>
+      </button>
+      <input
+        id={inputId}
+        type="text"
+        data-field={field}
+        placeholder={placeholder}
+        value={value}
+        inputMode={inputMode}
+        onFocus={onFocus}
+        onBlur={onBlur}
+        onChange={onChange}
+      />
+      <button className="hero-step" type="button" aria-label={stepUpLabel} title={stepUpLabel} onClick={() => onStep(1)}>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12h12M12 6v12" /></svg>
+      </button>
+    </div>
+  </div>
+)
+
+const formatStepNumber = (value: number) => (
+  Number.isInteger(value) ? String(value) : String(Math.round(value * 100) / 100)
+)
+
+/** Next value for a -/+ stepper, or null when the text is not a plain number with an optional unit. */
+const stepFieldValue = (
+  field: 'weight' | 'metric',
+  current: string,
+  fallback: string,
+  isTime: boolean,
+  direction: 1 | -1,
+): string | null => {
+  const source = current.trim() || fallback.trim() || '0'
+  const match = /^(\d+(?:[.,]\d+)?)\s*([a-zA-Z]*)\s*(?:[-\u2013].*)?$/.exec(source)
+  if (!match) return null
+  const amount = Number(match[1].replace(',', '.'))
+  if (!Number.isFinite(amount)) return null
+  const unit = match[2].toLowerCase()
+  const step = field === 'weight' ? (unit.startsWith('lb') ? 5 : 2.5) : (isTime ? 5 : 1)
+  const next = Math.max(0, amount + step * direction)
+  if (field === 'weight') return `${formatStepNumber(next)}${unit || 'kg'}`
+  return `${formatStepNumber(next)}${isTime ? (unit || 's') : ''}`
+}
+
 const ExerciseSetList: FC<ExerciseSetListProps> = ({
   exercise,
   progressionFeedback,
@@ -86,6 +152,24 @@ const ExerciseSetList: FC<ExerciseSetListProps> = ({
       }
     })
   }, [])
+
+  const commitTimers = useRef<Record<string, number>>({})
+  const stepSetField = useCallback((
+    setIndex: number,
+    field: 'weight' | 'metric',
+    current: string,
+    fallback: string,
+    direction: 1 | -1,
+    options: { propagate: boolean, commit: boolean },
+  ) => {
+    const next = stepFieldValue(field, current, fallback, exercise.metric === 'time', direction)
+    if (next === null) return
+    onUpdateSetField(exercise.id, setIndex, field, next, options.propagate)
+    if (!options.commit || !canEditPlan) return
+    const key = `${exercise.id}:${setIndex}:${field}`
+    window.clearTimeout(commitTimers.current[key])
+    commitTimers.current[key] = window.setTimeout(() => onCommitSetTarget(exercise.id, setIndex, field), 450)
+  }, [canEditPlan, exercise.id, exercise.metric, onCommitSetTarget, onUpdateSetField])
 
   const handleTouchStart = (index: number) => (event: TouchEvent<HTMLDivElement>) => {
     if (!canLogDay) return
@@ -279,33 +363,35 @@ const ExerciseSetList: FC<ExerciseSetListProps> = ({
                   ) : null}
 
                   <div className={`hero-inputs ${showWeightInput ? '' : 'single-col'}`}>
-                    <label>
-                      <span>{metricLabel}</span>
-                      <input
-                        type="text"
-                        data-field="metric"
-                        placeholder={metricPlaceholder}
-                        value={currentState.metric}
-                        inputMode="numeric"
-                        onFocus={handleSetInputFocus}
-                        onBlur={canEditPlan ? () => onCommitSetTarget(exercise.id, index, 'metric') : undefined}
-                        onChange={(event) => onUpdateSetField(exercise.id, index, 'metric', event.target.value, true)}
-                      />
-                    </label>
+                    <StepperField
+                      field="metric"
+                      label={metricLabel}
+                      value={currentState.metric}
+                      placeholder={metricPlaceholder}
+                      inputMode="numeric"
+                      inputId={`${exercise.id}-${index}-metric`}
+                      stepDownLabel={t('workout.stepDown', { field: metricLabel.toLowerCase() })}
+                      stepUpLabel={t('workout.stepUp', { field: metricLabel.toLowerCase() })}
+                      onFocus={handleSetInputFocus}
+                      onBlur={canEditPlan ? () => onCommitSetTarget(exercise.id, index, 'metric') : undefined}
+                      onChange={(event) => onUpdateSetField(exercise.id, index, 'metric', event.target.value, true)}
+                      onStep={(direction) => stepSetField(index, 'metric', currentState.metric, targetMetricValue === '-' ? '' : targetMetricValue, direction, { propagate: true, commit: true })}
+                    />
                     {showWeightInput ? (
-                      <label>
-                        <span>{t('workout.weightLabel')}</span>
-                        <input
-                          type="text"
-                          data-field="weight"
-                          placeholder={weightPlaceholder}
-                          value={currentState.weight}
-                          inputMode="decimal"
-                          onFocus={handleSetInputFocus}
-                          onBlur={canEditPlan ? () => onCommitSetTarget(exercise.id, index, 'weight') : undefined}
-                          onChange={(event) => onUpdateSetField(exercise.id, index, 'weight', event.target.value, true)}
-                        />
-                      </label>
+                      <StepperField
+                        field="weight"
+                        label={t('workout.weightLabel')}
+                        value={currentState.weight}
+                        placeholder={weightPlaceholder}
+                        inputMode="decimal"
+                        inputId={`${exercise.id}-${index}-weight`}
+                        stepDownLabel={t('workout.stepDown', { field: t('workout.weightLabel').toLowerCase() })}
+                        stepUpLabel={t('workout.stepUp', { field: t('workout.weightLabel').toLowerCase() })}
+                        onFocus={handleSetInputFocus}
+                        onBlur={canEditPlan ? () => onCommitSetTarget(exercise.id, index, 'weight') : undefined}
+                        onChange={(event) => onUpdateSetField(exercise.id, index, 'weight', event.target.value, true)}
+                        onStep={(direction) => stepSetField(index, 'weight', currentState.weight, targetWeight, direction, { propagate: true, commit: true })}
+                      />
                     ) : null}
                   </div>
                 </div>
@@ -328,6 +414,7 @@ const ExerciseSetList: FC<ExerciseSetListProps> = ({
             const metricLabel = exercise.metric === 'time'
               ? t('workout.secondsLabel')
               : t('workout.repsLabel')
+            const hasWeightPlaceholder = targetWeightValue !== ''
 
             if (isEditing) {
               return (
@@ -346,32 +433,34 @@ const ExerciseSetList: FC<ExerciseSetListProps> = ({
                   {hasDropSet ? (
                     <div className="set-drop-set-note">{t('workout.dropSetWithValue', { value: dropSetInfo.label })}</div>
                   ) : null}
-                  <div className={`set-row-edit-inputs ${showWeightInput ? '' : 'single-col'}`}>
-                    <label>
-                      <span>{metricLabel}</span>
-                      <input
-                        type="text"
-                        data-field="metric"
-                        placeholder={metricPlaceholder}
-                        value={currentState.metric}
-                        inputMode="numeric"
-                        onFocus={handleSetInputFocus}
-                        onChange={(event) => onUpdateSetField(exercise.id, index, 'metric', event.target.value)}
-                      />
-                    </label>
+                  <div className={`set-row-edit-inputs hero-inputs ${showWeightInput ? '' : 'single-col'}`}>
+                    <StepperField
+                      field="metric"
+                      label={metricLabel}
+                      value={currentState.metric}
+                      placeholder={metricPlaceholder}
+                      inputMode="numeric"
+                      inputId={`${exercise.id}-${index}-edit-metric`}
+                      stepDownLabel={t('workout.stepDown', { field: metricLabel.toLowerCase() })}
+                      stepUpLabel={t('workout.stepUp', { field: metricLabel.toLowerCase() })}
+                      onFocus={handleSetInputFocus}
+                      onChange={(event) => onUpdateSetField(exercise.id, index, 'metric', event.target.value)}
+                      onStep={(direction) => stepSetField(index, 'metric', currentState.metric, metricPlaceholderValue === '-' ? '' : metricPlaceholderValue, direction, { propagate: false, commit: false })}
+                    />
                     {showWeightInput ? (
-                      <label>
-                        <span>{t('workout.weightLabel')}</span>
-                        <input
-                          type="text"
-                          data-field="weight"
-                          placeholder={weightPlaceholder}
-                          value={currentState.weight}
-                          inputMode="decimal"
-                          onFocus={handleSetInputFocus}
-                          onChange={(event) => onUpdateSetField(exercise.id, index, 'weight', event.target.value)}
-                        />
-                      </label>
+                      <StepperField
+                        field="weight"
+                        label={t('workout.weightLabel')}
+                        value={currentState.weight}
+                        placeholder={weightPlaceholder}
+                        inputMode="decimal"
+                        inputId={`${exercise.id}-${index}-edit-weight`}
+                        stepDownLabel={t('workout.stepDown', { field: t('workout.weightLabel').toLowerCase() })}
+                        stepUpLabel={t('workout.stepUp', { field: t('workout.weightLabel').toLowerCase() })}
+                        onFocus={handleSetInputFocus}
+                        onChange={(event) => onUpdateSetField(exercise.id, index, 'weight', event.target.value)}
+                        onStep={(direction) => stepSetField(index, 'weight', currentState.weight, targetWeightValue, direction, { propagate: false, commit: false })}
+                      />
                     ) : null}
                   </div>
                 </div>
@@ -388,7 +477,7 @@ const ExerciseSetList: FC<ExerciseSetListProps> = ({
                 ? `${metricResult} × ${weightResult}`
                 : metricResult
             } else {
-              resultText = t('workout.pending')
+              resultText = [metricPlaceholder, hasWeightPlaceholder ? weightPlaceholder : ''].filter((part) => part && part !== '-').join(' × ') || t('workout.pending')
             }
 
             const actionsCount = currentState.done ? (isSkipped ? 1 : 2) : 2
@@ -407,6 +496,7 @@ const ExerciseSetList: FC<ExerciseSetListProps> = ({
                   <span className="set-num">{displayLabel}</span>
                   <div className="set-row-info">
                     <span className="set-prev">{resultText}</span>
+                    {statusClass === 'queued' ? <span className="set-queued-tag">{t('workout.pending')}</span> : null}
                     {hasDropSet ? (
                       <span className="set-drop-set">{t('workout.dropSetWithValue', { value: dropSetInfo.label })}</span>
                     ) : null}

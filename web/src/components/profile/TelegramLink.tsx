@@ -174,7 +174,14 @@ export default function TelegramLink({ apiBase, getHeaders }: {
     : null
 
   return (
-    <section className="profile-telegram" aria-label={t('profile.telegramLabel')}>
+    <section className="profile-telegram pf-row pf-tg" aria-label={t('profile.telegramLabel')} data-state={loading ? 'loading' : connection?.state ?? 'unavailable'}>
+      <div className="pf-tg-head">
+      <span className="pf-tg-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M21 4L3 11l6 2.2L11 20l3.2-4.4L19 19z" />
+          <path d="M9 13.2L21 4" />
+        </svg>
+      </span>
       <div className="profile-telegram-copy">
         <p className="profile-telegram-title">{t('profile.telegramLabel')}</p>
         <p className="profile-telegram-note">
@@ -187,16 +194,16 @@ export default function TelegramLink({ apiBase, getHeaders }: {
         {message ? <p className="profile-telegram-message" role="status">{message}</p> : null}
       </div>
       <div className="profile-telegram-actions">
-        {loading ? <span className="profile-telegram-status">{t('common.loading')}</span> : null}
-        {connected ? <span className="profile-telegram-status profile-telegram-status--connected">{t('profile.telegramConnectedStatus')}</span> : null}
+        {loading ? <span className="profile-telegram-status pf-status">{t('common.loading')}</span> : null}
+        {connected ? <span className="profile-telegram-status profile-telegram-status--connected pf-status pf-status--active">{t('profile.telegramConnectedStatus')}</span> : null}
         {!loading && connection?.state === 'ready' ? (
-          <button className="profile-telegram-connect" type="button" disabled={busy} onClick={() => void connect()}>
+          <button className="profile-telegram-connect pf-btn pf-btn--primary" type="button" disabled={busy} onClick={() => void connect()}>
             {busy ? t('profile.telegramConnecting') : t('profile.telegramConnect')}
           </button>
         ) : null}
         {!loading && !connected && connection?.state === 'link' && connection.connect_url ? (
           <a
-            className="profile-telegram-open"
+            className="profile-telegram-open pf-btn pf-btn--primary"
             href={connection.connect_url}
             target="_blank"
             rel="noreferrer"
@@ -214,6 +221,7 @@ export default function TelegramLink({ apiBase, getHeaders }: {
             {t('profile.telegramOpen')}
           </a>
         ) : null}
+      </div>
       </div>
       {!loading && needsBot ? (
         <div className="profile-telegram-bot">
@@ -235,7 +243,7 @@ export default function TelegramLink({ apiBase, getHeaders }: {
               disabled={busy}
               onChange={(event) => setBotToken(event.target.value)}
             />
-            <button className="profile-telegram-connect" type="button" disabled={busy} onClick={() => void addBot()}>
+            <button className="profile-telegram-connect pf-btn pf-btn--primary" type="button" disabled={busy} onClick={() => void addBot()}>
               {busy ? t('profile.telegramAddingBot') : t('profile.telegramAddBot')}
             </button>
           </div>
@@ -243,7 +251,7 @@ export default function TelegramLink({ apiBase, getHeaders }: {
         </div>
       ) : null}
       {!loading && !connected && message && !connection?.connect_url && !needsBot ? (
-        <button className="profile-telegram-retry" type="button" onClick={retry}>{t('common.retry')}</button>
+        <button className="profile-telegram-retry pf-btn" type="button" onClick={retry}>{t('common.retry')}</button>
       ) : null}
     </section>
   )

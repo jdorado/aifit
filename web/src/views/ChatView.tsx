@@ -1,3 +1,4 @@
+import { useCallback, useRef } from 'react'
 import type { FC, RefObject } from 'react'
 import ChatComposer from '../components/chat/ChatComposer'
 import ChatHeader from '../components/chat/ChatHeader'
@@ -56,9 +57,21 @@ const ChatView: FC<ChatViewProps> = ({
   onScrollToBottom,
 }) => {
   const { t } = useI18n()
+  const viewRef = useRef<HTMLElement>(null)
+
+  // Starter prompts only pre-fill the composer; the athlete decides when to send.
+  const handlePickPrompt = useCallback((prompt: string) => {
+    onInputChange(prompt)
+    window.requestAnimationFrame(() => {
+      const textarea = viewRef.current?.querySelector<HTMLTextAreaElement>('.chat-input textarea')
+      if (!textarea) return
+      textarea.focus()
+      textarea.setSelectionRange(prompt.length, prompt.length)
+    })
+  }, [onInputChange])
 
   return (
-    <section className={`view ${active ? 'active' : ''}`} data-view="home">
+    <section ref={viewRef} className={`view ${active ? 'active' : ''}`} data-view="home">
       <section className="chat-window">
         <ChatHeader
           canStartNewChat={canStartNewChat && messages.length > 0 && !messages.some((message) => message.thinking)}
@@ -69,7 +82,7 @@ const ChatView: FC<ChatViewProps> = ({
           onStartNewChat={onClearChat}
         />
 
-        <div className="chat-body" ref={chatBodyRef} onScroll={onChatScroll}>
+        <div className="chat-body" ref={chatBodyRef} onScroll={onChatScroll} tabIndex={0}>
           <ChatMessages
             messages={messages}
             showModelLabels={showModelLabels}
@@ -78,6 +91,8 @@ const ChatView: FC<ChatViewProps> = ({
             authButtonTitle={authButtonTitle}
             authButtonLoading={authButtonLoading}
             onAuthClick={onAuthClick}
+            onPickPrompt={handlePickPrompt}
+            promptsDisabled={inputDisabled}
           />
         </div>
 

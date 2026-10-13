@@ -1,4 +1,5 @@
-@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Space+Grotesk:wght@400;500;700&display=swap');
+/* Legacy styles live in a cascade layer so the unlayered design system in src/design/ always wins. */
+@layer legacy {
 
 :root {
   color-scheme: dark;
@@ -11200,3 +11201,4 @@ body:has(.landing) {
 .exercise-fit-factors b { color: var(--aifit-ink); font-weight: 600; }
 .view[data-view="workout"] .detail-history-btn:disabled { opacity: .45; cursor: default; }
 @media (max-width: 380px) { .detail-header-actions { gap: 4px; } }
+}
