@@ -21,11 +21,9 @@ class ModelPolicy:
     privileged_subjects: frozenset[str]
     default: tuple[ModelChoice, ...]
     privileged: tuple[ModelChoice, ...]
-    subject_choices: dict[str, tuple[ModelChoice, ...]] = field(default_factory=dict)
 
     def choices_for(self, subject: str) -> frozenset[ModelChoice]:
-        base = self.privileged if subject in self.privileged_subjects else self.default
-        return frozenset((*base, *self.subject_choices.get(subject, ())))
+        return frozenset(self.privileged if subject in self.privileged_subjects else self.default)
 
 
 def _choice(value: Any) -> ModelChoice:
@@ -44,7 +42,7 @@ def _choice(value: Any) -> ModelChoice:
 
 def load_model_policy(path: str) -> ModelPolicy:
     value = json.loads(Path(path).read_text(encoding="utf-8"))
-    if not isinstance(value, dict) or not {"privileged_subjects", "default", "privileged"} <= set(value) or set(value) - {"privileged_subjects", "default", "privileged", "subject_choices"}:
+    if not isinstance(value, dict) or set(value) != {"privileged_subjects", "default", "privileged"}:
         raise ValueError("Model policy must contain privileged_subjects, default and privileged.")
     subjects = value["privileged_subjects"]
     if not isinstance(subjects, list) or not subjects or any(
@@ -64,21 +62,7 @@ def load_model_policy(path: str) -> ModelPolicy:
         groups[name] = choices
     if not set(groups["default"]).issubset(groups["privileged"]):
         raise ValueError("privileged choices must include every default choice.")
-    additions = value.get("subject_choices", {})
-    if not isinstance(additions, dict):
-        raise ValueError("subject_choices must map Privy subject IDs to additional model choices.")
-    subject_choices = {}
-    for subject, raw in additions.items():
-        if not isinstance(subject, str) or not subject.startswith("did:privy:") or not subject.removeprefix("did:privy:"):
-            raise ValueError("subject_choices requires Privy subject IDs.")
-        if not isinstance(raw, list) or not raw:
-            raise ValueError("Each subject_choices entry must contain additional model choices.")
-        choices = tuple(_choice(item) for item in raw)
-        base = groups["privileged"] if subject in subjects else groups["default"]
-        if len(set(choices)) != len(raw) or set(choices).intersection(base):
-            raise ValueError("subject_choices contains duplicate or existing model choices.")
-        subject_choices[subject] = choices
-    return ModelPolicy(frozenset(subjects), groups["default"], groups["privileged"], subject_choices)
+    return ModelPolicy(frozenset(subjects), groups["default"], groups["privileged"])
 
 
 @lru_cache(maxsize=1)

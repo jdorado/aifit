@@ -70,10 +70,7 @@ optional `label`, such as `Quick reply`, `Everyday help`, or `Detailed planning`
 When labeled choices are available, both chat pickers show those purposes.
 The backend policy owns their exact model and effort; the frontend displays and
 submits the selected choice without deciding which engine to use from a prompt.
-Unlabeled installations retain their existing model picker. The optional private
-`subject_choices` map adds choices for individual Privy subjects without changing
-the default or privileged groups, or any saved model selection. Entries must
-contain new choices rather than duplicates of that subject’s existing group.
+Unlabeled installations retain their existing model picker.
 
 Before authoring a blueprint or override, the coach can page the existing exercise
 catalog with `aifit exercise list` and reuse its IDs and revisions. Common names
