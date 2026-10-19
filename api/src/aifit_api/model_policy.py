@@ -114,14 +114,19 @@ def filter_control(value: dict, subject: str) -> dict:
         if choice.label:
             labels.setdefault((choice.cli, choice.model), {})[choice.effort] = choice.label
     models = []
+    labeled: set[tuple[str, str, str]] = set()
     for item in value["models"]:
         efforts = permitted_efforts.get((item["cli"], item.get("model", "")))
         if efforts:
             enabled_efforts = [effort for effort in item["efforts"] if effort in efforts]
             if enabled_efforts:
+                # Policy choices ignore provider, so Ez may list one labeled choice under
+                # several catalog entries; only the first carries the label to avoid repeats.
                 purpose_labels = {effort: label for effort, label in labels.get(
                     (item["cli"], item.get("model", "")), {}
-                ).items() if effort in enabled_efforts}
+                ).items() if effort in enabled_efforts
+                    and (item["cli"], item.get("model", ""), effort) not in labeled}
+                labeled.update((item["cli"], item.get("model", ""), effort) for effort in purpose_labels)
                 models.append({**item, "efforts": enabled_efforts,
                                **({"labels": purpose_labels} if purpose_labels else {})})
     presets = [item for item in value["presets"] if ModelChoice(

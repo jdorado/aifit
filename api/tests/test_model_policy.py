@@ -94,6 +94,22 @@ def test_purpose_label_preserves_authorization_and_native_efforts(tmp_path, monk
     assert all(item["cli"] != "codex" for item in model_policy.filter_control(value, OWNER)["models"])
 
 
+def test_purpose_label_is_not_repeated_across_providers_of_the_same_model(tmp_path, monkeypatch):
+    configure(tmp_path, monkeypatch)
+    path = tmp_path / "model-policy.json"
+    policy = json.loads(path.read_text())
+    policy["privileged"][1]["label"] = "Detailed planning"
+    path.write_text(json.dumps(policy))
+    value = control()
+    value["models"] += [
+        {**value["models"][1], "provider": "openrouter"},
+        {**value["models"][1], "provider": "openai"},
+    ]
+    models = [item for item in model_policy.filter_control(value, OWNER)["models"] if item["cli"] == "codex"]
+    assert [item.get("labels") for item in models] == [{"max": "Detailed planning"}, None, None]
+    model_policy.require_allowed(OWNER, LUNA["cli"], LUNA["model"], LUNA["effort"])
+
+
 def test_invalid_purpose_label_is_rejected(tmp_path, monkeypatch):
     configure(tmp_path, monkeypatch)
     path = tmp_path / "model-policy.json"
