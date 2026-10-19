@@ -113,20 +113,29 @@ def filter_control(value: dict, subject: str) -> dict:
         permitted_efforts.setdefault((choice.cli, choice.model), set()).add(choice.effort)
         if choice.label:
             labels.setdefault((choice.cli, choice.model), {})[choice.effort] = choice.label
+    selected = next((item for item in value["presets"] if item["id"] == value["selected_id"]), None)
+    label_owners: dict[tuple[str, str, str], int] = {}
+    for index, item in enumerate(value["models"]):
+        for effort in item["efforts"]:
+            key = (item["cli"], item.get("model", ""), effort)
+            is_selected = selected is not None and all(
+                item.get(field) == selected.get(field) for field in ("cli", "model", "provider")
+            ) and effort == selected.get("effort")
+            if key not in label_owners or is_selected:
+                label_owners[key] = index
     models = []
-    labeled: set[tuple[str, str, str]] = set()
-    for item in value["models"]:
+    for index, item in enumerate(value["models"]):
         efforts = permitted_efforts.get((item["cli"], item.get("model", "")))
         if efforts:
             enabled_efforts = [effort for effort in item["efforts"] if effort in efforts]
             if enabled_efforts:
                 # Policy choices ignore provider, so Ez may list one labeled choice under
-                # several catalog entries; only the first carries the label to avoid repeats.
+                # several catalog entries. Preserve the selected provider's label, or
+                # use the first entry, so the picker displays each purpose once.
                 purpose_labels = {effort: label for effort, label in labels.get(
                     (item["cli"], item.get("model", "")), {}
                 ).items() if effort in enabled_efforts
-                    and (item["cli"], item.get("model", ""), effort) not in labeled}
-                labeled.update((item["cli"], item.get("model", ""), effort) for effort in purpose_labels)
+                    and label_owners[(item["cli"], item.get("model", ""), effort)] == index}
                 models.append({**item, "efforts": enabled_efforts,
                                **({"labels": purpose_labels} if purpose_labels else {})})
     presets = [item for item in value["presets"] if ModelChoice(
