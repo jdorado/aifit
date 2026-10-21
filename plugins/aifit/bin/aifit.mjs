@@ -181,10 +181,18 @@ function pluginApplicationContext() {
   return value.scope === MINI_CHAT_SCOPE ? value : null;
 }
 
-function enforceMiniChatOperation(context, area, action) {
+function enforceMiniChatOperation(context, area, action, rest) {
   if (!context) return;
+  // A new catalog definition is additive: the API refuses an existing ID
+  // without its revision, so mini-chat can add a missing exercise for its
+  // target's substitution but never revise one other records already use.
+  if (area === 'exercise' && action === 'create' && rest.includes('--expected-revision')) {
+    throw new Error(
+      'Mini-chat can add a new catalog exercise but cannot revise an existing one. ' +
+      'Reuse its current ID and revision, or use main chat to revise the definition.',
+    );
+  }
   const blocked = (
-    (area === 'exercise' && action === 'create') ||
     (area === 'blueprint' && ['draft', 'solidify'].includes(action)) ||
     (area === 'workout' && [
       'generate', 'copy', 'override', 'clear', 'add-exercise',
@@ -381,7 +389,7 @@ async function main() {
     return;
   }
   const [area, action, ...rest] = args;
-  enforceMiniChatOperation(applicationContext, area, action);
+  enforceMiniChatOperation(applicationContext, area, action, rest);
   let result;
   if (area === 'exercise' && action === 'list') {
     const { values, positional } = parseArgs(rest, new Set(['--after', '--limit']));

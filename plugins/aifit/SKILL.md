@@ -105,15 +105,22 @@ briefly; do not browse packages, permissions, source, or old plans to guess it.
 
 The isolated AIFit command also receives the current mini-chat workout and
 exercise target as a non-secret execution guard. In mini-chat it rejects
-program/catalog writes and whole-day operations (`generate`, `copy`, `override`,
-`clear`, day notes, segment-wide edits, and adding another exercise), even if
-you select one by mistake. It also rejects workout/exercise primitives aimed at
-a different target. Use `workout swap` for a published in-slot replacement.
-When that target has no usable blueprint slot, use `workout substitute` for one
-same-pattern catalog exercise and exactly the target's open-set count. Use
+program writes, catalog revisions and whole-day operations (`generate`, `copy`,
+`override`, `clear`, day notes, segment-wide edits, and adding another exercise),
+even if you select one by mistake. It also rejects workout/exercise primitives
+aimed at a different target. Use `workout swap` for a published in-slot
+replacement. When that target has no usable blueprint slot, or the user names a
+specific same-pattern exercise outside the slot's published alternatives, use
+`workout substitute` for that one catalog exercise and exactly the target's
+open-set count. If the catalog has no equivalent (page `exercise list` to the
+end first), create the new definition with `exercise create` (no
+`--expected-revision`), keeping the target's `movement_pattern` when it is
+genuinely the same movement, then substitute with the returned ID and revision.
+A missing catalog entry is not a reason to refuse a compatible request. Use
 `add-set`/the other bounded primitives for the current instance. Move an
-explicit whole-day or program-authoring request to main chat; never work around
-the guard by composing destructive operations.
+explicit whole-day or program-authoring request, or a revision of an existing
+definition, to main chat; never work around the guard by composing destructive
+operations.
 
 ## Operation model
 
@@ -220,10 +227,10 @@ publish a blueprint; for today's scoped edit, use these workout primitives.
 
 ## Exercise definition artifact
 
-Before creating definitions for a blueprint or workout override, reuse matching
-exercise IDs from the active blueprint or `exercise list`. The list returns
-current IDs, revisions, names and movement/equipment fields; follow `next_after`
-with `--after` until you find the match or exhaust the catalog. Use `exercise show`
+Before creating definitions for a blueprint, workout override or substitution,
+reuse matching exercise IDs from the active blueprint or `exercise list`. The
+list returns current IDs, revisions, names and movement/equipment fields; follow
+`next_after` with `--after` until you find the match or exhaust the catalog. Use `exercise show`
 when technique details are needed to decide. History and progression group by
 exercise ID: a new ID for another wording splits the same exercise's records.
 
@@ -493,10 +500,11 @@ in-slot swap. `workout substitute` is independent of blueprint lineage and can
 replace one compatible exercise's exact open-set count, including in mini-chat;
 it does not clear, regenerate or override the rest of the day.
 
-For an item with no usable in-slot alternative, a concrete compatible replacement
-does not require a whole-day override. Read the requested catalog exercise and
-relevant history,
-then use `workout substitute` on the current exercise instance. Supply an
+For an item with no usable in-slot alternative, or a concrete compatible
+replacement the user asks for outside the slot's alternatives, no whole-day
+override is needed. Read the requested catalog exercise and relevant history
+(create the definition first when the catalog has no equivalent), then use
+`workout substitute` on the current exercise instance. Supply an
 explicit `set_count` equal to its open sets and an appropriate target for the
 new equipment; never transfer the old machine's load. The API atomically keeps
 logged sets, replaces only the open remainder, and rejects a different movement
