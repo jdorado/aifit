@@ -151,8 +151,8 @@ const ProfileView: FC<ProfileViewProps> = ({
   }, [apiBaseUrl, getHeaders, signedIn])
 
   useEffect(() => {
-    void loadLinks()
-  }, [loadLinks])
+    if (active) void loadLinks()
+  }, [active, loadLinks])
 
   const applyLink = useCallback((link: CoachLink) => {
     setTraineeLinks((prev) => {

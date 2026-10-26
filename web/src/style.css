@@ -213,7 +213,6 @@ body {
   display: none;
   flex-direction: column;
   min-height: 100%;
-  animation: fadeIn 0.4s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 .view.active {
@@ -10170,20 +10169,6 @@ body:has(.landing) {
     #eef5ff;
 }
 
-.landing--loading {
-  align-items: center;
-  justify-content: center;
-  gap: 18px;
-}
-
-.landing--loading p {
-  margin: 0;
-  color: rgba(7, 26, 53, 0.5);
-  font-size: 12px;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-}
-
 .landing-header {
   min-height: 108px;
   display: flex;
@@ -10201,8 +10186,7 @@ body:has(.landing) {
   letter-spacing: -0.04em;
 }
 
-.landing-logo-mark,
-.landing--loading .landing-logo-mark {
+.landing-logo-mark {
   width: 40px;
   height: 40px;
   border-radius: 10px;

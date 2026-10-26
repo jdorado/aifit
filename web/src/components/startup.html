@@ -1,0 +1,25 @@
+<style>
+  .aifit-startup, .aifit-startup * { box-sizing: border-box; }
+  .aifit-startup { position: fixed; inset: 0; display: grid; place-items: center; overflow: hidden; background: radial-gradient(circle at 12% 0%, #1f58ff20, transparent 55%), #eef5ff; color: #071a35; font-family: system-ui, -apple-system, sans-serif; }
+  .aifit-startup-content { display: flex; flex-direction: column; align-items: center; gap: 20px; padding: 32px; }
+  .aifit-startup-mark { position: relative; display: grid; place-items: center; width: 112px; height: 112px; }
+  .aifit-startup-mark::before { content: ''; position: absolute; inset: 0; border: 2px solid #1d4ed820; border-top: 3px solid #1d4ed8; border-radius: 50%; animation: aifit-startup-orbit 2.4s linear infinite; }
+  .aifit-startup img { display: block; width: 64px; height: 64px; border-radius: 16px; }
+  .aifit-startup strong { font-size: 26px; font-weight: 700; letter-spacing: -.04em; line-height: 1.2; }
+  .aifit-startup-dots { display: flex; gap: 6px; }
+  .aifit-startup-dots i { width: 4px; height: 4px; border-radius: 50%; background: #1d4ed8; animation: aifit-startup-pulse 1s ease-in-out infinite alternate; }
+  .aifit-startup-dots i:nth-child(2) { animation-delay: .2s; }
+  .aifit-startup-dots i:nth-child(3) { animation-delay: .4s; }
+  @keyframes aifit-startup-orbit { to { transform: rotate(360deg); } }
+  @keyframes aifit-startup-pulse { from { opacity: .25; } to { opacity: 1; } }
+  @media (prefers-reduced-motion: reduce) {
+    .aifit-startup *, .aifit-startup *::before { animation: none !important; }
+  }
+</style>
+<main class="aifit-startup" role="status" aria-label="Loading AIFit" aria-busy="true">
+  <div class="aifit-startup-content">
+    <div class="aifit-startup-mark"><img src="/aifit-blue-192.png" alt="AIFit logo" width="64" height="64"></div>
+    <strong>AIFit</strong>
+    <span class="aifit-startup-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+  </div>
+</main>

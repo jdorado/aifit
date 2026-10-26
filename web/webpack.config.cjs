@@ -5,6 +5,24 @@ const HtmlWebpackPlugin = require('html-webpack-plugin')
 const CopyWebpackPlugin = require('copy-webpack-plugin')
 const dotenv = require('dotenv')
 const repositoryRoot = path.resolve(__dirname, '..')
+const perBuildKeys = ['APP_VERSION', 'BUILD_TIME', 'VERCEL_GIT_COMMIT_SHA', 'VERCEL_GIT_COMMIT_TIMESTAMP', 'VERCEL_GIT_COMMIT_REF']
+
+// Keep these exclusions paired with the disabled external wallets in main.tsx.
+const unusedWalletPackages = [
+  '@coinbase/wallet-sdk',
+  '@walletconnect/ethereum-provider',
+  '@walletconnect/universal-provider',
+  '@solana/kit',
+  '@solana-program/system',
+  '@solana-program/token',
+  '@solana-program/token-2022',
+  '@solana-program/memo',
+  '@solana-program/compute-budget',
+]
+
+const originOf = (value) => {
+  try { return new URL(value).origin } catch { return '' }
+}
 
 const envKeys = [
   'PRIVY_APP_ID',
@@ -63,7 +81,7 @@ module.exports = (_env, argv) => {
     env.BUILD_TIME = new Date().toISOString()
   }
   const clientEnv = Object.fromEntries(
-    Object.entries(env).filter(([key]) => !['DEV_TLS_CERT', 'DEV_TLS_KEY'].includes(key))
+    Object.entries(env).filter(([key]) => !['DEV_TLS_CERT', 'DEV_TLS_KEY', ...perBuildKeys].includes(key))
   )
   const serviceWorkerBuildId = [
     env.VERCEL_GIT_COMMIT_SHA || env.APP_VERSION || 'build',
@@ -84,11 +102,21 @@ module.exports = (_env, argv) => {
       extensions: ['.tsx', '.ts', '.js'],
       alias: {
         '@farcaster/mini-app-solana': false,
+        ...Object.fromEntries(unusedWalletPackages.map((name) => [name, false])),
       },
     },
     target: ['web', 'es2020'],
+    optimization: mode === 'production' ? {
+      runtimeChunk: 'single',
+      splitChunks: {
+        cacheGroups: {
+          vendor: { test: /[\\/]node_modules[\\/]/, name: 'vendor', chunks: 'initial', enforce: true },
+        },
+      },
+    } : {},
     module: {
       rules: [
+        { test: /\.html$/, include: path.resolve(__dirname, 'src'), type: 'asset/source' },
         {
           test: /\.tsx?$/,
           use: {
@@ -115,6 +143,10 @@ module.exports = (_env, argv) => {
     plugins: [
       new HtmlWebpackPlugin({
         template: path.resolve(__dirname, 'public', 'index.html'),
+        templateParameters: {
+          preconnect: ['https://auth.privy.io', originOf(env.API_BASE_URL)].filter(Boolean),
+          startup: fs.readFileSync(path.resolve(__dirname, 'src/components/startup.html'), 'utf8'),
+        },
       }),
       new CopyWebpackPlugin({
         patterns: [
@@ -136,6 +168,7 @@ module.exports = (_env, argv) => {
       }),
       new webpack.DefinePlugin({
         'process.env': JSON.stringify(clientEnv),
+        ...Object.fromEntries(perBuildKeys.map((key) => [`process.env.${key}`, JSON.stringify(env[key])])),
       }),
     ],
     devServer: {
