@@ -1,6 +1,7 @@
 import { createI18n } from './i18n'
 import { normalizeLanguage } from './i18n/strings'
 import BrandMark from './components/ui/BrandMark'
+import StartupSplash from './components/StartupSplash'
 
 type LandingProps = {
   onLogin?: () => void
@@ -16,12 +17,7 @@ const Landing = ({ onLogin, loading = false, error = null }: LandingProps) => {
   const { t } = createI18n(landingLanguage())
 
   if (loading) {
-    return (
-      <main className="landing landing--loading">
-        <BrandMark alt={t('chat.logoAlt')} className="landing-logo-mark" />
-        <p>{t('auth.loading')}</p>
-      </main>
-    )
+    return <StartupSplash />
   }
 
   return (

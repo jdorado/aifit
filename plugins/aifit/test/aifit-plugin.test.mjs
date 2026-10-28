@@ -357,7 +357,6 @@ test('mini-chat rejects whole-day and program writes before any API call', async
     ['workout', 'clear', miniChatContext.workoutId, '--expected-revision', miniChatContext.expectedRevision, '--request-id', 'blocked-clear'],
     ['workout', 'add-exercise', miniChatContext.workoutId, '--input', '-', '--expected-revision', miniChatContext.expectedRevision, '--request-id', 'blocked-add'],
     ['blueprint', 'solidify', '--input', '-', '--request-id', 'blocked-blueprint'],
-    ['exercise', 'create', '--input', '-', '--request-id', 'blocked-exercise'],
   ]) {
     await withFetchOutput(async (fetchOutput) => {
       const result = await runCli(args, {
@@ -370,6 +369,53 @@ test('mini-chat rejects whole-day and program writes before any API call', async
       assert.equal(await fetchRequest(fetchOutput), null);
     });
   }
+});
+
+test('mini-chat adds a missing catalog exercise but cannot revise an existing one', async () => {
+  const definition = {
+    exercise_id: 'ex_smith_machine_calf_raise',
+    name: 'Smith machine calf raise',
+    movement_pattern: 'calf_raise',
+    primary_muscles: ['calves'],
+    secondary_muscles: [],
+    equipment_kind: 'smith_machine',
+    laterality: 'bilateral',
+    load_basis: 'total',
+    metrics: ['reps'],
+    instructions_md: 'Balls of the feet on a plate, full stretch, pause at the top.',
+  };
+  await withFetchOutput(async (fetchOutput) => {
+    const result = await runCli([
+      'exercise', 'create', '--input', '-', '--request-id', 'mini-new-exercise',
+    ], {
+      context: scopedContext,
+      fetchOutput,
+      input: JSON.stringify(definition),
+      pluginContext: miniChatContext,
+    });
+    assert.equal(result.code, 0, result.stderr);
+    const request = await fetchRequest(fetchOutput);
+    assert.equal(request.url, 'https://aifit.test/v1/agent/exercises');
+    assert.deepEqual(request.body, {
+      definition,
+      expected_revision: null,
+      request_id: 'mini-new-exercise',
+    });
+  });
+
+  await withFetchOutput(async (fetchOutput) => {
+    const result = await runCli([
+      'exercise', 'create', '--input', '-', '--request-id', 'mini-revise-exercise',
+      '--expected-revision', 'rev_abcdef0123456789abcdef0123456789',
+    ], {
+      context: scopedContext,
+      fetchOutput,
+      input: JSON.stringify(definition),
+      pluginContext: miniChatContext,
+    });
+    assert.match(errorPayload(result).error.message, /cannot revise an existing one/);
+    assert.equal(await fetchRequest(fetchOutput), null);
+  });
 });
 
 test('mini-chat permits only its current workout and exercise target', async () => {

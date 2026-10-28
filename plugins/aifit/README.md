@@ -76,9 +76,11 @@ records, and sequential composition rules.
 For an AIFit mini-chat run, the application passes the current workout and
 exercise instance through Ez's plugin-specific application context. The CLI
 uses that non-secret target only as an execution guard: it refuses whole-day,
-catalog, and blueprint writes and refuses exercise-scoped commands aimed at a
-different target. A scoped substitute atomically replaces only that instance's
-open sets and must keep their count and movement pattern. Main chat and ordinary
+catalog-revision, and blueprint writes and refuses exercise-scoped commands
+aimed at a different target. It still accepts a new catalog definition, so the
+coach can add a missing exercise the user asks for and substitute it. A scoped
+substitute atomically replaces only that instance's open sets and must keep
+their count and movement pattern. Main chat and ordinary
 native channels retain the complete surface. Channel context is never accepted
 as a credential or tenant selector.
 

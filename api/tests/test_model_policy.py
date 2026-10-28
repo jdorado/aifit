@@ -94,6 +94,31 @@ def test_purpose_label_preserves_authorization_and_native_efforts(tmp_path, monk
     assert all(item["cli"] != "codex" for item in model_policy.filter_control(value, OWNER)["models"])
 
 
+@pytest.mark.parametrize("selected_provider", [None, "openrouter", "openai", "unavailable"])
+def test_purpose_label_is_not_repeated_across_providers_of_the_same_model(tmp_path, monkeypatch, selected_provider):
+    configure(tmp_path, monkeypatch)
+    path = tmp_path / "model-policy.json"
+    policy = json.loads(path.read_text())
+    policy["privileged"][1]["label"] = "Detailed planning"
+    path.write_text(json.dumps(policy))
+    value = control()
+    if selected_provider is not None:
+        value["presets"][1]["provider"] = selected_provider
+    value["models"] += [
+        {**value["models"][1], "provider": "openrouter"},
+        {**value["models"][1], "provider": "openai"},
+    ]
+    filtered = model_policy.filter_control(value, OWNER)
+    models = [item for item in filtered["models"] if item["cli"] == "codex"]
+    representative = {None: 0, "openrouter": 1, "openai": 2, "unavailable": 0}[selected_provider]
+    assert [item.get("labels") for item in models] == [
+        {"max": "Detailed planning"} if index == representative else None for index in range(3)
+    ]
+    assert filtered["selected_id"] == "luna"
+    assert filtered["presets"] == value["presets"]
+    model_policy.require_allowed(OWNER, LUNA["cli"], LUNA["model"], LUNA["effort"])
+
+
 def test_invalid_purpose_label_is_rejected(tmp_path, monkeypatch):
     configure(tmp_path, monkeypatch)
     path = tmp_path / "model-policy.json"

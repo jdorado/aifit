@@ -75,6 +75,29 @@ async function main() {
     await send('Next request')
     assert.equal(admissions, 2, 'a completed request does not block the next turn')
   }
+  // Opening chat can fetch history while a new reply is already in progress.
+  const historyStart = source.indexOf('  const mergeBackendChatHistory = useCallback(')
+  const historyEnd = source.indexOf('  const logNextSet = useCallback(', historyStart)
+  const historyCode = ts.transpile(source.slice(historyStart, historyEnd), { target: ts.ScriptTarget.ES2020 })
+  let historyMessages = [], finishHistory
+  const historyEnv = {
+    useCallback: fn => fn, MAIN_CHAT_HISTORY_LIMIT: 40,
+    marked: { parse: () => new Promise(resolve => { finishHistory = resolve }) },
+    setMessages: update => { historyMessages = update(historyMessages) },
+  }
+  const mergeHistory = new Function(...Object.keys(historyEnv), `${historyCode}; return mergeBackendChatHistory`)(...Object.values(historyEnv))
+  const merging = mergeHistory([{ role: 'ai', content: 'Earlier reply', timestamp: new Date(Date.now() - 60000).toISOString() }])
+  historyMessages = [
+    { id: 'new-question', variant: 'user', text: 'New question', timestamp: Date.now() },
+    { id: 'pending-reply', variant: 'ai', text: '', thinking: true, timestamp: Date.now() },
+  ]
+  finishHistory('<p>Earlier reply</p>')
+  await merging
+  assert.ok(historyMessages.some(message => message.id === 'pending-reply' && message.thinking),
+    'a late history response must preserve the new reply in progress')
+  assert.ok(historyMessages.some(message => message.id === 'new-question'))
+  assert.ok(historyMessages.some(message => message.text === 'Earlier reply'))
+
   const queued = response({ job_id: 'existing-run', status: 'running' })
   const completed = response({ job_id: 'existing-run', status: 'complete', reply: 'Saved' })
   const brokenBody = { ...queued, json: async () => { throw new TypeError('Failed to fetch') } }

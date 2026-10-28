@@ -49,6 +49,10 @@ const app = (
     clientId={privyClientId || undefined}
     config={{
       loginMethods: ['google'],
+      externalWallets: {
+        disableAllExternalWallets: true,
+        walletConnect: { enabled: false },
+      },
       // AIFit uses Privy for sign-in only, with no wallet creation or wallet UI.
       embeddedWallets: {
         ethereum: { createOnLogin: 'off' },

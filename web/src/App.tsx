@@ -2004,7 +2004,7 @@ const App = () => {
         if (!duplicate) merged.push(incoming)
       })
       return merged
-        .filter((message) => !message.thinking && Boolean(message.text))
+        .filter((message) => message.thinking || Boolean(message.text))
         .sort((left, right) => (left.timestamp ?? 0) - (right.timestamp ?? 0))
         .slice(-MAIN_CHAT_HISTORY_LIMIT)
     })
@@ -4378,9 +4378,14 @@ const App = () => {
       setMiniModelControl(null)
       return
     }
+    if (activeView !== 'home' && !(activeView === 'workout' && activeEntryType === 'exercise')) return
     const load = () => {
-      refreshModelControl().catch((error) => console.warn('Ez model controls unavailable:', error))
-      refreshMiniModelControl().catch((error) => console.warn('Mini-chat model controls unavailable:', error))
+      if (activeView === 'home') {
+        refreshModelControl().catch((error) => console.warn('Ez model controls unavailable:', error))
+      }
+      if (activeView === 'workout' && activeEntryType === 'exercise') {
+        refreshMiniModelControl().catch((error) => console.warn('Mini-chat model controls unavailable:', error))
+      }
     }
     load()
     const onVisible = () => {
@@ -4392,7 +4397,7 @@ const App = () => {
       document.removeEventListener('visibilitychange', onVisible)
       window.removeEventListener('focus', onVisible)
     }
-  }, [isBackendHealthy, privyAuthenticated, privyReady, refreshModelControl, refreshMiniModelControl, setModelControl, setMiniModelControl])
+  }, [activeView, activeEntryType, isBackendHealthy, privyAuthenticated, privyReady, refreshModelControl, refreshMiniModelControl, setModelControl, setMiniModelControl])
 
   const handleAuthClick = useCallback(async () => {
     if (!privyReady) return
@@ -4651,20 +4656,23 @@ const App = () => {
     sessionReadyRef.current = true
     setServerSessionLoadSettledKey(authKey)
     setSessionLoading(false)
-    fetchBackendChatHistory(currentUserId).catch((error) => {
-      console.warn('Chat history load failed:', error)
-    })
   }, [
     coachActAsOwnerId,
     currentUserEmail,
     currentUserId,
-    fetchBackendChatHistory,
     isBackendHealthy,
     privyAuthenticated,
     privyReady,
     privySubjectId,
     privyUserId,
   ])
+
+  useEffect(() => {
+    if (activeView !== 'home' || !canQuerySavedWorkoutSessions || coachActAsLinkId) return
+    fetchBackendChatHistory(currentUserId).catch((error) => {
+      console.warn('Chat history load failed:', error)
+    })
+  }, [activeView, canQuerySavedWorkoutSessions, coachActAsLinkId, currentUserId, fetchBackendChatHistory])
 
   useEffect(() => {
     purgeLegacySessionCaches()
@@ -5021,7 +5029,7 @@ const App = () => {
             actAsLinkId={coachActAsLinkId}
           />
           <ProfileView
-            telegramControl={privyAuthenticated ? <TelegramLink apiBase={API_BASE_URL} getHeaders={getPrivyAuthHeaders} /> : undefined}
+            telegramControl={privyAuthenticated && activeView === 'profile' ? <TelegramLink apiBase={API_BASE_URL} getHeaders={getPrivyAuthHeaders} /> : undefined}
             active={activeView === 'profile'}
             language={profile.language}
             fontScale={profile.fontScale}
