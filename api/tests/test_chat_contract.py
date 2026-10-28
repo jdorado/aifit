@@ -679,13 +679,13 @@ async def test_completed_native_chat_without_delivery_is_a_visible_failure(monke
     async def ez_call(_binding, method, path, body=None):
         calls.append((method, path))
         return {"id": "run_no_reply", "status": "completed", "messages": [],
-                "preset": {"id": "flash", "name": "Antigravity test", "cli": "agy", "model": "gemini-3.8-flash-medium", "effort": "medium"}}
+                "preset": {"id": "luna", "name": "Luna", **LUNA}}
     monkeypatch.setattr(main, "ez_call", ez_call)
     result = await main.chat_job("run_no_reply", identity.subject, identity)
     assert result["status"] == "failed"
     assert result["error"] == "Your coach finished without delivering a reply."
     assert result["messages"] == []
-    assert result["preset"]["cli"] == "agy"
+    assert result["preset"]["cli"] == LUNA["cli"]
     assert calls == [("GET", "/v1/runs/run_no_reply")]
 
 
