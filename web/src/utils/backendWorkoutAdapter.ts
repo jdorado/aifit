@@ -253,6 +253,7 @@ const toExercise = (segment: BackendSegment, item: BackendWorkoutItem): WorkoutE
     summary: exerciseSummary(item.sets, metric),
     restSec: segment.rest_after_round_seconds || undefined,
     metric,
+    ...(metric === 'time' ? { timer: { enabled: true } } : {}),
     sets: item.sets.map(targetToSet),
     cues,
     ...(item.notes ? { notes: item.notes.note, feedbackPreset: item.notes.preset } : {}),
