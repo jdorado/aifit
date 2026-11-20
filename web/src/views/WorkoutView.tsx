@@ -814,6 +814,45 @@ const WorkoutView: FC<WorkoutViewProps> = ({
 
         <div className="detail-content">
           <div ref={setAudioPanelTarget} className="coaching-audio-slot" />
+          {activeExercise ? (
+            <button
+              type="button"
+              className="exercise-similar-toggle"
+              aria-expanded={swapOpen}
+              aria-controls="exercise-similar-options"
+              disabled={!canEditPlan || savePending || saveError || !activeExercise.sets.some((_, index) => !setLogs[activeExercise.id]?.[index]?.done)}
+              onClick={() => swapOpen ? onCloseSwap() : openSwap(false)}
+            >
+              <span>{t('workout.similar')}</span>
+              <span aria-hidden="true">{swapOpen ? '▴' : '▾'}</span>
+            </button>
+          ) : null}
+          {activeExercise ? (
+            <SwapCandidateSheet
+              inline
+              onAskCoach={coachChatEnabled ? () => {
+                onCloseSwap()
+                setCoachChatOpen(true)
+                onCoachSend(activeExercise.id, t('workout.swapCoachPrompt'))
+              } : undefined}
+              open={swapOpen}
+              loading={swapLoading}
+              fitLoading={swapFitLoading}
+              swappingId={swappingCandidateId}
+              error={swapError}
+              exerciseName={activeExercise.name}
+              candidates={swapCandidates}
+              onSelect={(candidate) => {
+                void onSelectSwapCandidate(candidate).then((swapped) => {
+                  if (swapped) setCoachChatOpen(swapFromChatRef.current)
+                })
+              }}
+              onClose={() => {
+                onCloseSwap()
+                setCoachChatOpen(swapFromChatRef.current)
+              }}
+            />
+          ) : null}
           {renderDetailContent()}
         </div>
 
@@ -875,27 +914,6 @@ const WorkoutView: FC<WorkoutViewProps> = ({
               if (activeExercise) onCoachSend(activeExercise.id, message)
             }}
             onSwap={canEditPlan && !savePending && !saveError && activeExercise.sets.some((_, index) => !setLogs[activeExercise.id]?.[index]?.done) ? () => openSwap(true) : undefined}
-          />
-        ) : null}
-
-        {activeExercise ? (
-          <SwapCandidateSheet
-            open={swapOpen}
-            loading={swapLoading}
-            fitLoading={swapFitLoading}
-            swappingId={swappingCandidateId}
-            error={swapError}
-            exerciseName={activeExercise.name}
-            candidates={swapCandidates}
-            onSelect={(candidate) => {
-              void onSelectSwapCandidate(candidate).then((swapped) => {
-                if (swapped) setCoachChatOpen(swapFromChatRef.current)
-              })
-            }}
-            onClose={() => {
-              onCloseSwap()
-              setCoachChatOpen(swapFromChatRef.current)
-            }}
           />
         ) : null}
       </section>

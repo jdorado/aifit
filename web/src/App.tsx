@@ -8,7 +8,7 @@ import { circuitGroupKey } from './data/testWorkout'
 import { getNextCircuitSet } from './utils/circuitProgress'
 import { WorkoutWriteQueue } from './utils/workoutWriteQueue'
 import { backendWorkoutToSession, type BackendWorkout, type BackendWorkoutReceipt } from './utils/backendWorkoutAdapter'
-import { fetchSwapCandidates, needsCoachSwap, readApiError, swapErrorKey, SwapCandidatesError, type SwapCandidate, type SwapCandidates } from './utils/swapCandidates'
+import { fetchSwapCandidates, readApiError, swapErrorKey, SwapCandidatesError, type SwapCandidate, type SwapCandidates } from './utils/swapCandidates'
 import type { ExerciseRepertoire, RepertoireCandidate } from './utils/exerciseRepertoire'
 import { fetchWorkoutHistory } from './utils/workoutHistory'
 import { I18nProvider, createI18n } from './i18n'
@@ -3758,11 +3758,6 @@ const App = () => {
       swapResponseRef.current = result
       setSwapCandidates(result.candidates)
       setSwapLoading(false)
-      if (result.candidates.length === 0 && coachChatEnabled) {
-        handleCloseSwap()
-        void handleCoachSend(exerciseId, t('workout.swapCoachPrompt'))
-        return true
-      }
       if (result.candidates.length) {
         setSwapFitLoading(true)
         void fetchSwapCandidates({
@@ -3782,11 +3777,6 @@ const App = () => {
     } catch (error) {
       if (controller.signal.aborted) return false
       const code = error instanceof SwapCandidatesError ? error.code : null
-      if (needsCoachSwap(code) && coachChatEnabled) {
-        handleCloseSwap()
-        void handleCoachSend(exerciseId, t('workout.swapCoachPrompt'))
-        return true
-      }
       setSwapError(t(`workout.${swapErrorKey(code)}`))
     } finally {
       if (!controller.signal.aborted) setSwapLoading(false)
