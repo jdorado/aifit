@@ -11184,3 +11184,27 @@ body:has(.landing) {
 .exercise-fit-factors b { color: var(--aifit-ink); font-weight: 600; }
 .view[data-view="workout"] .detail-history-btn:disabled { opacity: .45; cursor: default; }
 @media (max-width: 380px) { .detail-header-actions { gap: 4px; } }
+
+/* Keep replacement choices attached to the selected workout item on mobile. */
+.exercise-similar-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 14px;
+  border: 1px solid rgba(7, 26, 53, 0.12);
+  border-radius: 12px;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+.exercise-similar-toggle:disabled { opacity: .45; cursor: default; }
+.exercise-similar-options {
+  border: 1px solid rgba(7, 26, 53, 0.12);
+  border-radius: 12px;
+  margin: 8px 0 16px;
+  overflow: hidden;
+}
+.exercise-similar-options .exercise-history-content { max-height: 45vh; overflow-y: auto; }

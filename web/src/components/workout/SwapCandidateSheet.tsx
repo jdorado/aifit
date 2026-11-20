@@ -12,6 +12,8 @@ type SwapCandidateSheetProps = {
   exerciseName: string
   candidates: SwapCandidate[]
   onSelect: (candidate: SwapCandidate) => void
+  onAskCoach?: () => void
+  inline?: boolean
   onClose: () => void
 }
 
@@ -25,11 +27,17 @@ const SwapCandidateSheet: FC<SwapCandidateSheetProps> = ({
   candidates,
   onSelect,
   onClose,
+  onAskCoach,
+  inline = false,
 }) => {
   const { t } = useI18n()
 
   useEffect(() => {
     if (!open) return undefined
+    if (inline) {
+      document.getElementById('exercise-similar-options')?.scrollIntoView({ block: 'nearest' })
+      return undefined
+    }
     const detailContent = document.querySelector<HTMLElement>('.workout-detail.active .detail-content')
     if (!detailContent) return undefined
     const previous = detailContent.style.overflow
@@ -37,14 +45,14 @@ const SwapCandidateSheet: FC<SwapCandidateSheetProps> = ({
     return () => {
       detailContent.style.overflow = previous
     }
-  }, [open])
+  }, [open, inline])
 
   if (!open) return null
 
   return (
     <>
-      <button type="button" className="exercise-history-backdrop" aria-label={t('common.close')} onClick={onClose} />
-      <aside className="exercise-history-sheet" aria-label={t('workout.swapTitle')}>
+      {!inline ? <button type="button" className="exercise-history-backdrop" aria-label={t('common.close')} onClick={onClose} /> : null}
+      <aside id={inline ? 'exercise-similar-options' : undefined} className={inline ? 'exercise-similar-options' : 'exercise-history-sheet'} aria-label={t('workout.swapTitle')}>
         <header className="exercise-history-header">
           <div>
             <strong>{t('workout.swapTitle')}</strong>
@@ -86,6 +94,11 @@ const SwapCandidateSheet: FC<SwapCandidateSheetProps> = ({
                 )
               })}
             </div>
+          ) : null}
+          {!loading && (error || candidates.length === 0) && onAskCoach ? (
+            <button type="button" className="exercise-history-row" onClick={onAskCoach}>
+              {t('workout.askCoach')}
+            </button>
           ) : null}
         </div>
       </aside>
